@@ -33,6 +33,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Manages tool registration and invocation
 - Supports prompt registration and execution
 - Supports resource registration and retrieval
+- Supports stdio & StreamableHTTP (including SSE) transports
 
 ### Supported Methods
 - `initialize` - Initializes the protocol and returns server capabilities

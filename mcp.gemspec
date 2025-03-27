@@ -28,6 +28,8 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency("json_rpc_handler", "~> 0.1")
+  spec.add_dependency("rack", ">= 2.0.0")
   spec.add_development_dependency("activesupport")
+  spec.add_development_dependency("puma", ">= 5.0.0")
   spec.add_development_dependency("sorbet-static-and-runtime")
 end
