@@ -23,7 +23,7 @@ module MCP
     include Instrumentation
 
     attr_writer :capabilities
-    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration
+    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :transport
 
     def initialize(
       name: "model_context_protocol",
@@ -34,7 +34,8 @@ module MCP
       resource_templates: [],
       server_context: nil,
       configuration: nil,
-      capabilities: nil
+      capabilities: nil,
+      transport: nil
     )
       @name = name
       @version = version
@@ -63,6 +64,7 @@ module MCP
         Methods::COMPLETION_COMPLETE => ->(_) {},
         Methods::LOGGING_SET_LEVEL => ->(_) {},
       }
+      @transport = transport
     end
 
     def capabilities
@@ -89,6 +91,14 @@ module MCP
     def define_prompt(name: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
+    end
+
+    def handle_rack_request(request)
+      @transport.handle_request(request)
+    end
+
+    def close
+      @transport.close
     end
 
     def resources_list_handler(&block)
