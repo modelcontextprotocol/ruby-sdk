@@ -1,0 +1,31 @@
+name: ruby-sdk
+
+type: ruby
+
+up:
+  - ruby
+  - bundler
+
+commands:
+  console:
+    desc: Start an irb console with the gem loaded
+    run: bin/console
+  build:
+    desc: Build the gem using rake
+    run: bin/rake build
+  test:
+    desc: Run tests
+    syntax:
+      argument: file
+      optional: args...
+    run:  |
+      if [[ $# -eq 0 ]]; then
+        bin/rake test
+      else
+        bin/rake -I test "$@"
+      fi
+  style:
+    desc: Run rubocop
+    aliases: [rubocop, lint]
+    run: bin/rubocop
+

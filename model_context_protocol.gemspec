@@ -1,0 +1,32 @@
+# frozen_string_literal: true
+
+require_relative "lib/model_context_protocol/version"
+
+Gem::Specification.new do |spec|
+  spec.name          = "model_context_protocol"
+  spec.version       = ModelContextProtocol::VERSION
+  spec.authors       = ["Shopify Engineering"]
+  spec.email         = ["gems@shopify.com"]
+
+  spec.summary       = "The official Ruby SDK for Model Context Protocol servers and clients"
+  spec.description   = spec.summary
+  spec.homepage      = "https://github.com/modelcontextprotocol/ruby-sdk"
+  spec.license       = "MIT"
+
+  spec.required_ruby_version = ">= 3.2.0"
+
+  spec.metadata["allowed_push_host"] = "https://rubygems.org"
+  spec.metadata["homepage_uri"] = spec.homepage
+  spec.metadata["source_code_uri"] = spec.homepage
+
+  spec.files = Dir.chdir(File.expand_path("..", __FILE__)) do
+    %x(git ls-files -z).split("\x0").reject { |f| f.match(%r{^(test|spec|features)/}) }
+  end
+
+  spec.bindir        = "exe"
+  spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
+  spec.require_paths = ["lib"]
+
+  spec.add_dependency("json_rpc_handler", "~> 0.1")
+  spec.add_development_dependency("activesupport")
+end
