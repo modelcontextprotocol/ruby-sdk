@@ -5,8 +5,8 @@ require_relative "lib/model_context_protocol/version"
 Gem::Specification.new do |spec|
   spec.name          = "model_context_protocol"
   spec.version       = ModelContextProtocol::VERSION
-  spec.authors       = ["Shopify Engineering"]
-  spec.email         = ["gems@shopify.com"]
+  spec.authors       = ["Model Context Protocol"]
+  spec.email         = ["mcp-support@anthropic.com"]
 
   spec.summary       = "The official Ruby SDK for Model Context Protocol servers and clients"
   spec.description   = spec.summary
