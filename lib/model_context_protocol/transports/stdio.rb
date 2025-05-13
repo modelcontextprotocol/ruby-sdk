@@ -9,6 +9,8 @@ module ModelContextProtocol
       def initialize(server)
         @server = server
         @open = false
+        $stdin.set_encoding("UTF-8")
+        $stdout.set_encoding("UTF-8")
         super
       end
 
