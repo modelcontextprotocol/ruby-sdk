@@ -54,6 +54,7 @@ end
 # Set up the server
 server = MCP::Server.new(
   name: "example_server",
+  version: "1.0.0",
   tools: [ExampleTool],
   prompts: [ExamplePrompt],
   resources: [

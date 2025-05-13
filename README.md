@@ -50,6 +50,7 @@ module ModelContextProtocol
     def index
       server = ModelContextProtocol::Server.new(
         name: "my_server",
+        version: "1.0.0",
         tools: [SomeTool, AnotherTool],
         prompts: [MyPrompt],
         server_context: { user_id: current_user.id },

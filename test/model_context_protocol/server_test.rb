@@ -51,6 +51,7 @@ module ModelContextProtocol
 
       @server = Server.new(
         name: @server_name,
+        version: "1.2.3",
         tools: [@tool, @tool_that_raises],
         prompts: [@prompt],
         resources: [@resource],
@@ -120,7 +121,7 @@ module ModelContextProtocol
           },
           "serverInfo": {
             "name": @server_name,
-            "version": ModelContextProtocol::VERSION,
+            "version": "1.2.3",
           },
         },
       }
@@ -646,6 +647,18 @@ module ModelContextProtocol
 
       response = @server.handle(request)
       assert_equal Configuration::DEFAULT_PROTOCOL_VERSION, response[:result][:protocolVersion]
+    end
+
+    test "server uses default version when not configured" do
+      server = Server.new(name: "test_server")
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+
+      response = server.handle(request)
+      assert_equal Server::DEFAULT_VERSION, response[:result][:serverInfo][:version]
     end
 
     test "#define_tool adds a tool to the server" do
