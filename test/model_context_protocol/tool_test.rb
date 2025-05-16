@@ -18,7 +18,7 @@ module ModelContextProtocol
       )
 
       class << self
-        def call(message, server_context: nil)
+        def call(message:, server_context: nil)
           Tool::Response.new([{ type: "text", content: "OK" }])
         end
       end
@@ -43,7 +43,7 @@ module ModelContextProtocol
 
     test "#call invokes the tool block and returns the response" do
       tool = TestTool
-      response = tool.call("test")
+      response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
       assert_equal response.is_error, false
     end
@@ -210,26 +210,19 @@ module ModelContextProtocol
         tool_name "test_tool"
         description "a test tool for testing"
         input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
-        annotations(
-          title: "Test Tool",
-          read_only_hint: true,
-          destructive_hint: false,
-          idempotent_hint: true,
-          open_world_hint: false,
-        )
 
         class << self
           extend T::Sig
 
           sig { params(message: String, server_context: T.nilable(T.untyped)).returns(Tool::Response) }
-          def call(message, server_context: nil)
+          def call(message:, server_context: nil)
             Tool::Response.new([{ type: "text", content: "OK" }])
           end
         end
       end
 
       tool = TypedTestTool
-      response = tool.call("test")
+      response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
       assert_equal response.is_error, false
     end
