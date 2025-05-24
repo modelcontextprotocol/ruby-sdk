@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "test_helper"
@@ -17,7 +18,7 @@ module ModelContextProtocol
       )
 
       class << self
-        def call(message, server_context: nil)
+        def call(message:, server_context: nil)
           Tool::Response.new([{ type: "text", content: "OK" }])
         end
       end
@@ -42,7 +43,7 @@ module ModelContextProtocol
 
     test "#call invokes the tool block and returns the response" do
       tool = TestTool
-      response = tool.call("test")
+      response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
       assert_equal response.is_error, false
     end
@@ -202,6 +203,28 @@ module ModelContextProtocol
 
       tool.annotations(title: "Updated")
       assert_equal tool.annotations_value.title, "Updated"
+    end
+
+    test "#call with Sorbet typed tools invokes the tool block and returns the response" do
+      class TypedTestTool < Tool
+        tool_name "test_tool"
+        description "a test tool for testing"
+        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+        class << self
+          extend T::Sig
+
+          sig { params(message: String, server_context: T.nilable(T.untyped)).returns(Tool::Response) }
+          def call(message:, server_context: nil)
+            Tool::Response.new([{ type: "text", content: "OK" }])
+          end
+        end
+      end
+
+      tool = TypedTestTool
+      response = tool.call(message: "test")
+      assert_equal response.content, [{ type: "text", content: "OK" }]
+      assert_equal response.is_error, false
     end
   end
 end

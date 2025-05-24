@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "test_helper"
@@ -254,6 +255,43 @@ module ModelContextProtocol
       response = JSON.parse(raw_response, symbolize_names: true) if raw_response
       assert_equal tool_response.to_h, response[:result] if response
       assert_instrumentation_data({ method: "tools/call", tool_name: })
+    end
+
+    test "#handle_json tools/call executes tool and returns result, when the tool is typed with Sorbet" do
+      class TypedTestTool < Tool
+        tool_name "test_tool"
+        description "a test tool for testing"
+        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+        class << self
+          extend T::Sig
+
+          sig { params(message: String, server_context: T.nilable(T.untyped)).returns(Tool::Response) }
+          def call(message:, server_context: nil)
+            Tool::Response.new([{ type: "text", content: "OK" }])
+          end
+        end
+      end
+
+      request = JSON.generate({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "test_tool", arguments: { message: "Hello, world!" } },
+        id: 1,
+      })
+
+      server = Server.new(
+        name: @server_name,
+        tools: [TypedTestTool],
+        prompts: [@prompt],
+        resources: [@resource],
+        resource_templates: [@resource_template],
+      )
+
+      raw_response = server.handle_json(request)
+      response = JSON.parse(raw_response, symbolize_names: true) if raw_response
+
+      assert_equal({ content: [{ type: "text", content: "OK" }], isError: false }, response[:result])
     end
 
     test "#handle tools/call returns internal error and reports exception if the tool raises an error" do

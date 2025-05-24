@@ -213,7 +213,8 @@ module ModelContextProtocol
       end
 
       begin
-        call_params = tool.method(:call).parameters.flatten
+        call_params = tool_call_parameters(tool)
+
         if call_params.include?(:server_context)
           tool.call(**arguments.transform_keys(&:to_sym), server_context:).to_h
         else
@@ -272,6 +273,25 @@ module ModelContextProtocol
     def index_resources_by_uri(resources)
       resources.each_with_object({}) do |resource, hash|
         hash[resource.uri] = resource
+      end
+    end
+
+    def tool_call_parameters(tool)
+      method_def = tool_call_method_def(tool)
+      method_def.parameters.flatten
+    end
+
+    def tool_call_method_def(tool)
+      method = tool.method(:call)
+
+      if defined?(T::Utils) && T::Utils.respond_to?(:signature_for_method)
+        sorbet_typed_method_definition = T::Utils.signature_for_method(method)&.method
+
+        # Return the Sorbet typed method definition if it exists, otherwise fallback to original method
+        # definition if Sorbet is defined but not used by this tool.
+        sorbet_typed_method_definition || method
+      else
+        method
       end
     end
   end

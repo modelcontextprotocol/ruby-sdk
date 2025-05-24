@@ -29,4 +29,5 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency("json_rpc_handler", "~> 0.1")
   spec.add_development_dependency("activesupport")
+  spec.add_development_dependency("sorbet-static-and-runtime")
 end
