@@ -44,19 +44,19 @@ requests.
 You can use the `Server#handle_json` method to handle requests.
 
 ```ruby
-module ModelContextProtocol
-  class ApplicationController < ActionController::Base
+class MyMcpController < ApplicationController
+  def index
+    server = ModelContextProtocol::Server.new(
+      name: "my_server",
+      version: "1.0.0",
+      tools: [SomeTool, AnotherTool],
+      prompts: [MyPrompt],
+      server_context: { user_id: current_user.id },
+    )
 
-    def index
-      server = ModelContextProtocol::Server.new(
-        name: "my_server",
-        version: "1.0.0",
-        tools: [SomeTool, AnotherTool],
-        prompts: [MyPrompt],
-        server_context: { user_id: current_user.id },
-      )
-      render(json: server.handle_json(request.body.read).to_h)
-    end
+    mcp_response = server.handle_json(request.body.read)
+
+    render(json: mcp_response ? JSON.parse(mcp_response) : {})
   end
 end
 ```
@@ -275,11 +275,9 @@ class MyTool < ModelContextProtocol::Tool
   )
 
   def self.call(message:, server_context:)
-    Tool::Response.new([{ type: "text", text: "OK" }])
+    ModelContextProtocol::Tool::Response.new([{ type: "text", text: "OK" }])
   end
 end
-
-tool = MyTool
 ```
 
 2. By using the `ModelContextProtocol::Tool.define` method with a block:
