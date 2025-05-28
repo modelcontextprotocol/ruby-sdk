@@ -97,7 +97,7 @@ server = ModelContextProtocol::Server.new(
 )
 
 # Create and start the transport
-transport = ModelContextProtocol::Transports::StdioTransport.new(server)
+transport = ModelContextProtocol::Server::Transports::StdioTransport.new(server)
 transport.open
 ```
 

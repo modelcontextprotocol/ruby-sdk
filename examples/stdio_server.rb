@@ -91,5 +91,5 @@ server.resources_read_handler do |params|
 end
 
 # Create and start the transport
-transport = MCP::Transports::StdioTransport.new(server)
+transport = ModelContextProtocol::Server::Transports::StdioTransport.new(server)
 transport.open
