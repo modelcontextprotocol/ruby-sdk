@@ -8,7 +8,10 @@ require_relative "model_context_protocol/shared/methods"
 require_relative "model_context_protocol/shared/transport"
 require_relative "model_context_protocol/shared/content"
 require_relative "model_context_protocol/shared/string_utils"
+
 require_relative "model_context_protocol/shared/resource"
+require_relative "model_context_protocol/shared/resource/contents"
+require_relative "model_context_protocol/shared/resource/embedded"
 require_relative "model_context_protocol/shared/resource_template"
 
 require_relative "model_context_protocol/shared/tool"
