@@ -68,7 +68,7 @@ If you want to build a local command-line application, you can use the stdio tra
 ```ruby
 #!/usr/bin/env ruby
 require "model_context_protocol"
-require "model_context_protocol/transports/stdio"
+require "model_context_protocol/server/transports/stdio"
 
 # Create a simple tool
 class ExampleTool < ModelContextProtocol::Tool
