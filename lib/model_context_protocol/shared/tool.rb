@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "tool/input_schema"
+require_relative "tool/response"
+require_relative "tool/annotations"
 
 module ModelContextProtocol
   class Tool
