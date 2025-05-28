@@ -1,10 +1,6 @@
 # typed: strict
 # frozen_string_literal: true
 
-require_relative "prompt/argument"
-require_relative "prompt/message"
-require_relative "prompt/result"
-
 module ModelContextProtocol
   class Prompt
     class << self
