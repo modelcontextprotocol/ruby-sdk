@@ -27,6 +27,11 @@ require_relative "model_context_protocol/shared/prompt/result"
 require_relative "model_context_protocol/server"
 require_relative "model_context_protocol/server/transports/stdio"
 
+require_relative "model_context_protocol/client"
+require_relative "model_context_protocol/client/http"
+require_relative "model_context_protocol/client/tools"
+require_relative "model_context_protocol/client/tool"
+
 module ModelContextProtocol
   class << self
     def configure
