@@ -22,3 +22,7 @@ gem "activesupport"
 gem "debug"
 gem "rake", "~> 13.0"
 gem "sorbet-static-and-runtime"
+
+group :test do
+  gem "webmock"
+end
