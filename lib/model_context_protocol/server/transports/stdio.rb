@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-require_relative "../transport"
+require_relative "../../shared/transport"
 require "json"
 
+# TODO: change class name
 module ModelContextProtocol
   module Transports
     class StdioTransport < Transport
