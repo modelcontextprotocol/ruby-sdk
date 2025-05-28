@@ -16,13 +16,6 @@ require_relative "model_context_protocol/shared/resource_template"
 require_relative "model_context_protocol/server"
 require_relative "model_context_protocol/server/transports/stdio"
 
-# Client files will be added here once implemented
-# require_relative "model_context_protocol/client/client"
-# require_relative "model_context_protocol/client/transports/websocket"
-# require_relative "model_context_protocol/client/transports/http"
-# require_relative "model_context_protocol/client/auth/oauth_client"
-# require_relative "model_context_protocol/client/auth/token_storage"
-
 module ModelContextProtocol
   class Error < StandardError; end
 
