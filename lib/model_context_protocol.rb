@@ -17,8 +17,6 @@ require_relative "model_context_protocol/server"
 require_relative "model_context_protocol/server/transports/stdio"
 
 module ModelContextProtocol
-  class Error < StandardError; end
-
   class << self
     def configure
       yield(configuration)
