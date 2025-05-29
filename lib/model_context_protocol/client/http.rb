@@ -7,9 +7,10 @@ module ModelContextProtocol
 
       attr_reader :url, :version
 
-      def initialize(url:, version: DEFAULT_VERSION)
+      def initialize(url:, version: DEFAULT_VERSION, headers: {})
         @url = url
         @version = version
+        @headers = headers
       end
 
       def tools
@@ -29,12 +30,17 @@ module ModelContextProtocol
 
       private
 
-      # TODO: support auth
+      attr_reader :headers
+
       def client
         @client ||= Faraday.new(url) do |faraday|
           faraday.request(:json)
           faraday.response(:json)
           faraday.response(:raise_error)
+
+          headers.each do |key, value|
+            faraday.headers[key] = value
+          end
         end
       end
 

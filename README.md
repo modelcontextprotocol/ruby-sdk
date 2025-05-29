@@ -141,6 +141,24 @@ The HTTP client supports:
 - Tool invocation via the `tools/call` method
 - Automatic JSON-RPC 2.0 message formatting
 - UUID v7 request ID generation
+- Setting headers for things like authorization
+
+### HTTP Authorization
+
+By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
+
+```ruby
+client = ModelContextProtocol::Client::Http.new(
+  url: "https://api.example.com/mcp",
+  headers: {
+    "Authorization" => "Bearer my_token"
+  }
+)
+
+client.tools # will make the call using Bearer auth
+```
+
+You can add any custom headers needed for your authentication scheme. The client will include these headers in all requests.
 
 ### Tool Objects
 

@@ -19,6 +19,39 @@ module ModelContextProtocol
         assert_equal(custom_version, client.version)
       end
 
+      def test_headers_are_added_to_the_request
+        headers = { "Authorization" => "Bearer token" }
+        client = Http.new(url:, headers:)
+        client.stubs(:request_id).returns(mock_request_id)
+
+        stub_request(:post, url)
+          .with(
+            headers: {
+              "Authorization" => "Bearer token",
+              "Content-Type" => "application/json",
+            },
+            body: {
+              method: "tools/list",
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              mcp: {
+                method: "tools/list",
+                jsonrpc: "2.0",
+                id: mock_request_id,
+              },
+            },
+          )
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
+          )
+
+        # The test passes if the request is made with the correct headers
+        # If headers are wrong, the stub_request won't match and will raise
+        client.tools
+      end
+
       def test_tools_returns_tools_instance
         stub_request(:post, url)
           .with(
