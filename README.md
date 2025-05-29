@@ -68,7 +68,7 @@ If you want to build a local command-line application, you can use the stdio tra
 ```ruby
 #!/usr/bin/env ruby
 require "model_context_protocol"
-require "model_context_protocol/transports/stdio"
+require "model_context_protocol/server/transports/stdio"
 
 # Create a simple tool
 class ExampleTool < ModelContextProtocol::Tool
@@ -97,7 +97,7 @@ server = ModelContextProtocol::Server.new(
 )
 
 # Create and start the transport
-transport = ModelContextProtocol::Transports::StdioTransport.new(server)
+transport = ModelContextProtocol::Server::Transports::StdioTransport.new(server)
 transport.open
 ```
 
@@ -109,6 +109,65 @@ $ ./stdio_server.rb
 {"jsonrpc":"2.0","id":"2","result":["ExampleTool"]}
 {"jsonrpc":"2.0","id":"3","result":["ExampleTool"]}
 ```
+
+## MCP Client
+
+The `ModelContextProtocol::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+
+### HTTP Client
+
+The `ModelContextProtocol::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
+
+```ruby
+client = ModelContextProtocol::Client::Http.new(url: "https://api.example.com/mcp")
+
+# List available tools
+tools = client.tools
+tools.each do |tool|
+  puts "Tool: #{tool.name}"
+  puts "Description: #{tool.description}"
+  puts "Input Schema: #{tool.input_schema}"
+end
+
+# Call a specific tool
+response = client.call_tool(
+  tool: tools.first,
+  input: { message: "Hello, world!" }
+)
+```
+
+The HTTP client supports:
+- Tool listing via the `tools/list` method
+- Tool invocation via the `tools/call` method
+- Automatic JSON-RPC 2.0 message formatting
+- UUID v7 request ID generation
+- Setting headers for things like authorization
+
+### HTTP Authorization
+
+By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
+
+```ruby
+client = ModelContextProtocol::Client::Http.new(
+  url: "https://api.example.com/mcp",
+  headers: {
+    "Authorization" => "Bearer my_token"
+  }
+)
+
+client.tools # will make the call using Bearer auth
+```
+
+You can add any custom headers needed for your authentication scheme. The client will include these headers in all requests.
+
+### Tool Objects
+
+The client provides wrapper objects for tools returned by the server:
+
+- `ModelContextProtocol::Client::Tool` - Represents a single tool with its metadata
+- `ModelContextProtocol::Client::Tools` - Collection of tools with enumerable functionality
+
+These objects provide easy access to tool properties like name, description, and input schema.
 
 ## Configuration
 

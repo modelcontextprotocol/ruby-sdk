@@ -13,3 +13,7 @@ gem "rubocop-shopify", require: false
 gem "minitest-reporters"
 gem "mocha"
 gem "debug"
+
+group :test do
+  gem "webmock"
+end

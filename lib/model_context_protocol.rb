@@ -1,23 +1,36 @@
 # typed: strict
 # frozen_string_literal: true
 
+require_relative "model_context_protocol/shared/version"
+require_relative "model_context_protocol/shared/configuration"
+require_relative "model_context_protocol/shared/instrumentation"
+require_relative "model_context_protocol/shared/methods"
+require_relative "model_context_protocol/shared/transport"
+require_relative "model_context_protocol/shared/content"
+require_relative "model_context_protocol/shared/string_utils"
+
+require_relative "model_context_protocol/shared/resource"
+require_relative "model_context_protocol/shared/resource/contents"
+require_relative "model_context_protocol/shared/resource/embedded"
+require_relative "model_context_protocol/shared/resource_template"
+
+require_relative "model_context_protocol/shared/tool"
+require_relative "model_context_protocol/shared/tool/input_schema"
+require_relative "model_context_protocol/shared/tool/response"
+require_relative "model_context_protocol/shared/tool/annotations"
+
+require_relative "model_context_protocol/shared/prompt"
+require_relative "model_context_protocol/shared/prompt/argument"
+require_relative "model_context_protocol/shared/prompt/message"
+require_relative "model_context_protocol/shared/prompt/result"
+
 require_relative "model_context_protocol/server"
-require_relative "model_context_protocol/string_utils"
-require_relative "model_context_protocol/tool"
-require_relative "model_context_protocol/tool/input_schema"
-require_relative "model_context_protocol/tool/annotations"
-require_relative "model_context_protocol/tool/response"
-require_relative "model_context_protocol/content"
-require_relative "model_context_protocol/resource"
-require_relative "model_context_protocol/resource/contents"
-require_relative "model_context_protocol/resource/embedded"
-require_relative "model_context_protocol/resource_template"
-require_relative "model_context_protocol/prompt"
-require_relative "model_context_protocol/prompt/argument"
-require_relative "model_context_protocol/prompt/message"
-require_relative "model_context_protocol/prompt/result"
-require_relative "model_context_protocol/version"
-require_relative "model_context_protocol/configuration"
+require_relative "model_context_protocol/server/transports/stdio"
+
+require_relative "model_context_protocol/client"
+require_relative "model_context_protocol/client/http"
+require_relative "model_context_protocol/client/tools"
+require_relative "model_context_protocol/client/tool"
 
 module ModelContextProtocol
   class << self

@@ -3,7 +3,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "model_context_protocol"
-require "model_context_protocol/transports/stdio"
+require "model_context_protocol/server/transports/stdio"
 
 # Create a simple tool
 class ExampleTool < MCP::Tool
@@ -91,5 +91,5 @@ server.resources_read_handler do |params|
 end
 
 # Create and start the transport
-transport = MCP::Transports::StdioTransport.new(server)
+transport = ModelContextProtocol::Server::Transports::StdioTransport.new(server)
 transport.open

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "lib/model_context_protocol/version"
+require_relative "lib/model_context_protocol/shared/version"
 
 Gem::Specification.new do |spec|
   spec.name          = "model_context_protocol"
@@ -27,6 +27,7 @@ Gem::Specification.new do |spec|
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
+  spec.add_dependency("faraday", ">= 2.0")
   spec.add_dependency("json_rpc_handler", "~> 0.1")
   spec.add_development_dependency("activesupport")
   spec.add_development_dependency("sorbet-static-and-runtime")
