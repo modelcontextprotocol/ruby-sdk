@@ -216,6 +216,47 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 ```
 
+## MCP Client
+
+The `ModelContextProtocol::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+
+### HTTP Client
+
+The `ModelContextProtocol::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
+
+```ruby
+client = ModelContextProtocol::Client::Http.new(url: "https://api.example.com/mcp")
+
+# List available tools
+tools = client.tools
+tools.each do |tool|
+  puts "Tool: #{tool.name}"
+  puts "Description: #{tool.description}"
+  puts "Input Schema: #{tool.input_schema}"
+end
+
+# Call a specific tool
+response = client.call_tool(
+  tool: tools.first,
+  input: { message: "Hello, world!" }
+)
+```
+
+The HTTP client supports:
+- Tool listing via the `tools/list` method
+- Tool invocation via the `tools/call` method
+- Automatic JSON-RPC 2.0 message formatting
+- UUID v7 request ID generation
+
+### Tool Objects
+
+The client provides wrapper objects for tools returned by the server:
+
+- `ModelContextProtocol::Client::Tool` - Represents a single tool with its metadata
+- `ModelContextProtocol::Client::Tools` - Collection of tools with enumerable functionality
+
+These objects provide easy access to tool properties like name, description, and input schema.
+
 ## Configuration
 
 The gem can be configured using the `MCP.configure` block:
