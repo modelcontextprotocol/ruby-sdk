@@ -160,6 +160,264 @@ module ModelContextProtocol
         assert_nil(response)
       end
 
+      def test_raises_bad_request_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 400)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("The tools/call request is invalid", error.message)
+        assert_equal(:bad_request, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
+      def test_raises_unauthorized_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 401)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("You are unauthorized to make tools/call requests", error.message)
+        assert_equal(:unauthorized, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
+      def test_raises_forbidden_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 403)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("You are forbidden to make tools/call requests", error.message)
+        assert_equal(:forbidden, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
+      def test_raises_not_found_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 404)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("The tools/call request is not found", error.message)
+        assert_equal(:not_found, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
+      def test_raises_unprocessable_entity_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 422)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("The tools/call request is unprocessable", error.message)
+        assert_equal(:unprocessable_entity, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
+      def test_raises_internal_error
+        tool = Tool.new(
+          "name" => "test_tool",
+          "description" => "A test tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => {},
+          },
+        )
+        input = { "param" => "value" }
+
+        stub_request(:post, url)
+          .with(
+            body: {
+              jsonrpc: "2.0",
+              id: mock_request_id,
+              method: "tools/call",
+              params: {
+                name: "test_tool",
+                arguments: input,
+              },
+              mcp: {
+                jsonrpc: "2.0",
+                id: mock_request_id,
+                method: "tools/call",
+                params: {
+                  name: "test_tool",
+                  arguments: input,
+                },
+              },
+            },
+          )
+          .to_return(status: 500)
+
+        error = assert_raises(RequestHandlerError) do
+          client.call_tool(tool: tool, input: input)
+        end
+
+        assert_equal("Internal error handling tools/call request", error.message)
+        assert_equal(:internal_error, error.error_type)
+        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+      end
+
       private
 
       def stub_request(method, url)
