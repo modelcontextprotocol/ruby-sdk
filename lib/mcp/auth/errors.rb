@@ -5,6 +5,8 @@ module MCP
     module Errors
       class InvalidScopeError < StandardError; end
 
+      class InvalidGrantsError < StandardError; end
+
       class InvalidRedirectUriError < StandardError; end
 
       class RegistrationError < StandardError

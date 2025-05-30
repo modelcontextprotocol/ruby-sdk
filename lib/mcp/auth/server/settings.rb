@@ -1,9 +1,13 @@
 # frozen_string_literal: true
 
+require_relative "../errors"
+
 module MCP
   module Auth
     module Server
       class ClientRegistrationOptions
+        MANDATORY_GRANT_TYPES = Set["authorization_code", "refresh_token"].freeze
+
         attr_accessor :enabled,
           :client_secret_expiry_seconds,
           :valid_scopes,
@@ -19,6 +23,21 @@ module MCP
           @client_secret_expiry_seconds = client_secret_expiry_seconds
           @valid_scopes = valid_scopes
           @default_scopes = default_scopes
+        end
+
+        def validate_grant_types!(grant_types)
+          if grant_types.to_set != MANDATORY_GRANT_TYPES
+            raise Errors::InvalidGrantsError, "Grants must be '#{MANDATORY_GRANT_TYPES.to_a}'"
+          end
+        end
+
+        def validate_scopes!(requested_scopes)
+          return if valid_scopes.nil?
+
+          invalid_scopes = requested_scopes - valid_scopes
+          if invalid_scopes.any?
+            raise Errors::InvalidScopeError, "Some requested scopes are invalid: #{invalid_scopes.join(", ")}"
+          end
         end
       end
 
