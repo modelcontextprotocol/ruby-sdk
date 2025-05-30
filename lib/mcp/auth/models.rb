@@ -206,8 +206,8 @@ module MCP
 
         def initialize(
           issuer:,
-          authorization_endpoint:,
-          token_endpoint:,
+          authorization_endpoint: nil,
+          token_endpoint: nil,
           registration_endpoint: nil,
           scopes_supported: nil,
           response_types_supported: DEFAULT_RESPONSE_TYPES_SUPPORTED.dup,
@@ -231,7 +231,7 @@ module MCP
           @authorization_endpoint = authorization_endpoint
           @token_endpoint = token_endpoint
           @registration_endpoint = registration_endpoint
-          @scopes_supported = scopes_supported # list[str] | None
+          @scopes_supported = scopes_supported
 
           (response_types_supported || []).each do |rt|
             unless VALID_RESPONSE_TYPES_SUPPORTED.include?(rt)
@@ -293,6 +293,32 @@ module MCP
             end
           end
           @code_challenge_methods_supported = code_challenge_methods_supported
+        end
+
+        class << self
+          DEFAULT_AUTHORIZE_PATH = "/authorize"
+          DEFAULT_REGISTRATION_PATH = "/register"
+          DEFAULT_TOKEN_PATH = "/token"
+
+          def from_settings(auth_settings, **kwargs)
+            metadata = OAuthMetadata.new(
+              issuer: auth_settings.issuer_url,
+              authorization_endpoint: auth_settings.issuer_url + DEFAULT_AUTHORIZE_PATH,
+              token_endpoint: auth_settings.issuer_url + DEFAULT_TOKEN_PATH,
+              scopes_supported: auth_settings.client_registration_options.valid_scopes,
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              token_endpoint_auth_methods_supported: ["client_secret_post"],
+              code_challenge_methods_supported: ["S256"],
+              **kwargs,
+            )
+
+            if auth_settings.client_registration_options.enabled
+              metadata.registration_endpoint = auth_settings.issuer_url + DEFAULT_REGISTRATION_PATH
+            end
+
+            metadata
+          end
         end
       end
     end

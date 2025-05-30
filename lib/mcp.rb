@@ -20,6 +20,11 @@ require_relative "mcp/configuration"
 require_relative "mcp/methods"
 require_relative "mcp/auth/errors"
 require_relative "mcp/auth/models"
+require_relative "mcp/auth/server/provider"
+require_relative "mcp/auth/server/settings"
+require_relative "mcp/auth/server/uri_helper"
+require_relative "mcp/auth/server/handlers/metadata_handler"
+require_relative "mcp/serialization_utils"
 
 module MCP
   class << self
