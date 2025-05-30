@@ -18,6 +18,8 @@ require_relative "mcp/prompt/result"
 require_relative "mcp/version"
 require_relative "mcp/configuration"
 require_relative "mcp/methods"
+require_relative "mcp/auth/errors"
+require_relative "mcp/auth/models"
 
 module MCP
   class << self
