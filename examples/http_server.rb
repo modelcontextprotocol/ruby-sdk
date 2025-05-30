@@ -93,7 +93,7 @@ server.resources_read_handler do |params|
   }]
 end
 
-# Create the StreamableHTTP transport
+# Create the Streamable HTTP transport
 server.transport = MCP::Transports::HTTP.new(server)
 
 # Create a logger for MCP-specific logging
