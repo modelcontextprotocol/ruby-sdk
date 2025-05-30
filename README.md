@@ -33,7 +33,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Manages tool registration and invocation
 - Supports prompt registration and execution
 - Supports resource registration and retrieval
-- Supports stdio & StreamableHTTP (including SSE) transports
+- Supports stdio & Streamable HTTP (including SSE) transports
 
 ### Supported Methods
 - `initialize` - Initializes the protocol and returns server capabilities
@@ -52,14 +52,14 @@ It implements the Model Context Protocol specification, handling model context r
 - Log Level
 - Resource subscriptions
 - Completions
-- Complete StreamableHTTP implementation with streaming responses
+- Complete Streamable HTTP implementation with streaming responses
 
 ### Usage
 
 #### Rails Controller
 
 When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[StreamableHTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) transport
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) transport
 requests.
 
 You can use the `Server#handle_json` method to handle requests.

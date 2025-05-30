@@ -14,7 +14,7 @@ ruby examples/stdio_server.rb
 ```
 
 ### 2. HTTP Server (`http_server.rb`)
-A standalone HTTP server built with Rack that implements the MCP StreamableHTTP transport protocol. This demonstrates how to create a web-based MCP server with session management and Server-Sent Events (SSE) support.
+A standalone HTTP server built with Rack that implements the MCP Streamable HTTP transport protocol. This demonstrates how to create a web-based MCP server with session management and Server-Sent Events (SSE) support.
 
 **Features:**
 - HTTP transport with Server-Sent Events (SSE) for streaming
@@ -127,11 +127,11 @@ curl -X POST http://localhost:9393 \
   -d '{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"notification_tool","arguments":{"message":"Hello from cURL!"}}}'
 ```
 
-## StreamableHTTP Transport Details
+## Streamable HTTP Transport Details
 
 ### Protocol Flow
 
-The HTTP server implements the MCP StreamableHTTP transport protocol:
+The HTTP server implements the MCP Streamable HTTP transport protocol:
 
 1. **Initialize Session**: 
    - Client sends POST request with `initialize` method
