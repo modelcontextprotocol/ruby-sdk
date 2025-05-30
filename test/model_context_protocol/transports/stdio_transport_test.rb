@@ -92,11 +92,11 @@ module MCP
 
         begin
           $stdout = output
-          @transport.send(:handle_request, JSON.generate(request))
+          @transport.send(:handle_json_request, JSON.generate(request))
           response = JSON.parse(output.string, symbolize_names: true)
           assert_equal("2.0", response[:jsonrpc])
-          assert_nil(response[:id])
-          assert_nil(response[:result])
+          assert_equal("123", response[:id])
+          assert_empty(response[:result])
         ensure
           $stdout = original_stdout
         end
@@ -109,13 +109,12 @@ module MCP
 
         begin
           $stdout = output
-          @transport.send(:handle_request, invalid_json)
+          @transport.send(:handle_json_request, invalid_json)
           response = JSON.parse(output.string, symbolize_names: true)
           assert_equal("2.0", response[:jsonrpc])
           assert_nil(response[:id])
-          assert_equal(-32600, response[:error][:code])
-          assert_equal("Invalid Request", response[:error][:message])
-          assert_equal("Request must be an array or a hash", response[:error][:data])
+          assert_equal(-32700, response[:error][:code])
+          assert_equal("Parse error", response[:error][:message])
         ensure
           $stdout = original_stdout
         end

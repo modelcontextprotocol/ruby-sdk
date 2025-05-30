@@ -6,6 +6,12 @@ require "json"
 module MCP
   module Transports
     class StdioTransport < Transport
+      class << self
+        def register
+          super("stdio", self)
+        end
+      end
+
       def initialize(server)
         @server = server
         @open = false
