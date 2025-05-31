@@ -86,7 +86,7 @@ If you want to build a local command-line application, you can use the stdio tra
 ```ruby
 #!/usr/bin/env ruby
 require "mcp"
-require "mcp/transports/stdio"
+require "mcp/server/transports/stdio"
 
 # Create a simple tool
 class ExampleTool < MCP::Tool
@@ -115,7 +115,7 @@ server = MCP::Server.new(
 )
 
 # Create and start the transport
-transport = MCP::Transports::StdioTransport.new(server)
+transport = MCP::Server::Transports::StdioTransport.new(server)
 transport.open
 ```
 
