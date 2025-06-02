@@ -64,7 +64,8 @@ server.define_tool(
 end
 
 # Create the Streamable HTTP transport
-server.transport = MCP::Transports::HTTP.new(server)
+transport = MCP::Transports::HTTP.new(server)
+server.transport = transport
 
 # Create a logger for MCP request/response logging
 mcp_logger = Logger.new($stdout)
@@ -98,7 +99,7 @@ app = proc do |env|
   end
 
   # Handle the request
-  response = server.handle_rack_request(request)
+  response = transport.handle_request(request)
 
   # Log response details
   status, headers, body = response

@@ -93,14 +93,6 @@ module MCP
       @prompts[prompt.name_value] = prompt
     end
 
-    def handle_rack_request(request)
-      @transport.handle_request(request)
-    end
-
-    def close
-      @transport.close
-    end
-
     def resources_list_handler(&block)
       @handlers[Methods::RESOURCES_LIST] = block
     end

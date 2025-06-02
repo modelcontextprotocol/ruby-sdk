@@ -94,7 +94,8 @@ server.resources_read_handler do |params|
 end
 
 # Create the Streamable HTTP transport
-server.transport = MCP::Transports::HTTP.new(server)
+transport = MCP::Transports::HTTP.new(server)
+server.transport = transport
 
 # Create a logger for MCP-specific logging
 mcp_logger = Logger.new($stdout)
@@ -121,7 +122,7 @@ app = proc do |env|
 
   # Handle the request
   puts "request: #{request.inspect}"
-  response = server.handle_rack_request(request)
+  response = transport.handle_request(request)
 
   # Log the MCP response details
   _, _, body = response
