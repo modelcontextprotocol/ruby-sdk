@@ -34,6 +34,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports prompt registration and execution
 - Supports resource registration and retrieval
 - Supports stdio & Streamable HTTP (including SSE) transports
+- Supports notifications for list changes (tools, prompts, resources)
 
 ### Supported Methods
 - `initialize` - Initializes the protocol and returns server capabilities
@@ -46,13 +47,46 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
 
+### Notifications
+
+The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
+
+#### Notification Methods
+
+The server provides three notification methods:
+- `notify_tools_list_changed()` - Send a notification when the tools list changes
+- `notify_prompts_list_changed()` - Send a notification when the prompts list changes  
+- `notify_resources_list_changed()` - Send a notification when the resources list changes
+
+#### Notification Format
+
+Notifications follow the JSON-RPC 2.0 specification and use these method names:
+- `notifications/tools/list_changed`
+- `notifications/prompts/list_changed`
+- `notifications/resources/list_changed`
+
+#### Transport Support
+
+- **HTTP Transport**: Notifications are sent as Server-Sent Events (SSE) to all connected sessions
+- **Stdio Transport**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+
+#### Usage Example
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Transports::HTTP.new(server)
+server.transport = transport
+
+# When tools change, notify clients
+server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
+server.notify_tools_list_changed()
+```
+
 ### Unsupported Features ( to be implemented in future versions )
 
-- Notifications
 - Log Level
 - Resource subscriptions
 - Completions
-- Complete Streamable HTTP implementation with streaming responses
 
 ### Usage
 

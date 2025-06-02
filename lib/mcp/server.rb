@@ -93,6 +93,30 @@ module MCP
       @prompts[prompt.name_value] = prompt
     end
 
+    def notify_tools_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "tools_list_changed" })
+    end
+
+    def notify_prompts_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "prompts_list_changed" })
+    end
+
+    def notify_resources_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "resources_list_changed" })
+    end
+
     def resources_list_handler(&block)
       @handlers[Methods::RESOURCES_LIST] = block
     end
