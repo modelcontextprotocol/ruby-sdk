@@ -9,6 +9,8 @@ module MCP
 
       class InvalidRedirectUriError < StandardError; end
 
+      class MissingClientIdError < StandardError; end
+
       class RegistrationError < StandardError
         INVALID_REDIRECT_URI = "invalid_redirect_uri"
         INVALID_CLIENT_METADATA = "invalid_client_metadata"
@@ -37,6 +39,12 @@ module MCP
         def initialize(error_code:, message: nil)
           super(message)
           @error_code = error_code
+        end
+
+        class << self
+          def invalid_request(message)
+            AuthorizationError.new(error_code: INVALID_REQUEST, message:)
+          end
         end
       end
 

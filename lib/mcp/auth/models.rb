@@ -115,10 +115,7 @@ module MCP
           @software_version = software_version
         end
 
-        def validate_scope(requested_scope)
-          return if requested_scope.nil? || requested_scope.empty?
-
-          requested_scopes = requested_scope.split(" ")
+        def validate_scopes!(requested_scopes)
           allowed_scopes = @scope.nil? ? [] : @scope.split(" ")
 
           requested_scopes.each do |s|
@@ -126,22 +123,14 @@ module MCP
               raise Errors::InvalidScopeError, "Client was not registered with scope '#{s}'"
             end
           end
-
-          requested_scopes
         end
 
-        def validate_redirect_uri(redirect_uri)
-          if redirect_uri
-            unless @redirect_uris.include?(redirect_uri)
-              raise Errors::InvalidRedirectUriError, "Redirect URI '#{redirect_uri}' not registered for client"
-            end
+        def valid_redirect_uri?(redirect_uri)
+          @redirect_uris.include?(redirect_uri)
+        end
 
-            redirect_uri_str
-          elsif @redirect_uris.one?
-            @redirect_uris.first
-          else
-            raise Errors::InvalidRedirectUriError, "redirect_uri must be specified when client has multiple registered URIs"
-          end
+        def multiple_redirect_uris?
+          @redirect_uris.size > 1
         end
       end
 

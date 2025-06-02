@@ -10,18 +10,21 @@ module MCP
           :scopes,
           :code_challenge,
           :redirect_uri,
-          :redirect_uri_provided_explicitly
+          :redirect_uri_provided_explicitly,
+          :response_type
 
         def initialize(
-          state: nil,
-          scopes: nil,
           code_challenge:,
           redirect_uri:,
-          redirect_uri_provided_explicitly:
+          redirect_uri_provided_explicitly:,
+          response_type:,
+          state: nil,
+          scopes: nil
         )
           @state = state
           @scopes = scopes
           @code_challenge = code_challenge
+          @response_type = response_type
           @redirect_uri = redirect_uri
           @redirect_uri_provided_explicitly = redirect_uri_provided_explicitly
         end
@@ -93,7 +96,7 @@ module MCP
         end
       end
 
-      class OAuthAuthorizationServerProvider
+      module OAuthAuthorizationServerProvider
         # Retrieves client information by client ID.
         # Implementors MAY raise NotImplementedError if dynamic client registration is
         # disabled in ClientRegistrationOptions.
@@ -142,11 +145,11 @@ module MCP
         # entropy, and MUST generate an authorization code with at least 128 bits of entropy.
         # See https://datatracker.ietf.org/doc/html/rfc6749#section-10.10.
         #
-        # @param client [MCP::Auth::Models::OAuthClientInformationFull] The client requesting authorization.
-        # @param params [MCP::Auth::Server::AuthorizationParams] The parameters of the authorization request.
+        # @param client_info [MCP::Auth::Models::OAuthClientInformationFull] The client requesting authorization.
+        # @param params      [MCP::Auth::Server::AuthorizationParams] The parameters of the authorization request.
         # @return [String] A URL to redirect the client to for authorization.
         # @raise [MCP::Auth::Errors::AuthorizeError] If the authorization request is invalid.
-        def authorize(client_info, params)
+        def authorize(client_info:, auth_params:)
           raise NotImplementedError, "#{self.class.name}#authorize is not implemented"
         end
 
