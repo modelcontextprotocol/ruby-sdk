@@ -181,7 +181,7 @@ module MCP
           @server.define_tool(
             name: "dynamic_tool",
             description: "A dynamically added tool",
-          ) do |**args|
+          ) do |**_args|
             { result: "success" }
           end
 

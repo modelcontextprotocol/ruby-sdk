@@ -29,13 +29,13 @@ module MCP
     setup do
       configuration = MCP::Configuration.new
       configuration.instrumentation_callback = instrumentation_helper.callback
-      
+
       @server = Server.new(
         name: "test_server",
         version: "1.0.0",
-        configuration: configuration
+        configuration: configuration,
       )
-      
+
       @mock_transport = MockTransport.new(@server)
       @server.transport = @mock_transport
     end
@@ -69,7 +69,7 @@ module MCP
 
     test "notification methods work without transport" do
       server_without_transport = Server.new(name: "test_server")
-      
+
       # Should not raise any errors
       assert_nothing_raised do
         server_without_transport.notify_tools_list_changed
@@ -85,16 +85,16 @@ module MCP
           raise StandardError, "Transport error"
         end
       end.new(@server)
-      
+
       @server.transport = error_transport
-      
+
       # Mock the exception reporter
       expected_contexts = [
         { notification: "tools_list_changed" },
         { notification: "prompts_list_changed" },
-        { notification: "resources_list_changed" }
+        { notification: "resources_list_changed" },
       ]
-      
+
       call_count = 0
       @server.configuration.exception_reporter.expects(:call).times(3).with do |exception, context|
         assert_kind_of StandardError, exception
@@ -103,14 +103,14 @@ module MCP
         call_count += 1
         true
       end
-      
+
       # Should not raise errors to the caller
       assert_nothing_raised do
         @server.notify_tools_list_changed
         @server.notify_prompts_list_changed
         @server.notify_resources_list_changed
       end
-      
+
       assert_equal 3, call_count
     end
 
@@ -120,7 +120,7 @@ module MCP
       @server.notify_resources_list_changed
 
       assert_equal 3, @mock_transport.notifications.size
-      
+
       notifications = @mock_transport.notifications
       assert_equal Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED, notifications[0][:method]
       assert_equal Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED, notifications[1][:method]
@@ -133,4 +133,4 @@ module MCP
       assert_equal "notifications/resources/list_changed", Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED
     end
   end
-end 
+end

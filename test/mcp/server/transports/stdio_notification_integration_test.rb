@@ -30,7 +30,7 @@ module MCP
             nil # Simulate end of input
           end
 
-          def set_encoding(encoding)
+          def set_encoding(encoding) # rubocop:disable Naming/AccessorMethodName
             # Mock implementation
           end
 
@@ -131,7 +131,7 @@ module MCP
           @server.define_tool(
             name: "dynamic_tool",
             description: "A dynamically added tool",
-          ) do |**args|
+          ) do |**_args|
             { result: "success" }
           end
 
@@ -213,7 +213,7 @@ module MCP
           @server.define_prompt(
             name: "test_prompt",
             description: "Test prompt",
-          ) do |args, server_context:|
+          ) do |_args, _server_context:|
             MCP::PromptResponse.new(messages: [{ role: "user", content: "Test" }])
           end
 
