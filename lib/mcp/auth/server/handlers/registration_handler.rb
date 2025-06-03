@@ -5,6 +5,7 @@ require "time"
 require_relative "../../../serialization_utils"
 require_relative "../../errors"
 require_relative "../../models"
+require_relative "../settings"
 
 module MCP
   module Auth
@@ -15,11 +16,10 @@ module MCP
 
           def initialize(
             auth_server_provider:,
-            client_registration_options:,
             request_parser:
           )
             @auth_server_provider = auth_server_provider
-            @client_registration_options = client_registration_options
+            @client_registration_options = auth_server_provider.client_registration_options
             @request_parser = request_parser
           end
 
@@ -94,7 +94,7 @@ module MCP
 
           def scope!(client_metadata)
             if client_metadata.scope.nil? && @client_registration_options.default_scopes
-              return client_registration_options.default_scopes.join(" ")
+              return @client_registration_options.default_scopes.join(" ")
             end
 
             if client_metadata.scope

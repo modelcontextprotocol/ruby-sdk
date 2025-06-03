@@ -38,11 +38,11 @@ module MCP
             @codes[code_id] = data
           end
 
-          def find_code(code_id)
+          def find_auth_code(code_id)
             @codes[code_id]
           end
 
-          def delete_code(code_id)
+          def delete_auth_code(code_id)
             @codes.delete(code_id)
           end
 

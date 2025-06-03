@@ -9,8 +9,8 @@ module MCP
         class MetadataHandler
           include SerializationUtils
 
-          def initialize(oauth_metadata)
-            @oauth_metadata = oauth_metadata
+          def initialize(auth_server_provider:)
+            @auth_server_provider = auth_server_provider
           end
 
           # returns [status, headers, body]
@@ -19,7 +19,7 @@ module MCP
               "Cache-Control": "public, max-age=3600",
               "Content-Type": "application/json",
             }
-            [200, headers, to_h(@oauth_metadata)]
+            [200, headers, to_h(@auth_server_provider.oauth_metadata)]
           end
         end
       end

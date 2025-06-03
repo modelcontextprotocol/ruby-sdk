@@ -6,7 +6,8 @@ module MCP
   module Auth
     module Server
       class AuthorizationParams
-        attr_accessor :state,
+        attr_accessor :client_id,
+          :state,
           :scopes,
           :code_challenge,
           :redirect_uri,
@@ -14,6 +15,7 @@ module MCP
           :response_type
 
         def initialize(
+          client_id:,
           code_challenge:,
           redirect_uri:,
           redirect_uri_provided_explicitly:,
@@ -21,6 +23,7 @@ module MCP
           state: nil,
           scopes: nil
         )
+          @client_id = client_id
           @state = state
           @scopes = scopes
           @code_challenge = code_challenge
@@ -55,6 +58,18 @@ module MCP
           @code_challenge = code_challenge
           @redirect_uri = redirect_uri
           @redirect_uri_provided_explicitly = redirect_uri_provided_explicitly
+        end
+
+        def belongs_to_client?(client_id)
+          @client_id == client_id
+        end
+
+        def expired?
+          @expires_at < Time.now.to_i
+        end
+
+        def code_challenge_match?(other)
+          @code_challenge == other
         end
       end
 
@@ -97,6 +112,18 @@ module MCP
       end
 
       module OAuthAuthorizationServerProvider
+        # Returns the OAuth metadata for this authorization server.
+        # See https://datatracker.ietf.org/doc/html/rfc8414#section-2
+        #
+        # @return [MCP::Auth::Models::OAuthMetadata] The OAuth metadata for this server.
+        def oauth_metadata
+          raise NotImplementedError, "#{self.class.name}#oauth_metadata is not implemented"
+        end
+
+        def client_registration_options
+          raise NotImplementedError, "#{self.class.name}#client_registration_options is not implemented"
+        end
+
         # Retrieves client information by client ID.
         # Implementors MAY raise NotImplementedError if dynamic client registration is
         # disabled in ClientRegistrationOptions.
@@ -145,11 +172,10 @@ module MCP
         # entropy, and MUST generate an authorization code with at least 128 bits of entropy.
         # See https://datatracker.ietf.org/doc/html/rfc6749#section-10.10.
         #
-        # @param client_info [MCP::Auth::Models::OAuthClientInformationFull] The client requesting authorization.
-        # @param params      [MCP::Auth::Server::AuthorizationParams] The parameters of the authorization request.
+        # @param auth_params      [MCP::Auth::Server::AuthorizationParams] The parameters of the authorization request.
         # @return [String] A URL to redirect the client to for authorization.
         # @raise [MCP::Auth::Errors::AuthorizeError] If the authorization request is invalid.
-        def authorize(client_info:, auth_params:)
+        def authorize(auth_params)
           raise NotImplementedError, "#{self.class.name}#authorize is not implemented"
         end
 
@@ -171,10 +197,9 @@ module MCP
 
         # Loads an AuthorizationCode by its code string.
         #
-        # @param client_info [MCP::Auth::Server::OAuthClientInformationFull] The client that requested the authorization code.
         # @param authorization_code [String] The authorization code string to load.
         # @return [MCP::Auth::Server::AuthorizationCode, nil] The AuthorizationCode object, or nil if not found.
-        def load_authorization_code(client_info, authorization_code)
+        def load_authorization_code(authorization_code)
           raise NotImplementedError, "#{self.class.name}#load_authorization_code is not implemented"
         end
 

@@ -31,10 +31,12 @@ require_relative "mcp/auth/server/registries/token_registry"
 require_relative "mcp/auth/server/registries/in_memory_registry"
 require_relative "mcp/auth/server/request_parser"
 require_relative "mcp/auth/server/providers/mcp_authorization_server_provider"
+require_relative "mcp/auth/server/handlers"
 require_relative "mcp/auth/server/handlers/metadata_handler"
 require_relative "mcp/auth/server/handlers/registration_handler"
 require_relative "mcp/auth/server/handlers/authorization_handler"
 require_relative "mcp/auth/server/handlers/callback_handler"
+require_relative "mcp/auth/server/handlers/token_handler"
 
 module MCP
   class << self

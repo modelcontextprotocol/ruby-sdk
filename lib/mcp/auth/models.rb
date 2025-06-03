@@ -125,6 +125,10 @@ module MCP
           end
         end
 
+        def valid_grant_type?(grant_type)
+          @grant_types.include?(grant_type)
+        end
+
         def valid_redirect_uri?(redirect_uri)
           @redirect_uris.include?(redirect_uri)
         end
@@ -154,6 +158,26 @@ module MCP
           @client_secret = client_secret
           @client_id_issued_at = client_id_issued_at
           @client_secret_expires_at = client_secret_expires_at
+        end
+
+        def authenticate!(request_client_id:, request_client_secret: nil)
+          raise Errors::ClientAuthenticationError, "invalid client_id" if @client_id != request_client_id
+          if @client_secret.nil?
+            return
+          end
+
+          raise Errors::ClientAuthenticationError, "client_secret mismatch" if @client_secret != request_client_secret
+          raise Errors::ClientAuthenticationError, "client_secret has expired" if secret_expired?
+        end
+
+        private
+
+        def secret_expired?
+          if @client_secret_expires_at.nil?
+            return false
+          end
+
+          @client_secret_expires_at < Time.now.to_i
         end
       end
 
@@ -289,12 +313,12 @@ module MCP
           DEFAULT_REGISTRATION_PATH = "/register"
           DEFAULT_TOKEN_PATH = "/token"
 
-          def from_settings(auth_settings, **kwargs)
+          def with_defaults(issuer_url:, client_registration_options:, **kwargs)
             metadata = OAuthMetadata.new(
-              issuer: auth_settings.issuer_url,
-              authorization_endpoint: auth_settings.issuer_url + DEFAULT_AUTHORIZE_PATH,
-              token_endpoint: auth_settings.issuer_url + DEFAULT_TOKEN_PATH,
-              scopes_supported: auth_settings.client_registration_options.valid_scopes,
+              issuer: issuer_url,
+              authorization_endpoint: issuer_url + DEFAULT_AUTHORIZE_PATH,
+              token_endpoint: issuer_url + DEFAULT_TOKEN_PATH,
+              scopes_supported: client_registration_options.valid_scopes,
               response_types_supported: ["code"],
               grant_types_supported: ["authorization_code", "refresh_token"],
               token_endpoint_auth_methods_supported: ["client_secret_post"],
@@ -302,8 +326,8 @@ module MCP
               **kwargs,
             )
 
-            if auth_settings.client_registration_options.enabled
-              metadata.registration_endpoint = auth_settings.issuer_url + DEFAULT_REGISTRATION_PATH
+            if client_registration_options.enabled
+              metadata.registration_endpoint = issuer_url + DEFAULT_REGISTRATION_PATH
             end
 
             metadata

@@ -87,6 +87,7 @@ module MCP
               client_info.validate_scopes!(scopes)
 
               auth_params = AuthorizationParams.new(
+                client_id: auth_request.client_id,
                 state: auth_request.state,
                 scopes:,
                 code_challenge: auth_request.code_challenge,
@@ -94,7 +95,7 @@ module MCP
                 redirect_uri_provided_explicitly: auth_request.redirect_uri_provided?,
                 response_type: auth_request.response_type,
               )
-              location = @auth_server_provider.authorize(client_info:, auth_params:)
+              location = @auth_server_provider.authorize(auth_params)
               headers = {
                 "Cache-Control": "no-store",
                 "Location": location,

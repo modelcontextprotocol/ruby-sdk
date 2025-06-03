@@ -25,6 +25,8 @@ module MCP
         end
       end
 
+      class ClientAuthenticationError < StandardError; end
+
       class AuthorizationError < StandardError
         INVALID_REQUEST = "invalid_request"
         UNAUTHORIZED_CLIENT = "unauthorized_client"
@@ -44,6 +46,10 @@ module MCP
         class << self
           def invalid_request(message)
             AuthorizationError.new(error_code: INVALID_REQUEST, message:)
+          end
+
+          def invalid_grant(message)
+            AuthorizationError.new(error_code: INVALID_GRANT, message:)
           end
         end
       end
