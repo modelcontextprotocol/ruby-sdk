@@ -94,7 +94,6 @@ module MCP
                 redirect_uri_provided_explicitly: auth_request.redirect_uri_provided?,
                 response_type: auth_request.response_type,
               )
-
               location = @auth_server_provider.authorize(client_info:, auth_params:)
               headers = {
                 "Cache-Control": "no-store",

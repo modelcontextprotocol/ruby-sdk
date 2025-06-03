@@ -2,7 +2,6 @@
 
 require "securerandom"
 require "time"
-require "json"
 require_relative "../../../serialization_utils"
 require_relative "../../errors"
 require_relative "../../models"

@@ -9,5 +9,11 @@ module MCP
         hash[key] = value unless value.nil?
       end
     end
+
+    def stringify_keys(h)
+      h.each_with_object({}) do |(key, value), memo|
+        memo[key.to_s] = value
+      end
+    end
   end
 end

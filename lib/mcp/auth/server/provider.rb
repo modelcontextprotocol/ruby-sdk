@@ -153,6 +153,22 @@ module MCP
           raise NotImplementedError, "#{self.class.name}#authorize is not implemented"
         end
 
+        # Handles the callback from the OAuth provider after the user has authorized
+        # the application. This is called when the OAuth provider redirects back to
+        # the MCP server's callback endpoint.
+        #
+        # Implementations should validate the code and state parameters, exchange the
+        # authorization code with the OAuth provider if needed, and return a URL to
+        # redirect the user back to the original client application.
+        #
+        # @param code [String] The authorization code from the OAuth provider
+        # @param state [String] The state parameter that was passed to the authorize endpoint
+        # @return [String] The URL to redirect the user to (typically the client's redirect_uri)
+        # @raise [MCP::Auth::Errors::AuthorizeError] If the callback parameters are invalid
+        def authorize_callback(code:, state:)
+          raise NotImplementedError, "#{self.class.name}#handle_callback is not implemented"
+        end
+
         # Loads an AuthorizationCode by its code string.
         #
         # @param client_info [MCP::Auth::Server::OAuthClientInformationFull] The client that requested the authorization code.
