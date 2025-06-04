@@ -3,7 +3,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "mcp"
-require "mcp/transports/http"
+require "mcp/server/transports/streamable_http_transport"
 require "rack"
 require "rackup"
 require "json"
@@ -64,7 +64,7 @@ server.define_tool(
 end
 
 # Create the Streamable HTTP transport
-transport = MCP::Transports::HTTP.new(server)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 server.transport = transport
 
 # Create a logger for MCP request/response logging
