@@ -839,5 +839,123 @@ module MCP
 
       refute_includes server_without_resources.capabilities, :resources
     end
+
+    test "tools/call validates arguments against input schema when validate_tool_call_arguments is true" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "test_tool",
+            arguments: { message: 123 },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32603, response[:error][:code])
+      assert_includes response[:error][:data], "Invalid arguments"
+    end
+
+    test "tools/call skips argument validation when validate_tool_call_arguments is false" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: false),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "test_tool",
+            arguments: { message: 123 },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert response[:result], "Expected result key in response"
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "OK", response[:result][:content][0][:content]
+    end
+
+    test "tools/call validates arguments with complex types" do
+      server = Server.new(
+        tools: [ComplexTypesTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "complex_types_tool",
+            arguments: {
+              numbers: [1, 2, 3],
+              strings: ["a", "b", "c"],
+              objects: [{ name: "test" }],
+            },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert response[:result], "Expected result key in response"
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "OK", response[:result][:content][0][:content]
+    end
+
+    class TestTool < Tool
+      tool_name "test_tool"
+      description "a test tool for testing"
+      input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+      class << self
+        def call(message:, server_context: nil)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
+
+    class ComplexTypesTool < Tool
+      tool_name "complex_types_tool"
+      description "a test tool with complex types"
+      input_schema({
+        properties: {
+          numbers: { type: "array", items: { type: "number" } },
+          strings: { type: "array", items: { type: "string" } },
+          objects: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+              },
+              required: ["name"],
+            },
+          },
+        },
+        required: ["numbers", "strings", "objects"],
+      })
+
+      class << self
+        def call(numbers:, strings:, objects:, server_context: nil)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
   end
 end

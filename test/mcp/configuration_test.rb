@@ -61,5 +61,45 @@ module MCP
       merged = config3.merge(config1)
       assert_equal "2025-03-27", merged.protocol_version
     end
+
+    test "defaults validate_tool_call_arguments to true" do
+      config = Configuration.new
+      assert config.validate_tool_call_arguments
+    end
+
+    test "can set validate_tool_call_arguments to false" do
+      config = Configuration.new(validate_tool_call_arguments: false)
+      refute config.validate_tool_call_arguments
+    end
+
+    test "validate_tool_call_arguments? returns false when set" do
+      config = Configuration.new(validate_tool_call_arguments: false)
+      refute config.validate_tool_call_arguments?
+    end
+
+    test "validate_tool_call_arguments? returns true when not set" do
+      config = Configuration.new
+      assert config.validate_tool_call_arguments?
+    end
+
+    test "merge preserves validate_tool_call_arguments from other config" do
+      config1 = Configuration.new(validate_tool_call_arguments: false)
+      config2 = Configuration.new
+      merged = config1.merge(config2)
+      assert merged.validate_tool_call_arguments?
+    end
+
+    test "merge preserves validate_tool_call_arguments from self when other not set" do
+      config1 = Configuration.new(validate_tool_call_arguments: false)
+      config2 = Configuration.new
+      merged = config2.merge(config1)
+      refute merged.validate_tool_call_arguments
+    end
+
+    test "raises ArgumentError when validate_tool_call_arguments is not a boolean" do
+      assert_raises(ArgumentError) do
+        Configuration.new(validate_tool_call_arguments: "true")
+      end
+    end
   end
 end

@@ -159,7 +159,7 @@ module MCP
           report_exception(e, { request: request })
           if e.is_a?(RequestHandlerError)
             add_instrumentation_data(error: e.error_type)
-            raise e
+            raise StandardError, e.message
           end
 
           add_instrumentation_data(error: :internal_error)
@@ -208,6 +208,15 @@ module MCP
           request,
           error_type: :missing_required_arguments,
         )
+      end
+
+      if configuration.validate_tool_call_arguments && tool.input_schema
+        begin
+          tool.input_schema.validate_arguments(arguments)
+        rescue Tool::InputSchema::ValidationError => e
+          add_instrumentation_data(error: :invalid_schema)
+          raise RequestHandlerError.new(e.message, request, error_type: :invalid_schema)
+        end
       end
 
       begin
