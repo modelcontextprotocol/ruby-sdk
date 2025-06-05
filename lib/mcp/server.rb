@@ -24,7 +24,7 @@ module MCP
     include Instrumentation
 
     attr_writer :capabilities
-    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration
+    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :transport
 
     def initialize(
       name: "model_context_protocol",
@@ -35,7 +35,8 @@ module MCP
       resource_templates: [],
       server_context: nil,
       configuration: nil,
-      capabilities: nil
+      capabilities: nil,
+      transport: nil
     )
       @name = name
       @version = version
@@ -68,6 +69,7 @@ module MCP
         Methods::COMPLETION_COMPLETE => ->(_) {},
         Methods::LOGGING_SET_LEVEL => ->(_) {},
       }
+      @transport = transport
     end
 
     def capabilities
@@ -94,6 +96,30 @@ module MCP
     def define_prompt(name: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
+    end
+
+    def notify_tools_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "tools_list_changed" })
+    end
+
+    def notify_prompts_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "prompts_list_changed" })
+    end
+
+    def notify_resources_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "resources_list_changed" })
     end
 
     def resources_list_handler(&block)
