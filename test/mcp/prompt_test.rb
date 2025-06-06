@@ -5,7 +5,9 @@ require "test_helper"
 
 module MCP
   class PromptTest < ActiveSupport::TestCase
-    class TestPrompt < Prompt
+    class TestPrompt
+      extend Prompt
+
       description "Test prompt"
       arguments [
         Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
@@ -41,7 +43,9 @@ module MCP
     end
 
     test "allows declarative definition of prompts as classes" do
-      class MockPrompt < Prompt
+      class MockPrompt
+        extend Prompt
+
         prompt_name "my_mock_prompt"
         description "a mock prompt for testing"
         arguments [
@@ -82,7 +86,9 @@ module MCP
     end
 
     test "defaults to class name as prompt name" do
-      class DefaultNamePrompt < Prompt
+      class DefaultNamePrompt
+        extend Prompt
+
         description "a mock prompt for testing"
         arguments [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),

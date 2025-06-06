@@ -3,7 +3,7 @@
 require "test_helper"
 
 module MCP
-  class Tool
+  module Tool
     class InputSchemaTest < ActiveSupport::TestCase
       test "required arguments are converted to symbols" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])

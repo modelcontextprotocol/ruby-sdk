@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module MCP
-  class Tool
+  module Tool
     class Response
       attr_reader :content, :is_error
 

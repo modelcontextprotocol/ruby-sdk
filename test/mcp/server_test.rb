@@ -258,7 +258,9 @@ module MCP
     end
 
     test "#handle_json tools/call executes tool and returns result, when the tool is typed with Sorbet" do
-      class TypedTestTool < Tool
+      class TypedTestTool
+        extend Tool
+
         tool_name "test_tool"
         description "a test tool for testing"
         input_schema({ properties: { message: { type: "string" } }, required: ["message"] })

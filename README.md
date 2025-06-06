@@ -89,7 +89,9 @@ require "mcp"
 require "mcp/server/transports/stdio_transport"
 
 # Create a simple tool
-class ExampleTool < MCP::Tool
+module ExampleTool
+  extend MCP::Tool
+
   description "A simple example tool that echoes back its arguments"
   input_schema(
     properties: {
@@ -275,7 +277,9 @@ This gem provides a `MCP::Tool` class that can be used to create tools in two wa
 1. As a class definition:
 
 ```ruby
-class MyTool < MCP::Tool
+module MyTool
+  extend MCP::Tool
+
   description "This tool performs specific functionality..."
   input_schema(
     properties: {
@@ -338,7 +342,9 @@ The `MCP::Prompt` class provides two ways to create prompts:
 1. As a class definition with metadata:
 
 ```ruby
-class MyPrompt < MCP::Prompt
+module MyPrompt
+  extend MCP::Prompt
+
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
   description "This prompt performs specific functionality..."
   arguments [

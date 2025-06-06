@@ -5,7 +5,9 @@ require "test_helper"
 
 module MCP
   class ToolTest < ActiveSupport::TestCase
-    class TestTool < Tool
+    class TestTool
+      extend Tool
+
       tool_name "test_tool"
       description "a test tool for testing"
       input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
@@ -49,7 +51,9 @@ module MCP
     end
 
     test "allows declarative definition of tools as classes" do
-      class MockTool < Tool
+      class MockTool
+        extend Tool
+
         tool_name "my_mock_tool"
         description "a mock tool for testing"
         input_schema({ properties: { message: { type: "string" } }, required: [:message] })
@@ -63,7 +67,8 @@ module MCP
     end
 
     test "defaults to class name as tool name" do
-      class DefaultNameTool < Tool
+      class DefaultNameTool
+        extend Tool
       end
 
       tool = DefaultNameTool
@@ -72,8 +77,10 @@ module MCP
     end
 
     test "accepts input schema as an InputSchema object" do
-      class InputSchemaTool < Tool
-        input_schema InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+      class InputSchemaTool
+        extend Tool
+
+        input_schema Tool::InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
       end
 
       tool = InputSchemaTool
@@ -178,7 +185,9 @@ module MCP
     end
 
     test "Tool class method annotations can be set and retrieved" do
-      class AnnotationsTestTool < Tool
+      class AnnotationsTestTool
+        extend Tool
+
         tool_name "annotations_test"
         annotations(
           title: "Annotations Test",
@@ -193,7 +202,9 @@ module MCP
     end
 
     test "Tool class method annotations can be updated" do
-      class UpdatableAnnotationsTool < Tool
+      class UpdatableAnnotationsTool
+        extend Tool
+
         tool_name "updatable_annotations"
       end
 
@@ -206,7 +217,9 @@ module MCP
     end
 
     test "#call with Sorbet typed tools invokes the tool block and returns the response" do
-      class TypedTestTool < Tool
+      class TypedTestTool
+        extend Tool
+
         tool_name "test_tool"
         description "a test tool for testing"
         input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
