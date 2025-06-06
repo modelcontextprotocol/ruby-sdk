@@ -460,9 +460,10 @@ The `MCP::Resource` class provides a way to register resources with the server.
 
 ```ruby
 resource = MCP::Resource.new(
-  uri: "example.com/my_resource",
-  mime_type: "text/plain",
-  text: "Lorem ipsum dolor sit amet"
+  uri: "https://example.com/my_resource",
+  name: "My Resource",
+  description: "Lorem ipsum dolor sit amet",
+  mime_type: "text/html",
 )
 
 server = MCP::Server.new(
@@ -478,13 +479,13 @@ server.resources_read_handler do |params|
   [{
     uri: params[:uri],
     mimeType: "text/plain",
-    text: "Hello, world!",
+    text: params[:uri],
   }]
 end
 
 ```
 
-otherwise 'resources/read' requests will be a no-op.
+otherwise `resources/read` requests will be a no-op.
 
 ## Releases
 
