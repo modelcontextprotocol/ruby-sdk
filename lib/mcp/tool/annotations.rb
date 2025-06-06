@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module MCP
-  class Tool
+  module Tool
     class Annotations
       attr_reader :title, :read_only_hint, :destructive_hint, :idempotent_hint, :open_world_hint
 

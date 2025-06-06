@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module MCP
-  class Prompt
+  module Prompt
     class Argument
       attr_reader :name, :description, :required, :arguments
 
