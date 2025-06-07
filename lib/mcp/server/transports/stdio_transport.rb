@@ -7,6 +7,8 @@ module MCP
   class Server
     module Transports
       class StdioTransport < Transport
+        STATUS_INTERRUPTED = Signal.list["INT"] + 128
+
         def initialize(server)
           @server = server
           @open = false
@@ -20,6 +22,10 @@ module MCP
           while @open && (line = $stdin.gets)
             handle_json_request(line.strip)
           end
+        rescue Interrupt
+          warn("\nExiting...")
+
+          exit(STATUS_INTERRUPTED)
         end
 
         def close
