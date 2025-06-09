@@ -5,28 +5,24 @@ require "test_helper"
 
 module MCP
   class ToolTest < ActiveSupport::TestCase
-    class TestTool < Tool
-      tool_name "test_tool"
-      description "a test tool for testing"
-      input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
-      annotations(
+    TestTool = Tool.define(
+      name: "test_tool",
+      description: "a test tool for testing",
+      input_schema: { properties: { message: { type: "string" } }, required: ["message"] },
+      annotations: {
         title: "Test Tool",
         read_only_hint: true,
         destructive_hint: false,
         idempotent_hint: true,
         open_world_hint: false,
-      )
-
-      class << self
-        def call(message:, server_context: nil)
-          Tool::Response.new([{ type: "text", content: "OK" }])
-        end
-      end
+      },
+    ) do
+      Tool::Response.new([{ type: "text", content: "OK" }])
     end
 
     test "#to_h returns a hash with name, description, and inputSchema" do
       tool = Tool.define(name: "mock_tool", description: "a mock tool for testing")
-      assert_equal tool.to_h, { name: "mock_tool", description: "a mock tool for testing", inputSchema: {} }
+      assert_equal tool.to_h, { name: "mock_tool", description: "a mock tool for testing" }
     end
 
     test "#to_h includes annotations when present" do
@@ -43,40 +39,35 @@ module MCP
 
     test "#call invokes the tool block and returns the response" do
       tool = TestTool
-      response = tool.call(message: "test")
+      response = tool.call({ message: "test" }, server_context: {})
       assert_equal response.content, [{ type: "text", content: "OK" }]
       assert_equal response.is_error, false
     end
 
-    test "allows declarative definition of tools as classes" do
-      class MockTool < Tool
-        tool_name "my_mock_tool"
-        description "a mock tool for testing"
-        input_schema({ properties: { message: { type: "string" } }, required: [:message] })
+    test "allows definition of tools with input schema" do
+      tool = Tool.define(
+        name: "my_mock_tool",
+        description: "a mock tool for testing",
+        input_schema: { properties: { message: { type: "string" } }, required: [:message] },
+      ) do
+        Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
-      tool = MockTool
-      assert_equal tool.name_value, "my_mock_tool"
+      assert_equal tool.name, "my_mock_tool"
       assert_equal tool.description, "a mock tool for testing"
       assert_equal tool.input_schema.to_h,
         { type: "object", properties: { message: { type: "string" } }, required: [:message] }
     end
 
-    test "defaults to class name as tool name" do
-      class DefaultNameTool < Tool
-      end
-
-      tool = DefaultNameTool
-
-      assert_equal tool.tool_name, "default_name_tool"
-    end
-
     test "accepts input schema as an InputSchema object" do
-      class InputSchemaTool < Tool
-        input_schema InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+      input_schema = Tool::InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+      tool = Tool.define(
+        name: "input_schema_tool",
+        description: "a test tool",
+        input_schema: input_schema,
+      ) do
+        Tool::Response.new([{ type: "text", content: "OK" }])
       end
-
-      tool = InputSchemaTool
 
       expected = { type: "object", properties: { message: { type: "string" } }, required: [:message] }
       assert_equal expected, tool.input_schema.to_h
@@ -87,7 +78,7 @@ module MCP
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
-      assert_equal tool.name_value, "mock_tool"
+      assert_equal tool.name, "mock_tool"
       assert_equal tool.description, "a mock tool for testing"
       assert_equal tool.input_schema, nil
     end
@@ -104,10 +95,10 @@ module MCP
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
-      assert_equal tool.name_value, "mock_tool"
+      assert_equal tool.name, "mock_tool"
       assert_equal tool.description, "a mock tool for testing"
       assert_equal tool.input_schema, nil
-      assert_equal tool.annotations_value.to_h, { title: "Mock Tool", readOnlyHint: true }
+      assert_equal tool.annotations.to_h, { title: "Mock Tool", readOnlyHint: true }
     end
 
     # Tests for Tool::Annotations class
@@ -175,56 +166,6 @@ module MCP
     test "Tool::Annotations#to_h returns empty hash when all values are nil" do
       annotations = Tool::Annotations.new
       assert_empty annotations.to_h
-    end
-
-    test "Tool class method annotations can be set and retrieved" do
-      class AnnotationsTestTool < Tool
-        tool_name "annotations_test"
-        annotations(
-          title: "Annotations Test",
-          read_only_hint: true,
-        )
-      end
-
-      tool = AnnotationsTestTool
-      assert_instance_of Tool::Annotations, tool.annotations_value
-      assert_equal tool.annotations_value.title, "Annotations Test"
-      assert_equal tool.annotations_value.read_only_hint, true
-    end
-
-    test "Tool class method annotations can be updated" do
-      class UpdatableAnnotationsTool < Tool
-        tool_name "updatable_annotations"
-      end
-
-      tool = UpdatableAnnotationsTool
-      tool.annotations(title: "Initial")
-      assert_equal tool.annotations_value.title, "Initial"
-
-      tool.annotations(title: "Updated")
-      assert_equal tool.annotations_value.title, "Updated"
-    end
-
-    test "#call with Sorbet typed tools invokes the tool block and returns the response" do
-      class TypedTestTool < Tool
-        tool_name "test_tool"
-        description "a test tool for testing"
-        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
-
-        class << self
-          extend T::Sig
-
-          sig { params(message: String, server_context: T.nilable(T.untyped)).returns(Tool::Response) }
-          def call(message:, server_context: nil)
-            Tool::Response.new([{ type: "text", content: "OK" }])
-          end
-        end
-      end
-
-      tool = TypedTestTool
-      response = tool.call(message: "test")
-      assert_equal response.content, [{ type: "text", content: "OK" }]
-      assert_equal response.is_error, false
     end
   end
 end

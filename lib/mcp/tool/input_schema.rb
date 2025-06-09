@@ -1,25 +1,21 @@
 # frozen_string_literal: true
 
 module MCP
-  class Tool
+  module Tool
     class InputSchema
-      attr_reader :properties, :required
+      attr_reader :properties, :required, :to_h
 
       def initialize(properties: {}, required: [])
         @properties = properties
-        @required = required.map(&:to_sym)
-      end
+        @required = required
 
-      def to_h
-        { type: "object", properties:, required: }
-      end
+        @to_h = {
+          type: "object",
+          properties:,
+          required:,
+        }.compact.freeze
 
-      def missing_required_arguments?(arguments)
-        missing_required_arguments(arguments).any?
-      end
-
-      def missing_required_arguments(arguments)
-        (required - arguments.keys.map(&:to_sym))
+        freeze
       end
     end
   end

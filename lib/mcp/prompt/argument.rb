@@ -2,19 +2,22 @@
 # frozen_string_literal: true
 
 module MCP
-  class Prompt
+  module Prompt
     class Argument
-      attr_reader :name, :description, :required, :arguments
+      attr_reader :name, :description, :required, :to_h
 
       def initialize(name:, description: nil, required: false)
         @name = name
         @description = description
         @required = required
-        @arguments = arguments
-      end
 
-      def to_h
-        { name:, description:, required: }.compact
+        @to_h = {
+          name:,
+          description:,
+          required:,
+        }.compact.freeze
+
+        freeze
       end
     end
   end

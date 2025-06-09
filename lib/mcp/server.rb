@@ -11,13 +11,11 @@ module MCP
 
     class RequestHandlerError < StandardError
       attr_reader :error_type
-      attr_reader :original_error
 
-      def initialize(message, request, error_type: :internal_error, original_error: nil)
+      def initialize(message, request, error_type: :internal_error)
         super(message)
         @request = request
         @error_type = error_type
-        @original_error = original_error
       end
     end
 
@@ -39,8 +37,8 @@ module MCP
     )
       @name = name
       @version = version
-      @tools = tools.to_h { |t| [t.name_value, t] }
-      @prompts = prompts.to_h { |p| [p.name_value, p] }
+      @tools = tools.to_h { |t| [t.name, t] }
+      @prompts = prompts.to_h { |p| [p.name, p] }
       @resources = resources
       @resource_templates = resource_templates
       @resource_index = index_resources_by_uri(resources)
@@ -88,12 +86,12 @@ module MCP
 
     def define_tool(name: nil, description: nil, input_schema: nil, annotations: nil, &block)
       tool = Tool.define(name:, description:, input_schema:, annotations:, &block)
-      @tools[tool.name_value] = tool
+      @tools[tool.name] = tool
     end
 
     def define_prompt(name: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, description:, arguments:, &block)
-      @prompts[prompt.name_value] = prompt
+      @prompts[prompt.name] = prompt
     end
 
     def resources_list_handler(&block)
@@ -156,14 +154,14 @@ module MCP
             @handlers[method].call(params)
           end
         rescue => e
-          report_exception(e, { request: request })
+          report_exception(e, { request: })
           if e.is_a?(RequestHandlerError)
             add_instrumentation_data(error: e.error_type)
             raise e
           end
 
           add_instrumentation_data(error: :internal_error)
-          raise RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
+          raise RequestHandlerError.new("Internal error handling #{method} request", request)
         end
       }
     end
@@ -201,26 +199,22 @@ module MCP
       arguments = request[:arguments]
       add_instrumentation_data(tool_name:)
 
-      if tool.input_schema&.missing_required_arguments?(arguments)
-        add_instrumentation_data(error: :missing_required_arguments)
-        raise RequestHandlerError.new(
-          "Missing required arguments: #{tool.input_schema.missing_required_arguments(arguments).join(", ")}",
-          request,
-          error_type: :missing_required_arguments,
-        )
-      end
+      validate_tool_arguments!(tool, arguments, request)
 
       begin
-        call_params = tool_call_parameters(tool)
-
-        if call_params.include?(:server_context)
-          tool.call(**arguments.transform_keys(&:to_sym), server_context:).to_h
-        else
-          tool.call(**arguments.transform_keys(&:to_sym)).to_h
-        end
-      rescue => e
-        raise RequestHandlerError.new("Internal error calling tool #{tool_name}", request, original_error: e)
+        tool.call(arguments.transform_keys(&:to_sym), server_context:).to_h
+      rescue
+        raise RequestHandlerError.new("Internal error calling tool #{tool_name}", request)
       end
+    end
+
+    def validate_tool_arguments!(tool, arguments, request)
+      input_schema = tool.input_schema
+      return unless input_schema
+
+      missing_arguments = input_schema.required - arguments.keys.map(&:to_sym)
+
+      missing_required_arguments!(missing_arguments, request) unless missing_arguments.empty?
     end
 
     def list_prompts(request)
@@ -240,9 +234,31 @@ module MCP
       add_instrumentation_data(prompt_name:)
 
       prompt_args = request[:arguments]
-      prompt.validate_arguments!(prompt_args)
+      validate_prompt_arguments!(prompt, prompt_args, request)
 
-      prompt.template(prompt_args, server_context:).to_h
+      prompt.call(prompt_args, server_context:).to_h
+    end
+
+    def validate_prompt_arguments!(prompt, provided_arguments, request)
+      missing_arguments = prompt.arguments.filter_map do |configured_argument|
+        next unless configured_argument.required
+
+        key = configured_argument.name
+        next if provided_arguments.key?(key.to_s) || provided_arguments.key?(key.to_sym)
+
+        key
+      end
+
+      missing_required_arguments!(missing_arguments, request) unless missing_arguments.empty?
+    end
+
+    def missing_required_arguments!(missing_arguments, request)
+      add_instrumentation_data(error: :missing_required_arguments)
+      raise RequestHandlerError.new(
+        "Missing required arguments: #{missing_arguments.join(", ")}",
+        request,
+        error_type: :missing_required_arguments,
+      )
     end
 
     def list_resources(request)
@@ -271,25 +287,6 @@ module MCP
     def index_resources_by_uri(resources)
       resources.each_with_object({}) do |resource, hash|
         hash[resource.uri] = resource
-      end
-    end
-
-    def tool_call_parameters(tool)
-      method_def = tool_call_method_def(tool)
-      method_def.parameters.flatten
-    end
-
-    def tool_call_method_def(tool)
-      method = tool.method(:call)
-
-      if defined?(T::Utils) && T::Utils.respond_to?(:signature_for_method)
-        sorbet_typed_method_definition = T::Utils.signature_for_method(method)&.method
-
-        # Return the Sorbet typed method definition if it exists, otherwise fallback to original method
-        # definition if Sorbet is defined but not used by this tool.
-        sorbet_typed_method_definition || method
-      else
-        method
       end
     end
   end

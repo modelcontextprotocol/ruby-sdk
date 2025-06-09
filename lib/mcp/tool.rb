@@ -2,84 +2,43 @@
 
 module MCP
   class Tool
+    attr_reader :name, :description, :input_schema, :annotations, :to_h
+
     class << self
-      NOT_SET = Object.new
+      def define(...) = new(...)
+      private :new
 
-      attr_reader :description_value
-      attr_reader :input_schema_value
-      attr_reader :annotations_value
-
-      def call(*args, server_context:)
-        raise NotImplementedError, "Subclasses must implement call"
-      end
-
-      def to_h
-        result = {
-          name: name_value,
-          description: description_value,
-          inputSchema: input_schema_value.to_h,
-        }
-        result[:annotations] = annotations_value.to_h if annotations_value
-        result
-      end
+      private
 
       def inherited(subclass)
         super
-        subclass.instance_variable_set(:@name_value, nil)
-        subclass.instance_variable_set(:@description_value, nil)
-        subclass.instance_variable_set(:@input_schema_value, nil)
-        subclass.instance_variable_set(:@annotations_value, nil)
+        raise TypeError, "#{self} should no longer be subclassed. Use #{self}.define factory method instead."
       end
+    end
 
-      def tool_name(value = NOT_SET)
-        if value == NOT_SET
-          name_value
-        else
-          @name_value = value
-        end
-      end
+    def initialize(name:, description: nil, input_schema: nil, annotations: nil, &block)
+      input_schema = InputSchema.new(**input_schema) if Hash === input_schema
+      annotations  = Annotations.new(**annotations)  if Hash === annotations
+      raise ArgumentError, "Tool definition requires a block" unless block
 
-      def name_value
-        @name_value || StringUtils.handle_from_class_name(name)
-      end
+      @name         = name
+      @description  = description
+      @input_schema = input_schema
+      @annotations  = annotations
+      @block        = block
 
-      def description(value = NOT_SET)
-        if value == NOT_SET
-          @description_value
-        else
-          @description_value = value
-        end
-      end
+      @to_h = {
+        name:,
+        description:,
+        inputSchema: input_schema&.to_h,
+        annotations: annotations&.to_h,
+      }.compact.freeze
 
-      def input_schema(value = NOT_SET)
-        if value == NOT_SET
-          input_schema_value
-        elsif value.is_a?(Hash)
-          properties = value[:properties] || value["properties"] || {}
-          required = value[:required] || value["required"] || []
-          @input_schema_value = InputSchema.new(properties:, required:)
-        elsif value.is_a?(InputSchema)
-          @input_schema_value = value
-        end
-      end
+      freeze
+    end
 
-      def annotations(hash = NOT_SET)
-        if hash == NOT_SET
-          @annotations_value
-        else
-          @annotations_value = Annotations.new(**hash)
-        end
-      end
-
-      def define(name: nil, description: nil, input_schema: nil, annotations: nil, &block)
-        Class.new(self) do
-          tool_name name
-          description description
-          input_schema input_schema
-          self.annotations(annotations) if annotations
-          define_singleton_method(:call, &block) if block
-        end
-      end
+    def call(args, server_context:)
+      @block.call(args, server_context:)
     end
   end
 end
