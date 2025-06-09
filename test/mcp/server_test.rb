@@ -193,7 +193,7 @@ module MCP
       tool_args = { arg: "value" }
       tool_response = Tool::Response.new([{ result: "success" }])
 
-      @tool.expects(:call).with(arg: "value").returns(tool_response)
+      @tool.expects(:call).with(arg: "value", server_context: nil).returns(tool_response)
 
       request = {
         jsonrpc: "2.0",
@@ -242,7 +242,7 @@ module MCP
       tool_args = { arg: "value" }
       tool_response = Tool::Response.new([{ result: "success" }])
 
-      @tool.expects(:call).with(arg: "value").returns(tool_response)
+      @tool.expects(:call).with(arg: "value", server_context: nil).returns(tool_response)
 
       request = JSON.generate({
         jsonrpc: "2.0",
