@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module MCP
-  module Prompt
+  class Prompt
     class Message
       attr_reader :role, :content
 

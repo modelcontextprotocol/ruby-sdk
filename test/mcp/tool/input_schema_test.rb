@@ -3,11 +3,16 @@
 require "test_helper"
 
 module MCP
-  module Tool
+  class Tool
     class InputSchemaTest < ActiveSupport::TestCase
       test "required arguments are converted to symbols" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
         assert_equal [:message], input_schema.required
+      end
+
+      test "properties keys   are converted to symbols" do
+        input_schema = InputSchema.new(properties: { "message" => { type: "string" } }, required: [:message])
+        assert_equal({ message: { type: "string" } }, input_schema.properties)
       end
 
       test "to_h returns a hash representation of the input schema" do

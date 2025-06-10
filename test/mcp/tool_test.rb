@@ -21,7 +21,7 @@ module MCP
     end
 
     test "#to_h returns a hash with name, description, and inputSchema" do
-      tool = Tool.define(name: "mock_tool", description: "a mock tool for testing")
+      tool = Tool.define(name: "mock_tool", description: "a mock tool for testing") {}
       assert_equal tool.to_h, { name: "mock_tool", description: "a mock tool for testing" }
     end
 
