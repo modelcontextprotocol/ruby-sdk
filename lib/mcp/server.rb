@@ -87,11 +87,13 @@ module MCP
     end
 
     def define_tool(name: nil, description: nil, input_schema: nil, annotations: nil, &block)
+      @capabilities.support_tools
       tool = Tool.define(name:, description:, input_schema:, annotations:, &block)
       @tools[tool.name_value] = tool
     end
 
     def define_prompt(name: nil, description: nil, arguments: [], &block)
+      @capabilities.support_prompts
       prompt = Prompt.define(name:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
     end
@@ -102,6 +104,7 @@ module MCP
     end
 
     def resources_read_handler(&block)
+      @capabilities.support_resources
       @handlers[Methods::RESOURCES_READ] = block
     end
 
@@ -116,6 +119,7 @@ module MCP
     end
 
     def tools_call_handler(&block)
+      @capabilities.support_tools
       @handlers[Methods::TOOLS_CALL] = block
     end
 
@@ -125,6 +129,7 @@ module MCP
     end
 
     def prompts_get_handler(&block)
+      @capabilities.support_prompts
       @handlers[Methods::PROMPTS_GET] = block
     end
 
