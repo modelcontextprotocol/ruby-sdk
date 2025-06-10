@@ -4,3 +4,7 @@ inherit_gem:
 plugins:
   - rubocop-minitest
   - rubocop-rake
+
+Security/Eval:
+  Exclude:
+    - test/fixtures/files/code_snippet_wrappers/**/*.rb # We must often resort to eval to access local variable

@@ -12,13 +12,13 @@ gem 'mcp'
 
 And then execute:
 
-```bash
+```console
 $ bundle install
 ```
 
 Or install it yourself as:
 
-```bash
+```console
 $ gem install mcp
 ```
 
@@ -98,6 +98,7 @@ requests.
 
 You can use the `Server#handle_json` method to handle requests.
 
+<!-- SNIPPET ID: rails_controller -->
 ```ruby
 class ApplicationController < ActionController::Base
 
@@ -118,6 +119,7 @@ end
 
 If you want to build a local command-line application, you can use the stdio transport:
 
+<!-- SNIPPET ID: stdio_transport -->
 ```ruby
 #!/usr/bin/env ruby
 require "mcp"
@@ -156,7 +158,8 @@ transport.open
 
 You can run this script and then type in requests to the server at the command line.
 
-```bash
+<!-- SNIPPET ID: running_stdio_server -->
+```console
 $ ./examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"1","method":"ping"}
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
@@ -166,6 +169,7 @@ $ ./examples/stdio_server.rb
 
 The gem can be configured using the `MCP.configure` block:
 
+<!-- SNIPPET ID: configuration -->
 ```ruby
 MCP.configure do |config|
   config.exception_reporter = ->(exception, server_context) {
@@ -186,6 +190,7 @@ or by creating an explicit configuration and passing it into the server.
 This is useful for systems where an application hosts more than one MCP server but
 they might require different instrumentation callbacks.
 
+<!-- SNIPPET ID: per_server_configuration -->
 ```ruby
 configuration = MCP::Configuration.new
 configuration.exception_reporter = ->(exception, server_context) {
@@ -218,6 +223,8 @@ server_context: { [String, Symbol] => Any }
 ```
 
 **Example:**
+
+<!-- SNIPPET ID: server_context -->
 ```ruby
 server = MCP::Server.new(
   name: "my_server",
@@ -259,6 +266,7 @@ instrumentation_callback = ->(data) { ... }
 ```
 
 **Example:**
+<!-- SNIPPET ID: instrumentation_callback -->
 ```ruby
 config.instrumentation_callback = ->(data) {
   puts "Instrumentation: #{data.inspect}"
@@ -267,16 +275,22 @@ config.instrumentation_callback = ->(data) {
 
 ### Server Protocol Version
 
-The server's protocol version can be overridden using the `protocol_version` class method:
+The server's protocol version can be overridden via the `Configuration#protocol_version` method:
 
+<!-- SNIPPET ID: set_server_protocol_version -->
 ```ruby
-MCP::Server.protocol_version = "2024-11-05"
+MCP.configure do |config|
+  config.protocol_version = "2024-11-05"
+end
 ```
 
 This will make all new server instances use the specified protocol version instead of the default version. The protocol version can be reset to the default by setting it to `nil`:
 
+<!-- SNIPPET ID: unset_server_protocol_version -->
 ```ruby
-MCP::Server.protocol_version = nil
+MCP.configure do |config|
+  config.protocol_version = nil
+end
 ```
 
 Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification/2025-03-26) for the protocol version to understand the supported features for the version being set.
@@ -309,6 +323,7 @@ This gem provides a `MCP::Tool` class that can be used to create tools in two wa
 
 1. As a class definition:
 
+<!-- SNIPPET ID: tool_class_definition -->
 ```ruby
 class MyTool < MCP::Tool
   description "This tool performs specific functionality..."
@@ -336,6 +351,7 @@ tool = MyTool
 
 2. By using the `MCP::Tool.define` method with a block:
 
+<!-- SNIPPET ID: tool_definition_with_block -->
 ```ruby
 tool = MCP::Tool.define(
   name: "my_tool",
@@ -372,12 +388,13 @@ The `MCP::Prompt` class provides two ways to create prompts:
 
 1. As a class definition with metadata:
 
+<!-- SNIPPET ID: prompt_class_definition -->
 ```ruby
 class MyPrompt < MCP::Prompt
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
   description "This prompt performs specific functionality..."
   arguments [
-    Prompt::Argument.new(
+    MCP::Prompt::Argument.new(
       name: "message",
       description: "Input message",
       required: true
@@ -386,16 +403,16 @@ class MyPrompt < MCP::Prompt
 
   class << self
     def template(args, server_context:)
-      Prompt::Result.new(
+      MCP::Prompt::Result.new(
         description: "Response description",
         messages: [
-          Prompt::Message.new(
+          MCP::Prompt::Message.new(
             role: "user",
-            content: Content::Text.new("User message")
+            content: MCP::Content::Text.new("User message")
           ),
-          Prompt::Message.new(
+          MCP::Prompt::Message.new(
             role: "assistant",
-            content: Content::Text.new(args["message"])
+            content: MCP::Content::Text.new(args[:message])
           )
         ]
       )
@@ -408,28 +425,29 @@ prompt = MyPrompt
 
 2. Using the `MCP::Prompt.define` method:
 
+<!-- SNIPPET ID: prompt_definition_with_block -->
 ```ruby
 prompt = MCP::Prompt.define(
   name: "my_prompt",
   description: "This prompt performs specific functionality...",
   arguments: [
-    Prompt::Argument.new(
+    MCP::Prompt::Argument.new(
       name: "message",
       description: "Input message",
       required: true
     )
   ]
 ) do |args, server_context:|
-  Prompt::Result.new(
+  MCP::Prompt::Result.new(
     description: "Response description",
     messages: [
-      Prompt::Message.new(
+      MCP::Prompt::Message.new(
         role: "user",
-        content: Content::Text.new("User message")
+        content: MCP::Content::Text.new("User message")
       ),
-      Prompt::Message.new(
+      MCP::Prompt::Message.new(
         role: "assistant",
-        content: Content::Text.new(args["message"])
+        content: MCP::Content::Text.new(args[:message])
       )
     ]
   )
@@ -450,6 +468,7 @@ e.g. around authentication state or user preferences.
 
 Register prompts with the MCP server:
 
+<!-- SNIPPET ID: prompts_usage -->
 ```ruby
 server = MCP::Server.new(
   name: "my_server",
@@ -468,6 +487,7 @@ The server will handle prompt listing and execution through the MCP protocol met
 The server allows registering a callback to receive information about instrumentation.
 To register a handler pass a proc/lambda to as `instrumentation_callback` into the server constructor.
 
+<!-- SNIPPET ID: prompts_instrumentation_callback -->
 ```ruby
 MCP.configure do |config|
   config.instrumentation_callback = ->(data) {
@@ -493,6 +513,7 @@ MCP spec includes [Resources](https://modelcontextprotocol.io/docs/concepts/reso
 
 The `MCP::Resource` class provides a way to register resources with the server.
 
+<!-- SNIPPET ID: resources -->
 ```ruby
 resource = MCP::Resource.new(
   uri: "https://example.com/my_resource",
@@ -509,6 +530,7 @@ server = MCP::Server.new(
 
 The server must register a handler for the `resources/read` method to retrieve a resource dynamically.
 
+<!-- SNIPPET ID: resources_read_handler -->
 ```ruby
 server.resources_read_handler do |params|
   [{

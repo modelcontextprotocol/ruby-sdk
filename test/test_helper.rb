@@ -21,5 +21,6 @@ Minitest::Reporters.use!(Minitest::Reporters::ProgressReporter.new)
 
 module ActiveSupport
   class TestCase
+    self.file_fixture_path = File.join(__dir__, "fixtures/files")
   end
 end
