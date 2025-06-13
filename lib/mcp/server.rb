@@ -211,13 +211,7 @@ module MCP
       end
 
       begin
-        call_params = tool_call_parameters(tool)
-
-        if call_params.include?(:server_context)
-          tool.call(**arguments.transform_keys(&:to_sym), server_context:).to_h
-        else
-          tool.call(**arguments.transform_keys(&:to_sym)).to_h
-        end
+        call_tool_with_args(tool, arguments)
       rescue => e
         raise RequestHandlerError.new("Internal error calling tool #{tool_name}", request, original_error: e)
       end
@@ -242,7 +236,7 @@ module MCP
       prompt_args = request[:arguments]
       prompt.validate_arguments!(prompt_args)
 
-      prompt.template(prompt_args, server_context:).to_h
+      call_prompt_template_with_args(prompt, prompt_args)
     end
 
     def list_resources(request)
@@ -274,22 +268,29 @@ module MCP
       end
     end
 
-    def tool_call_parameters(tool)
-      method_def = tool_call_method_def(tool)
-      method_def.parameters.flatten
+    def accepts_server_context?(method_object)
+      parameters = method_object.parameters
+      accepts_server_context = parameters.any? { |_type, name| name == :server_context }
+      has_kwargs = parameters.any? { |type, _| type == :keyrest }
+
+      accepts_server_context || has_kwargs
     end
 
-    def tool_call_method_def(tool)
-      method = tool.method(:call)
+    def call_tool_with_args(tool, arguments)
+      args = arguments.transform_keys(&:to_sym)
 
-      if defined?(T::Utils) && T::Utils.respond_to?(:signature_for_method)
-        sorbet_typed_method_definition = T::Utils.signature_for_method(method)&.method
-
-        # Return the Sorbet typed method definition if it exists, otherwise fallback to original method
-        # definition if Sorbet is defined but not used by this tool.
-        sorbet_typed_method_definition || method
+      if accepts_server_context?(tool.method(:call))
+        tool.call(**args, server_context: server_context).to_h
       else
-        method
+        tool.call(**args).to_h
+      end
+    end
+
+    def call_prompt_template_with_args(prompt, args)
+      if accepts_server_context?(prompt.method(:template))
+        prompt.template(args, server_context: server_context).to_h
+      else
+        prompt.template(args).to_h
       end
     end
   end
