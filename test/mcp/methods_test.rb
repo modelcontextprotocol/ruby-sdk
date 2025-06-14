@@ -5,71 +5,52 @@ require "test_helper"
 
 module MCP
   class MethodsTest < ActiveSupport::TestCase
-    test "ensure_capability! for tools/list method raises an error if tools capability is not present" do
-      error = assert_raises(Methods::MissingRequiredCapabilityError) do
-        Methods.ensure_capability!(Methods::TOOLS_LIST, {})
-      end
-      assert_equal "Server does not support tools (required for tools/list)", error.message
-    end
-
-    test "ensure_capability! for sampling/createMessage raises an error if sampling capability is not present" do
-      error = assert_raises(Methods::MissingRequiredCapabilityError) do
-        Methods.ensure_capability!(Methods::SAMPLING_CREATE_MESSAGE, {})
-      end
-      assert_equal "Server does not support sampling (required for sampling/createMessage)", error.message
-    end
-
-    test "ensure_capability! for completion/complete raises an error if completions capability is not present" do
-      error = assert_raises(Methods::MissingRequiredCapabilityError) do
-        Methods.ensure_capability!(Methods::COMPLETION_COMPLETE, {})
-      end
-      assert_equal "Server does not support completions (required for completion/complete)", error.message
-    end
-
-    test "ensure_capability! for logging/setLevel raises an error if logging capability is not present" do
-      error = assert_raises(Methods::MissingRequiredCapabilityError) do
-        Methods.ensure_capability!(Methods::LOGGING_SET_LEVEL, {})
-      end
-      assert_equal "Server does not support logging (required for logging/setLevel)", error.message
-    end
-
-    test "ensure_capability! for prompts/get and prompts/list raise an error if prompts capability is not present" do
-      [Methods::PROMPTS_GET, Methods::PROMPTS_LIST].each do |method|
-        error = assert_raises(Methods::MissingRequiredCapabilityError) do
-          Methods.ensure_capability!(method, {})
+    class << self
+      def ensure_capability_raises_error_for(method, required_capability_name:, capabilities: {})
+        test("ensure_capability! for #{method} raises an error if #{required_capability_name} capability is not present") do
+          error = assert_raises(Methods::MissingRequiredCapabilityError) do
+            Methods.ensure_capability!(method, capabilities)
+          end
+          assert_equal("Server does not support #{required_capability_name} (required for #{method})", error.message)
         end
-        assert_equal "Server does not support prompts (required for #{method})", error.message
       end
-    end
 
-    test "ensure_capability! for resources/list, resources/templates/list, resources/read raise an error if resources capability is not present" do
-      [Methods::RESOURCES_LIST, Methods::RESOURCES_TEMPLATES_LIST, Methods::RESOURCES_READ].each do |method|
-        error = assert_raises(Methods::MissingRequiredCapabilityError) do
-          Methods.ensure_capability!(method, {})
+      def ensure_capability_does_not_raise_for(method, capabilities: {})
+        test("ensure_capability! does not raise for #{method}") do
+          assert_nothing_raised { Methods.ensure_capability!(method, capabilities) }
         end
-        assert_equal "Server does not support resources (required for #{method})", error.message
       end
     end
 
-    test "ensure_capability! for tools/call and tools/list raise an error if tools capability is not present" do
-      [Methods::TOOLS_CALL, Methods::TOOLS_LIST].each do |method|
-        error = assert_raises(Methods::MissingRequiredCapabilityError) do
-          Methods.ensure_capability!(method, {})
-        end
-        assert_equal "Server does not support tools (required for #{method})", error.message
-      end
-    end
+    # Tools capability tests
+    ensure_capability_raises_error_for Methods::TOOLS_LIST, required_capability_name: "tools"
+    ensure_capability_raises_error_for Methods::TOOLS_CALL, required_capability_name: "tools"
 
-    test "ensure_capability! for resources/subscribe raises an error if resources subscribe capability is not present" do
-      error = assert_raises(Methods::MissingRequiredCapabilityError) do
-        Methods.ensure_capability!(Methods::RESOURCES_SUBSCRIBE, { resources: {} })
-      end
-      assert_equal "Server does not support resources_subscribe (required for resources/subscribe)", error.message
-    end
+    # Sampling capability tests
+    ensure_capability_raises_error_for Methods::SAMPLING_CREATE_MESSAGE, required_capability_name: "sampling"
 
-    test "ensure_capability! does not raise for ping and initialize methods" do
-      assert_nothing_raised { Methods.ensure_capability!(Methods::PING, {}) }
-      assert_nothing_raised { Methods.ensure_capability!(Methods::INITIALIZE, {}) }
-    end
+    # Completions capability tests
+    ensure_capability_raises_error_for Methods::COMPLETION_COMPLETE, required_capability_name: "completions"
+
+    # Logging capability tests
+    ensure_capability_raises_error_for Methods::LOGGING_SET_LEVEL, required_capability_name: "logging"
+
+    # Prompts capability tests
+    ensure_capability_raises_error_for Methods::PROMPTS_GET, required_capability_name: "prompts"
+    ensure_capability_raises_error_for Methods::PROMPTS_LIST, required_capability_name: "prompts"
+
+    # Resources capability tests
+    ensure_capability_raises_error_for Methods::RESOURCES_LIST, required_capability_name: "resources"
+    ensure_capability_raises_error_for Methods::RESOURCES_TEMPLATES_LIST, required_capability_name: "resources"
+    ensure_capability_raises_error_for Methods::RESOURCES_READ, required_capability_name: "resources"
+
+    # Resources subscribe capability tests
+    ensure_capability_raises_error_for Methods::RESOURCES_SUBSCRIBE,
+      required_capability_name: "resources_subscribe",
+      capabilities: { resources: {} }
+
+    # Methods that don't require capabilities
+    ensure_capability_does_not_raise_for Methods::PING
+    ensure_capability_does_not_raise_for Methods::INITIALIZE
   end
 end
