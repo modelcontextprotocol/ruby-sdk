@@ -116,9 +116,9 @@ module MCP
         "result": {
           "protocolVersion": "2024-11-05",
           "capabilities": {
-            "prompts": {},
-            "resources": {},
-            "tools": {},
+            "prompts": { listChanged: true },
+            "resources": { listChanged: true },
+            "tools": { listChanged: true },
           },
           "serverInfo": {
             "name": @server_name,
@@ -776,68 +776,6 @@ module MCP
 
       response = server.handle(request)
       assert_equal custom_version, response[:result][:protocolVersion]
-    end
-
-    test "has tool capability only if tools or a tools_list_handler is defined" do
-      server_with_tools = Server.new(name: "test_server", tools: [@tool])
-
-      assert_includes server_with_tools.capabilities, :tools
-
-      server_with_handler = Server.new(name: "test_server")
-      server_with_handler.tools_list_handler do
-        [{ name: "test_tool", description: "Test tool" }]
-      end
-
-      assert_includes server_with_handler.capabilities, :tools
-
-      server_without_tools = Server.new(name: "test_server")
-
-      refute_includes server_without_tools.capabilities, :tools
-    end
-
-    test "has prompt capability only if prompts or a prompts_list_handler is defined" do
-      server_with_prompts = Server.new(name: "test_server", prompts: [@prompt])
-
-      assert_includes server_with_prompts.capabilities, :prompts
-
-      server_with_handler = Server.new(name: "test_server")
-      server_with_handler.prompts_list_handler do
-        [{ name: "test_prompt", description: "Test prompt" }]
-      end
-
-      assert_includes server_with_handler.capabilities, :prompts
-
-      server_without_prompts = Server.new(name: "test_server")
-
-      refute_includes server_without_prompts.capabilities, :prompts
-    end
-
-    test "has resources capability only if resources, template or custom handler is defined" do
-      server_with_resources = Server.new(name: "test_server", resources: [@resource])
-
-      assert_includes server_with_resources.capabilities, :resources
-
-      server_with_resource_template = Server.new(name: "test_server", resource_templates: [@resource_template])
-
-      assert_includes server_with_resource_template.capabilities, :resources
-
-      server_with_resources_list_handler = Server.new(name: "test_server")
-      server_with_resources_list_handler.resources_list_handler do
-        [{ uri: "test_resource", name: "Test resource", description: "Test resource" }]
-      end
-
-      assert_includes server_with_resources_list_handler.capabilities, :resources
-
-      server_with_resources_templates_list_handler = Server.new(name: "test_server")
-      server_with_resources_templates_list_handler.resources_templates_list_handler do
-        [{ uri_template: "test_resource/{id}", name: "Test resource", description: "Test resource" }]
-      end
-
-      assert_includes server_with_resources_templates_list_handler.capabilities, :resources
-
-      server_without_resources = Server.new(name: "test_server")
-
-      refute_includes server_without_resources.capabilities, :resources
     end
 
     test "tools/call validates arguments against input schema when validate_tool_call_arguments is true" do
