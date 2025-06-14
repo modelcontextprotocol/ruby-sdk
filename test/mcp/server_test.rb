@@ -72,9 +72,9 @@ module MCP
       response = @server.handle(request)
       assert_equal(
         {
-          "jsonrpc": "2.0",
-          "id": "123",
-          "result": {},
+          jsonrpc: "2.0",
+          id: "123",
+          result: {},
         },
         response,
       )
@@ -91,9 +91,9 @@ module MCP
       response = JSON.parse(@server.handle_json(request), symbolize_names: true)
       assert_equal(
         {
-          "jsonrpc": "2.0",
-          "id": "123",
-          "result": {},
+          jsonrpc: "2.0",
+          id: "123",
+          result: {},
         },
         response,
       )
@@ -111,18 +111,18 @@ module MCP
       refute_nil response
 
       expected_result = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-          "protocolVersion": "2024-11-05",
-          "capabilities": {
-            "prompts": { listChanged: true },
-            "resources": { listChanged: true },
-            "tools": { listChanged: true },
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: {
+            prompts: { listChanged: true },
+            resources: { listChanged: true },
+            tools: { listChanged: true },
           },
-          "serverInfo": {
-            "name": @server_name,
-            "version": "1.2.3",
+          serverInfo: {
+            name: @server_name,
+            version: "1.2.3",
           },
         },
       }
