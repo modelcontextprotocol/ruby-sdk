@@ -20,12 +20,12 @@ module MCP
       attr_reader :text
 
       def initialize(text:, uri:, mime_type:)
-        super(uri: uri, mime_type: mime_type)
+        super(uri:, mime_type:)
         @text = text
       end
 
       def to_h
-        super.merge(text: text)
+        super.merge(text:)
       end
     end
 
@@ -33,12 +33,12 @@ module MCP
       attr_reader :data
 
       def initialize(data:, uri:, mime_type:)
-        super(uri: uri, mime_type: mime_type)
+        super(uri:, mime_type:)
         @data = data
       end
 
       def to_h
-        super.merge(data: data)
+        super.merge(data:)
       end
     end
   end

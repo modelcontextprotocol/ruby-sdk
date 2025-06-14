@@ -10,11 +10,10 @@ module MCP
         STATUS_INTERRUPTED = Signal.list["INT"] + 128
 
         def initialize(server)
-          @server = server
+          super
           @open = false
           $stdin.set_encoding("UTF-8")
           $stdout.set_encoding("UTF-8")
-          super
         end
 
         def open
