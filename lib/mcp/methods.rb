@@ -23,6 +23,7 @@ module MCP
     SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
 
     # Notification methods
+    NOTIFICATIONS_INITIALIZED = "notifications/initialized"
     NOTIFICATIONS_TOOLS_LIST_CHANGED = "notifications/tools/list_changed"
     NOTIFICATIONS_PROMPTS_LIST_CHANGED = "notifications/prompts/list_changed"
     NOTIFICATIONS_RESOURCES_LIST_CHANGED = "notifications/resources/list_changed"
@@ -48,21 +49,35 @@ module MCP
         case method
         when PROMPTS_GET, PROMPTS_LIST
           require_capability!(method, capabilities, :prompts)
-        when RESOURCES_LIST, RESOURCES_TEMPLATES_LIST, RESOURCES_READ, RESOURCES_SUBSCRIBE, RESOURCES_UNSUBSCRIBE
+        when NOTIFICATIONS_PROMPTS_LIST_CHANGED
+          require_capability!(method, capabilities, :prompts)
+          require_capability!(method, capabilities, :prompts, :listChanged)
+        when RESOURCES_LIST, RESOURCES_TEMPLATES_LIST, RESOURCES_READ
           require_capability!(method, capabilities, :resources)
-          if method == RESOURCES_SUBSCRIBE && !capabilities[:resources][:subscribe]
-            raise MissingRequiredCapabilityError.new(method, :resources_subscribe)
-          end
+        when NOTIFICATIONS_RESOURCES_LIST_CHANGED
+          require_capability!(method, capabilities, :resources)
+          require_capability!(method, capabilities, :resources, :listChanged)
+        when RESOURCES_SUBSCRIBE, RESOURCES_UNSUBSCRIBE, NOTIFICATIONS_RESOURCES_UPDATED
+          require_capability!(method, capabilities, :resources)
+          require_capability!(method, capabilities, :resources, :subscribe)
         when TOOLS_CALL, TOOLS_LIST
           require_capability!(method, capabilities, :tools)
-        when SAMPLING_CREATE_MESSAGE
-          require_capability!(method, capabilities, :sampling)
+        when NOTIFICATIONS_TOOLS_LIST_CHANGED
+          require_capability!(method, capabilities, :tools)
+          require_capability!(method, capabilities, :tools, :listChanged)
+        when LOGGING_SET_LEVEL, NOTIFICATIONS_MESSAGE
+          require_capability!(method, capabilities, :logging)
         when COMPLETION_COMPLETE
           require_capability!(method, capabilities, :completions)
-        when LOGGING_SET_LEVEL
-          require_capability!(method, capabilities, :logging)
-        when INITIALIZE, PING
-          # No specific capability required for initialize or ping
+        when ROOTS_LIST
+          require_capability!(method, capabilities, :roots)
+        when NOTIFICATIONS_ROOTS_LIST_CHANGED
+          require_capability!(method, capabilities, :roots)
+          require_capability!(method, capabilities, :roots, :listChanged)
+        when SAMPLING_CREATE_MESSAGE
+          require_capability!(method, capabilities, :sampling)
+        when INITIALIZE, PING, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_PROGRESS, NOTIFICATIONS_CANCELLED
+          # No specific capability required for initialize, ping, progress or cancelled
         end
       end
 
