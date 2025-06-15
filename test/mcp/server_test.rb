@@ -9,12 +9,14 @@ module MCP
   class ServerTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
     setup do
-      @tool = Tool.define(name: "test_tool", description: "Test tool")
+      @tool = Tool.define(name: "test_tool", description: "Test tool") do
+        Tool::Response.new("success")
+      end
 
       @tool_that_raises = Tool.define(
         name: "tool_that_raises",
         description: "Tool that raises",
-        input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+        input_schema: { properties: { message: { type: "string" } }, required: ["message"] },
       ) { raise StandardError, "Tool error" }
 
       @prompt = Prompt.define(
@@ -23,7 +25,7 @@ module MCP
         arguments: [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
         ],
-      ) do |_|
+      ) do
         Prompt::Result.new(
           description: "Hello, world!",
           messages: [
@@ -153,7 +155,7 @@ module MCP
       assert_kind_of Array, result[:tools]
       assert_equal "test_tool", result[:tools][0][:name]
       assert_equal "Test tool", result[:tools][0][:description]
-      assert_empty(result[:tools][0][:inputSchema])
+      assert_nil result[:tools][0][:inputSchema]
       assert_instrumentation_data({ method: "tools/list" })
     end
 
@@ -190,23 +192,19 @@ module MCP
 
     test "#handle tools/call executes tool and returns result" do
       tool_name = "test_tool"
-      tool_args = { arg: "value" }
-      tool_response = Tool::Response.new([{ result: "success" }])
-
-      @tool.expects(:call).with(arg: "value").returns(tool_response)
 
       request = {
         jsonrpc: "2.0",
         method: "tools/call",
         params: {
           name: tool_name,
-          arguments: tool_args,
+          arguments: {},
         },
         id: 1,
       }
 
       response = @server.handle(request)
-      assert_equal tool_response.to_h, response[:result]
+      assert_equal({ content: "success", isError: false }, response[:result])
       assert_instrumentation_data({ method: "tools/call", tool_name: })
     end
 
@@ -239,59 +237,18 @@ module MCP
 
     test "#handle_json tools/call executes tool and returns result" do
       tool_name = "test_tool"
-      tool_args = { arg: "value" }
-      tool_response = Tool::Response.new([{ result: "success" }])
-
-      @tool.expects(:call).with(arg: "value").returns(tool_response)
 
       request = JSON.generate({
         jsonrpc: "2.0",
         method: "tools/call",
-        params: { name: tool_name, arguments: tool_args },
+        params: { name: tool_name, arguments: {} },
         id: 1,
       })
 
       raw_response = @server.handle_json(request)
       response = JSON.parse(raw_response, symbolize_names: true) if raw_response
-      assert_equal tool_response.to_h, response[:result] if response
+      assert_equal({ content: "success", isError: false }, response[:result])
       assert_instrumentation_data({ method: "tools/call", tool_name: })
-    end
-
-    test "#handle_json tools/call executes tool and returns result, when the tool is typed with Sorbet" do
-      class TypedTestTool < Tool
-        tool_name "test_tool"
-        description "a test tool for testing"
-        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
-
-        class << self
-          extend T::Sig
-
-          sig { params(message: String, server_context: T.nilable(T.untyped)).returns(Tool::Response) }
-          def call(message:, server_context: nil)
-            Tool::Response.new([{ type: "text", content: "OK" }])
-          end
-        end
-      end
-
-      request = JSON.generate({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: "test_tool", arguments: { message: "Hello, world!" } },
-        id: 1,
-      })
-
-      server = Server.new(
-        name: @server_name,
-        tools: [TypedTestTool],
-        prompts: [@prompt],
-        resources: [@resource],
-        resource_templates: [@resource_template],
-      )
-
-      raw_response = server.handle_json(request)
-      response = JSON.parse(raw_response, symbolize_names: true) if raw_response
-
-      assert_equal({ content: [{ type: "text", content: "OK" }], isError: false }, response[:result])
     end
 
     test "#handle tools/call returns internal error and reports exception if the tool raises an error" do
@@ -703,9 +660,9 @@ module MCP
       @server.define_tool(
         name: "defined_tool",
         description: "Defined tool",
-        input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
-      ) do |message:|
-        Tool::Response.new(message)
+        input_schema: { properties: { message: { type: "string" } }, required: ["message"] },
+      ) do |args|
+        Tool::Response.new(args[:message])
       end
 
       response = @server.handle({
@@ -724,9 +681,9 @@ module MCP
       @server.define_tool(
         name: "defined_tool",
         description: "Defined tool",
-        input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
-      ) do |message:, server_context:|
-        Tool::Response.new("success #{message} #{server_context[:user_id]}")
+        input_schema: { properties: { message: { type: "string" } }, required: ["message"] },
+      ) do |args, server_context:|
+        Tool::Response.new("success #{args[:message]} #{server_context[:user_id]}")
       end
 
       response = @server.handle({
