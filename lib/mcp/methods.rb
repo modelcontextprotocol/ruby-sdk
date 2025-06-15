@@ -19,12 +19,18 @@ module MCP
     TOOLS_CALL = "tools/call"
     TOOLS_LIST = "tools/list"
 
+    ROOTS_LIST = "roots/list"
     SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
 
     # Notification methods
     NOTIFICATIONS_TOOLS_LIST_CHANGED = "notifications/tools/list_changed"
     NOTIFICATIONS_PROMPTS_LIST_CHANGED = "notifications/prompts/list_changed"
     NOTIFICATIONS_RESOURCES_LIST_CHANGED = "notifications/resources/list_changed"
+    NOTIFICATIONS_RESOURCES_UPDATED = "notifications/resources/updated"
+    NOTIFICATIONS_ROOTS_LIST_CHANGED = "notifications/roots/list_changed"
+    NOTIFICATIONS_MESSAGE = "notifications/message"
+    NOTIFICATIONS_PROGRESS = "notifications/progress"
+    NOTIFICATIONS_CANCELLED = "notifications/cancelled"
 
     class MissingRequiredCapabilityError < StandardError
       attr_reader :method
