@@ -3,7 +3,6 @@
 require "json_rpc_handler"
 require_relative "instrumentation"
 require_relative "methods"
-require_relative "server/capabilities"
 
 module MCP
   class Server
@@ -23,8 +22,7 @@ module MCP
 
     include Instrumentation
 
-    attr_writer :capabilities
-    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :transport
+    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
       name: "model_context_protocol",
@@ -47,10 +45,7 @@ module MCP
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
       @configuration = MCP.configuration.merge(configuration)
-      @capabilities = Capabilities.new(capabilities)
-      @capabilities.support_tools if tools.any?
-      @capabilities.support_prompts if prompts.any?
-      @capabilities.support_resources if resources.any? || resource_templates.any?
+      @capabilities = capabilities || default_capabilities
 
       @handlers = {
         Methods::RESOURCES_LIST => method(:list_resources),
@@ -70,10 +65,6 @@ module MCP
         Methods::LOGGING_SET_LEVEL => ->(_) {},
       }
       @transport = transport
-    end
-
-    def capabilities
-      @capabilities.to_h
     end
 
     def handle(request)
@@ -123,7 +114,6 @@ module MCP
     end
 
     def resources_list_handler(&block)
-      @capabilities.support_resources
       @handlers[Methods::RESOURCES_LIST] = block
     end
 
@@ -132,12 +122,10 @@ module MCP
     end
 
     def resources_templates_list_handler(&block)
-      @capabilities.support_resources
       @handlers[Methods::RESOURCES_TEMPLATES_LIST] = block
     end
 
     def tools_list_handler(&block)
-      @capabilities.support_tools
       @handlers[Methods::TOOLS_LIST] = block
     end
 
@@ -146,7 +134,6 @@ module MCP
     end
 
     def prompts_list_handler(&block)
-      @capabilities.support_prompts
       @handlers[Methods::PROMPTS_LIST] = block
     end
 
@@ -191,6 +178,14 @@ module MCP
           add_instrumentation_data(error: :internal_error)
           raise RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
         end
+      }
+    end
+
+    def default_capabilities
+      {
+        tools: { listChanged: true },
+        prompts: { listChanged: true },
+        resources: { listChanged: true },
       }
     end
 
