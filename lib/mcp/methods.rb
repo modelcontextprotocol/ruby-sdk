@@ -47,37 +47,33 @@ module MCP
       def ensure_capability!(method, capabilities)
         case method
         when PROMPTS_GET, PROMPTS_LIST
-          unless capabilities[:prompts]
-            raise MissingRequiredCapabilityError.new(method, :prompts)
-          end
+          require_capability!(method, capabilities, :prompts)
         when RESOURCES_LIST, RESOURCES_TEMPLATES_LIST, RESOURCES_READ, RESOURCES_SUBSCRIBE, RESOURCES_UNSUBSCRIBE
-          unless capabilities[:resources]
-            raise MissingRequiredCapabilityError.new(method, :resources)
-          end
-
+          require_capability!(method, capabilities, :resources)
           if method == RESOURCES_SUBSCRIBE && !capabilities[:resources][:subscribe]
             raise MissingRequiredCapabilityError.new(method, :resources_subscribe)
           end
         when TOOLS_CALL, TOOLS_LIST
-          unless capabilities[:tools]
-            raise MissingRequiredCapabilityError.new(method, :tools)
-          end
+          require_capability!(method, capabilities, :tools)
         when SAMPLING_CREATE_MESSAGE
-          unless capabilities[:sampling]
-            raise MissingRequiredCapabilityError.new(method, :sampling)
-          end
+          require_capability!(method, capabilities, :sampling)
         when COMPLETION_COMPLETE
-          unless capabilities[:completions]
-            raise MissingRequiredCapabilityError.new(method, :completions)
-          end
+          require_capability!(method, capabilities, :completions)
         when LOGGING_SET_LEVEL
-          # Logging is unsupported by the Server
-          unless capabilities[:logging]
-            raise MissingRequiredCapabilityError.new(method, :logging)
-          end
+          require_capability!(method, capabilities, :logging)
         when INITIALIZE, PING
           # No specific capability required for initialize or ping
         end
+      end
+
+      private
+
+      def require_capability!(method, capabilities, *keys)
+        name = keys.join(".") # :resources, :subscribe -> "resources.subscribe"
+        has_capability = capabilities.dig(*keys)
+        return if has_capability
+
+        raise MissingRequiredCapabilityError.new(method, name)
       end
     end
   end
