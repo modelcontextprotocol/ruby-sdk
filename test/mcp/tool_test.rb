@@ -82,6 +82,23 @@ module MCP
       assert_equal expected, tool.input_schema.to_h
     end
 
+    test "raises detailed error message for invalid schema" do
+      error = assert_raises(ArgumentError) do
+        Class.new(MCP::Tool) do
+          input_schema(
+            properties: {
+              count: { type: "integer", minimum: "not a number" },
+            },
+            required: [:count],
+          )
+        end
+      end
+
+      assert_includes error.message, "Invalid JSON Schema"
+      assert_includes error.message, "#/properties/count/minimum"
+      assert_includes error.message, "string did not match the following type: number"
+    end
+
     test ".define allows definition of simple tools with a block" do
       tool = Tool.define(name: "mock_tool", description: "a mock tool for testing") do |_|
         Tool::Response.new([{ type: "text", content: "OK" }])
@@ -225,6 +242,24 @@ module MCP
       response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
       assert_equal response.is_error, false
+    end
+
+    test "input_schema rejects any $ref in schema" do
+      schema_with_ref = {
+        properties: {
+          foo: { "$ref" => "#/definitions/bar" },
+        },
+        required: ["foo"],
+        definitions: {
+          bar: { type: "string" },
+        },
+      }
+      error = assert_raises(ArgumentError) do
+        Class.new(MCP::Tool) do
+          input_schema schema_with_ref
+        end
+      end
+      assert_match(/Invalid JSON Schema/, error.message)
     end
   end
 end
