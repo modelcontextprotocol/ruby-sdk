@@ -5,7 +5,7 @@ module MCP
     class Response
       attr_reader :content, :is_error
 
-      def initialize(content, is_error = false)
+      def initialize(content, is_error: false)
         @content = content
         @is_error = is_error
       end

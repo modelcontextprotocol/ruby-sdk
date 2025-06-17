@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "mcp/annotations"
 require_relative "mcp/configuration"
 require_relative "mcp/content"
 require_relative "mcp/instrumentation"
@@ -15,7 +16,6 @@ require_relative "mcp/resource_template"
 require_relative "mcp/server"
 require_relative "mcp/server/transports/streamable_http_transport"
 require_relative "mcp/server/transports/stdio_transport"
-require_relative "mcp/string_utils"
 require_relative "mcp/tool"
 require_relative "mcp/tool/input_schema"
 require_relative "mcp/tool/response"
@@ -31,15 +31,6 @@ module MCP
 
     def configuration
       @configuration ||= Configuration.new
-    end
-  end
-
-  class Annotations
-    attr_reader :audience, :priority
-
-    def initialize(audience: nil, priority: nil)
-      @audience = audience
-      @priority = priority
     end
   end
 end

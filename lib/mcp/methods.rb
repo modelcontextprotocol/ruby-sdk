@@ -37,41 +37,41 @@ module MCP
       end
     end
 
-    extend self
+    class << self
+      def ensure_capability!(method, capabilities)
+        case method
+        when PROMPTS_GET, PROMPTS_LIST
+          unless capabilities[:prompts]
+            raise MissingRequiredCapabilityError.new(method, :prompts)
+          end
+        when RESOURCES_LIST, RESOURCES_TEMPLATES_LIST, RESOURCES_READ, RESOURCES_SUBSCRIBE, RESOURCES_UNSUBSCRIBE
+          unless capabilities[:resources]
+            raise MissingRequiredCapabilityError.new(method, :resources)
+          end
 
-    def ensure_capability!(method, capabilities)
-      case method
-      when PROMPTS_GET, PROMPTS_LIST
-        unless capabilities[:prompts]
-          raise MissingRequiredCapabilityError.new(method, :prompts)
+          if method == RESOURCES_SUBSCRIBE && !capabilities[:resources][:subscribe]
+            raise MissingRequiredCapabilityError.new(method, :resources_subscribe)
+          end
+        when TOOLS_CALL, TOOLS_LIST
+          unless capabilities[:tools]
+            raise MissingRequiredCapabilityError.new(method, :tools)
+          end
+        when SAMPLING_CREATE_MESSAGE
+          unless capabilities[:sampling]
+            raise MissingRequiredCapabilityError.new(method, :sampling)
+          end
+        when COMPLETION_COMPLETE
+          unless capabilities[:completions]
+            raise MissingRequiredCapabilityError.new(method, :completions)
+          end
+        when LOGGING_SET_LEVEL
+          # Logging is unsupported by the Server
+          unless capabilities[:logging]
+            raise MissingRequiredCapabilityError.new(method, :logging)
+          end
+        when INITIALIZE, PING
+          # No specific capability required for initialize or ping
         end
-      when RESOURCES_LIST, RESOURCES_TEMPLATES_LIST, RESOURCES_READ, RESOURCES_SUBSCRIBE, RESOURCES_UNSUBSCRIBE
-        unless capabilities[:resources]
-          raise MissingRequiredCapabilityError.new(method, :resources)
-        end
-
-        if method == RESOURCES_SUBSCRIBE && !capabilities[:resources][:subscribe]
-          raise MissingRequiredCapabilityError.new(method, :resources_subscribe)
-        end
-      when TOOLS_CALL, TOOLS_LIST
-        unless capabilities[:tools]
-          raise MissingRequiredCapabilityError.new(method, :tools)
-        end
-      when SAMPLING_CREATE_MESSAGE
-        unless capabilities[:sampling]
-          raise MissingRequiredCapabilityError.new(method, :sampling)
-        end
-      when COMPLETION_COMPLETE
-        unless capabilities[:completions]
-          raise MissingRequiredCapabilityError.new(method, :completions)
-        end
-      when LOGGING_SET_LEVEL
-        # Logging is unsupported by the Server
-        unless capabilities[:logging]
-          raise MissingRequiredCapabilityError.new(method, :logging)
-        end
-      when INITIALIZE, PING
-        # No specific capability required for initialize or ping
       end
     end
   end

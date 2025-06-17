@@ -3,23 +3,19 @@
 module MCP
   class Tool
     class InputSchema
-      attr_reader :properties, :required
+      attr_reader :properties, :required, :to_h
 
       def initialize(properties: {}, required: [])
-        @properties = properties
+        @properties = properties.transform_keys(&:to_sym)
         @required = required.map(&:to_sym)
-      end
 
-      def to_h
-        { type: "object", properties:, required: }
-      end
+        @to_h = {
+          type: "object",
+          properties:,
+          required:,
+        }.compact.freeze
 
-      def missing_required_arguments?(arguments)
-        missing_required_arguments(arguments).any?
-      end
-
-      def missing_required_arguments(arguments)
-        (required - arguments.keys.map(&:to_sym))
+        freeze
       end
     end
   end

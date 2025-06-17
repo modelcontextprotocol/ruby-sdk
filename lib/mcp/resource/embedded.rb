@@ -7,6 +7,7 @@ module MCP
       attr_reader :resource, :annotations
 
       def initialize(resource:, annotations: nil)
+        @resource = resource
         @annotations = annotations
       end
 
