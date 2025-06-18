@@ -55,7 +55,7 @@ The server supports sending notifications to clients when lists of tools, prompt
 
 The server provides three notification methods:
 - `notify_tools_list_changed()` - Send a notification when the tools list changes
-- `notify_prompts_list_changed()` - Send a notification when the prompts list changes  
+- `notify_prompts_list_changed()` - Send a notification when the prompts list changes
 - `notify_resources_list_changed()` - Send a notification when the resources list changes
 
 #### Notification Format
@@ -119,7 +119,6 @@ end
 If you want to build a local command-line application, you can use the stdio transport:
 
 ```ruby
-#!/usr/bin/env ruby
 require "mcp"
 require "mcp/server/transports/stdio_transport"
 
@@ -157,7 +156,7 @@ transport.open
 You can run this script and then type in requests to the server at the command line.
 
 ```bash
-$ ./examples/stdio_server.rb
+$ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"1","method":"ping"}
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 ```
