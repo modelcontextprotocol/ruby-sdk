@@ -37,6 +37,20 @@ module MCP
           $stdout.puts(json_message)
           $stdout.flush
         end
+
+        def send_notification(method, params = nil)
+          notification = {
+            jsonrpc: "2.0",
+            method: method,
+          }
+          notification[:params] = params if params
+
+          send_response(notification)
+          true
+        rescue => e
+          MCP.configuration.exception_reporter.call(e, { error: "Failed to send notification" })
+          false
+        end
       end
     end
   end

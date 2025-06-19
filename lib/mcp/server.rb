@@ -24,7 +24,7 @@ module MCP
     include Instrumentation
 
     attr_writer :capabilities
-    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration
+    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :transport
 
     def initialize(
       name: "model_context_protocol",
@@ -35,7 +35,8 @@ module MCP
       resource_templates: [],
       server_context: nil,
       configuration: nil,
-      capabilities: nil
+      capabilities: nil,
+      transport: nil
     )
       @name = name
       @version = version
@@ -68,6 +69,7 @@ module MCP
         Methods::COMPLETION_COMPLETE => ->(_) {},
         Methods::LOGGING_SET_LEVEL => ->(_) {},
       }
+      @transport = transport
     end
 
     def capabilities
@@ -94,6 +96,30 @@ module MCP
     def define_prompt(name: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
+    end
+
+    def notify_tools_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "tools_list_changed" })
+    end
+
+    def notify_prompts_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "prompts_list_changed" })
+    end
+
+    def notify_resources_list_changed
+      return unless @transport
+
+      @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
+    rescue => e
+      report_exception(e, { notification: "resources_list_changed" })
     end
 
     def resources_list_handler(&block)
@@ -176,7 +202,6 @@ module MCP
     end
 
     def init(request)
-      add_instrumentation_data(method: Methods::INITIALIZE)
       {
         protocolVersion: configuration.protocol_version,
         capabilities: capabilities,
@@ -185,12 +210,10 @@ module MCP
     end
 
     def list_tools(request)
-      add_instrumentation_data(method: Methods::TOOLS_LIST)
       @tools.map { |_, tool| tool.to_h }
     end
 
     def call_tool(request)
-      add_instrumentation_data(method: Methods::TOOLS_CALL)
       tool_name = request[:name]
       tool = tools[tool_name]
       unless tool
@@ -210,6 +233,15 @@ module MCP
         )
       end
 
+      if configuration.validate_tool_call_arguments && tool.input_schema
+        begin
+          tool.input_schema.validate_arguments(arguments)
+        rescue Tool::InputSchema::ValidationError => e
+          add_instrumentation_data(error: :invalid_schema)
+          raise RequestHandlerError.new(e.message, request, error_type: :invalid_schema)
+        end
+      end
+
       begin
         call_tool_with_args(tool, arguments)
       rescue => e
@@ -218,12 +250,10 @@ module MCP
     end
 
     def list_prompts(request)
-      add_instrumentation_data(method: Methods::PROMPTS_LIST)
       @prompts.map { |_, prompt| prompt.to_h }
     end
 
     def get_prompt(request)
-      add_instrumentation_data(method: Methods::PROMPTS_GET)
       prompt_name = request[:name]
       prompt = @prompts[prompt_name]
       unless prompt
@@ -240,21 +270,16 @@ module MCP
     end
 
     def list_resources(request)
-      add_instrumentation_data(method: Methods::RESOURCES_LIST)
-
       @resources.map(&:to_h)
     end
 
     # Server implementation should set `resources_read_handler` to override no-op default
     def read_resource_no_content(request)
-      add_instrumentation_data(method: Methods::RESOURCES_READ)
       add_instrumentation_data(resource_uri: request[:uri])
       []
     end
 
     def list_resource_templates(request)
-      add_instrumentation_data(method: Methods::RESOURCES_TEMPLATES_LIST)
-
       @resource_templates.map(&:to_h)
     end
 

@@ -21,6 +21,11 @@ module MCP
 
     SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
 
+    # Notification methods
+    NOTIFICATIONS_TOOLS_LIST_CHANGED = "notifications/tools/list_changed"
+    NOTIFICATIONS_PROMPTS_LIST_CHANGED = "notifications/prompts/list_changed"
+    NOTIFICATIONS_RESOURCES_LIST_CHANGED = "notifications/resources/list_changed"
+
     class MissingRequiredCapabilityError < StandardError
       attr_reader :method
       attr_reader :capability
