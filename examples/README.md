@@ -9,7 +9,7 @@ A simple server that communicates over standard input/output. This is useful for
 
 **Usage:**
 ```bash
-ruby examples/stdio_server.rb
+$ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":0,"method":"tools/list"}
 ```
 
@@ -25,11 +25,11 @@ A standalone HTTP server built with Rack that implements the MCP Streamable HTTP
 
 **Usage:**
 ```bash
-ruby examples/http_server.rb
+$ ruby examples/http_server.rb
 ```
 
 The server will start on `http://localhost:9292` and provide:
-- **Tools**: 
+- **Tools**:
   - `ExampleTool` - adds two numbers
   - `echo` - echoes back messages
 - **Prompts**: `ExamplePrompt` - echoes back arguments as a prompt
@@ -41,12 +41,12 @@ A client that demonstrates how to interact with the HTTP server using all MCP pr
 **Usage:**
 1. Start the HTTP server in one terminal:
    ```bash
-   ruby examples/http_server.rb
+   $ ruby examples/http_server.rb
    ```
 
 2. Run the client example in another terminal:
    ```bash
-   ruby examples/http_client.rb
+   $ ruby examples/http_client.rb
    ```
 
 The client will demonstrate:
@@ -71,7 +71,7 @@ A specialized HTTP server designed to test and demonstrate Server-Sent Events (S
 
 **Usage:**
 ```bash
-ruby examples/streamable_http_server.rb
+$ ruby examples/streamable_http_server.rb
 ```
 
 The server will start on `http://localhost:9393` and provide detailed instructions for testing SSE functionality.
@@ -88,12 +88,12 @@ An interactive client that connects to the SSE stream and provides a menu-driven
 **Usage:**
 1. Start the SSE test server in one terminal:
    ```bash
-   ruby examples/streamable_http_server.rb
+   $ ruby examples/streamable_http_server.rb
    ```
 
 2. Run the SSE test client in another terminal:
    ```bash
-   ruby examples/streamable_http_client.rb
+   $ ruby examples/streamable_http_client.rb
    ```
 
 The client will:
@@ -133,7 +133,7 @@ curl -X POST http://localhost:9393 \
 
 The HTTP server implements the MCP Streamable HTTP transport protocol:
 
-1. **Initialize Session**: 
+1. **Initialize Session**:
    - Client sends POST request with `initialize` method
    - Server responds with session ID in `Mcp-Session-Id` header
 
