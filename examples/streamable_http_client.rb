@@ -163,9 +163,8 @@ def main
           },
         },
       )
-
-      if response[:body]["result"]
-        logger.info("Notification tool response: #{response[:body]["result"]["content"]}")
+      if response[:body]["accepted"]
+        logger.info("Notification sent successfully")
       else
         logger.error("Error: #{response[:body]["error"]}")
       end
