@@ -9,7 +9,7 @@ module MCP
       attr_reader :input_schema_value
       attr_reader :annotations_value
 
-      def call(*args, server_context:)
+      def call(*args, server_context: nil)
         raise NotImplementedError, "Subclasses must implement call"
       end
 
