@@ -151,16 +151,16 @@ puts '   curl -i -X POST http://localhost:9393 -H "Content-Type: application/jso
 puts '     -d \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}\''
 puts ""
 puts "2. Connect SSE stream (use the session ID from step 1):"
-puts '   curl -N -H "Mcp-Session-Id: YOUR_SESSION_ID" http://localhost:9393'
+puts '   curl -i -N -H "Mcp-Session-Id: YOUR_SESSION_ID" http://localhost:9393'
 puts ""
 puts "3. In another terminal, test tools (responses will be sent via SSE if stream is active):"
 puts ""
 puts "   Echo tool:"
-puts '   curl -X POST http://localhost:9393 -H "Content-Type: application/json" -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
+puts '   curl -i -X POST http://localhost:9393 -H "Content-Type: application/json" -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
 puts '     -d \'{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"echo","arguments":{"message":"Hello SSE!"}}}\''
 puts ""
 puts "   Notification tool (with 2 second delay):"
-puts '   curl -X POST http://localhost:9393 -H "Content-Type: application/json" -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
+puts '   curl -i -X POST http://localhost:9393 -H "Content-Type: application/json" -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
 puts '     -d \'{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!", "delay": 2}}}\''
 puts ""
 puts "Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return {\"accepted\": true}"
