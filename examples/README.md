@@ -110,18 +110,18 @@ You can also test SSE functionality manually using cURL:
 ```bash
 SESSION_ID=$(curl -D - -s -o /dev/null -X POST http://localhost:9393 \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0"}}}' |grep -i "Mcp-Session-Id:" | cut -d' ' -f2- | tr -d '\r')
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0"}}}' | grep -i "Mcp-Session-Id:" | cut -d' ' -f2- | tr -d '\r')
 ```
 
 2. Connect to SSE stream (in one terminal):
 ```bash
-curl -N -H "Mcp-Session-Id: $SESSION_ID" http://localhost:9393
+curl -i -N -H "Mcp-Session-Id: $SESSION_ID" http://localhost:9393
 ```
 
 3. Trigger notifications (in another terminal):
 ```bash
 # Send immediate notification
-curl -X POST http://localhost:9393 \
+curl -i -X POST http://localhost:9393 \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"notification_tool","arguments":{"message":"Hello from cURL!"}}}'
@@ -152,14 +152,14 @@ The HTTP server implements the MCP Streamable HTTP transport protocol:
 
 Initialize a session:
 ```bash
-curl -X POST http://localhost:9292 \
+curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
 List tools (using the session ID from initialization):
 ```bash
-curl -X POST http://localhost:9292 \
+curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: YOUR_SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":2}'
@@ -167,7 +167,7 @@ curl -X POST http://localhost:9292 \
 
 Call a tool:
 ```bash
-curl -X POST http://localhost:9292 \
+curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: YOUR_SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"ExampleTool","arguments":{"a":5,"b":3}}}'
