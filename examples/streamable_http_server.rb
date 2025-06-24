@@ -147,7 +147,7 @@ puts ""
 puts "Testing SSE:"
 puts ""
 puts "1. Initialize session:"
-puts '   curl -X POST http://localhost:9393 -H "Content-Type: application/json" \\'
+puts '   curl -i -X POST http://localhost:9393 -H "Content-Type: application/json" \\'
 puts '     -d \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}\''
 puts ""
 puts "2. Connect SSE stream (use the session ID from step 1):"
