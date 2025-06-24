@@ -110,7 +110,7 @@ You can also test SSE functionality manually using cURL:
 ```bash
 SESSION_ID=$(curl -D - -s -o /dev/null -X POST http://localhost:9393 \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0"}}}' |grep -i "Mcp-Session-Id:" | cut -d' ' -f2- | tr -d '\r')
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0"}}}' | grep -i "Mcp-Session-Id:" | cut -d' ' -f2- | tr -d '\r')
 ```
 
 2. Connect to SSE stream (in one terminal):
