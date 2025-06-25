@@ -12,13 +12,13 @@ gem 'mcp'
 
 And then execute:
 
-```bash
+```console
 $ bundle install
 ```
 
 Or install it yourself as:
 
-```bash
+```console
 $ gem install mcp
 ```
 
@@ -155,7 +155,7 @@ transport.open
 
 You can run this script and then type in requests to the server at the command line.
 
-```bash
+```console
 $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"1","method":"ping"}
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
