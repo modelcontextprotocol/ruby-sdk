@@ -8,7 +8,7 @@ This directory contains examples of how to use the Model Context Protocol (MCP) 
 A simple server that communicates over standard input/output. This is useful for desktop applications and command-line tools.
 
 **Usage:**
-```bash
+```console
 $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":0,"method":"tools/list"}
 ```
@@ -24,7 +24,7 @@ A standalone HTTP server built with Rack that implements the MCP Streamable HTTP
 - Full MCP protocol compliance
 
 **Usage:**
-```bash
+```console
 $ ruby examples/http_server.rb
 ```
 
@@ -40,12 +40,12 @@ A client that demonstrates how to interact with the HTTP server using all MCP pr
 
 **Usage:**
 1. Start the HTTP server in one terminal:
-   ```bash
+   ```console
    $ ruby examples/http_server.rb
    ```
 
 2. Run the client example in another terminal:
-   ```bash
+   ```console
    $ ruby examples/http_client.rb
    ```
 
@@ -70,7 +70,7 @@ A specialized HTTP server designed to test and demonstrate Server-Sent Events (S
 - `echo` - Simple echo tool for basic testing
 
 **Usage:**
-```bash
+```console
 $ ruby examples/streamable_http_server.rb
 ```
 
@@ -87,12 +87,12 @@ An interactive client that connects to the SSE stream and provides a menu-driven
 
 **Usage:**
 1. Start the SSE test server in one terminal:
-   ```bash
+   ```console
    $ ruby examples/streamable_http_server.rb
    ```
 
 2. Run the SSE test client in another terminal:
-   ```bash
+   ```console
    $ ruby examples/streamable_http_client.rb
    ```
 
@@ -107,19 +107,19 @@ The client will:
 You can also test SSE functionality manually using cURL:
 
 1. Initialize a session:
-```bash
+```console
 SESSION_ID=$(curl -D - -s -o /dev/null -X POST http://localhost:9393 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0"}}}' | grep -i "Mcp-Session-Id:" | cut -d' ' -f2- | tr -d '\r')
 ```
 
 2. Connect to SSE stream (in one terminal):
-```bash
+```console
 curl -i -N -H "Mcp-Session-Id: $SESSION_ID" http://localhost:9393
 ```
 
 3. Trigger notifications (in another terminal):
-```bash
+```console
 # Send immediate notification
 curl -i -X POST http://localhost:9393 \
   -H "Content-Type: application/json" \
@@ -151,14 +151,14 @@ The HTTP server implements the MCP Streamable HTTP transport protocol:
 ### Example cURL Commands
 
 Initialize a session:
-```bash
+```console
 curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
 List tools (using the session ID from initialization):
-```bash
+```console
 curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: YOUR_SESSION_ID" \
@@ -166,7 +166,7 @@ curl -i -X POST http://localhost:9292 \
 ```
 
 Call a tool:
-```bash
+```console
 curl -i -X POST http://localhost:9292 \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: YOUR_SESSION_ID" \
