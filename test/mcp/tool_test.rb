@@ -244,6 +244,41 @@ module MCP
       assert_equal response.is_error, false
     end
 
+    class TestToolWithoutServerContext < Tool
+      tool_name "test_tool_without_server_context"
+      description "a test tool for testing without server context"
+      input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+      class << self
+        def call(message:)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
+
+    class TestToolWithoutRequired < Tool
+      tool_name "test_tool_without_required"
+      description "a test tool for testing without required server context"
+
+      class << self
+        def call(message, server_context: nil)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
+
+    test "tool call without server context" do
+      tool = TestToolWithoutServerContext
+      response = tool.call(message: "test")
+      assert_equal response.content, [{ type: "text", content: "OK" }]
+    end
+
+    test "tool call with server context and without required" do
+      tool = TestToolWithoutRequired
+      response = tool.call("test", server_context: { foo: "bar" })
+      assert_equal response.content, [{ type: "text", content: "OK" }]
+    end
+
     test "input_schema rejects any $ref in schema" do
       schema_with_ref = {
         properties: {

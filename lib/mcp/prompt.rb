@@ -9,7 +9,7 @@ module MCP
       attr_reader :description_value
       attr_reader :arguments_value
 
-      def template(args, server_context:)
+      def template(args, server_context: nil)
         raise NotImplementedError, "Subclasses must implement template"
       end
 
@@ -57,7 +57,7 @@ module MCP
           prompt_name name
           description description
           arguments arguments
-          define_singleton_method(:template) do |args, server_context:|
+          define_singleton_method(:template) do |args, server_context: nil|
             instance_exec(args, server_context:, &block)
           end
         end
