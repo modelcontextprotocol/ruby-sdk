@@ -40,6 +40,12 @@ module MCP
         end
       end
 
+      test "schema without required arguments is valid" do
+        assert_nothing_raised do
+          InputSchema.new(properties: { foo: { type: "string" } })
+        end
+      end
+
       test "validate arguments with valid data" do
         schema = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
         assert_nil(schema.validate_arguments({ foo: "bar" }))

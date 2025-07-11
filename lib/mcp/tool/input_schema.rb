@@ -16,7 +16,9 @@ module MCP
       end
 
       def to_h
-        { type: "object", properties:, required: }
+        { type: "object", properties: }.tap do |hsh|
+          hsh[:required] = required if required.any?
+        end
       end
 
       def missing_required_arguments?(arguments)
