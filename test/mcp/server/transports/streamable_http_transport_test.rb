@@ -566,6 +566,41 @@ module MCP
           assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
         end
 
+        test "responds with 405 for unsupported methods" do
+          request = create_rack_request(
+            "PUT",
+            "/",
+            {},
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 405, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Method not allowed", body["error"]
+        end
+
+        test "handle post request with a standard error" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "4567" }.to_json,
+          )
+
+          @transport.define_singleton_method(:extract_session_id) do |_request|
+            raise StandardError, "Test error"
+          end
+
+          response = @transport.handle_request(request)
+          assert_equal 500, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Internal server error", body["error"]
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)
