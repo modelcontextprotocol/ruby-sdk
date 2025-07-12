@@ -635,7 +635,7 @@ module MCP
     test "#handle method with missing required nested capability returns an error" do
       @server.capabilities = { resources: {} }
       response = @server.handle({ jsonrpc: "2.0", method: "resources/subscribe", id: 1 })
-      assert_equal "Server does not support resources_subscribe (required for resources/subscribe)",
+      assert_equal "Server does not support resources.subscribe (required for resources/subscribe)",
         response[:error][:data]
     end
 
