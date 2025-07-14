@@ -28,6 +28,7 @@ The `MCP::Server` class is the core component that handles JSON-RPC requests and
 It implements the Model Context Protocol specification, handling model context requests and responses.
 
 ### Key Features
+
 - Implements JSON-RPC 2.0 message handling
 - Supports protocol initialization and capability negotiation
 - Manages tool registration and invocation
@@ -37,6 +38,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports notifications for list changes (tools, prompts, resources)
 
 ### Supported Methods
+
 - `initialize` - Initializes the protocol and returns server capabilities
 - `ping` - Simple health check
 - `tools/list` - Lists all registered tools and their schemas
@@ -47,6 +49,57 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
 
+### Custom Methods
+
+The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Define a custom method that returns a result
+server.define_custom_method(method_name: "add") do |params|
+  params[:a] + params[:b]
+end
+
+# Define a custom notification method (returns nil)
+server.define_custom_method(method_name: "notify") do |params|
+  # Process notification
+  nil
+end
+```
+
+**Key Features:**
+
+- Accepts any method name as a string
+- Block receives the request parameters as a hash
+- Can handle both regular methods (with responses) and notifications
+- Prevents overriding existing MCP protocol methods
+- Supports instrumentation callbacks for monitoring
+
+**Usage Example:**
+
+```ruby
+# Client request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "add",
+  "params": { "a": 5, "b": 3 }
+}
+
+# Server response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": 8
+}
+```
+
+**Error Handling:**
+
+- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
+- Supports the same exception reporting and instrumentation as standard methods
+
 ### Notifications
 
 The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
@@ -54,6 +107,7 @@ The server supports sending notifications to clients when lists of tools, prompt
 #### Notification Methods
 
 The server provides three notification methods:
+
 - `notify_tools_list_changed()` - Send a notification when the tools list changes
 - `notify_prompts_list_changed()` - Send a notification when the prompts list changes
 - `notify_resources_list_changed()` - Send a notification when the resources list changes
@@ -61,6 +115,7 @@ The server provides three notification methods:
 #### Notification Format
 
 Notifications follow the JSON-RPC 2.0 specification and use these method names:
+
 - `notifications/tools/list_changed`
 - `notifications/prompts/list_changed`
 - `notifications/resources/list_changed`
@@ -212,11 +267,13 @@ server = MCP::Server.new(
 The `server_context` is a user-defined hash that is passed into the server instance and made available to tools, prompts, and exception/instrumentation callbacks. It can be used to provide contextual information such as authentication state, user IDs, or request-specific data.
 
 **Type:**
+
 ```ruby
 server_context: { [String, Symbol] => Any }
 ```
 
 **Example:**
+
 ```ruby
 server = MCP::Server.new(
   name: "my_server",
@@ -236,6 +293,7 @@ The exception reporter receives:
 - `server_context`: The context hash provided to the server
 
 **Signature:**
+
 ```ruby
 exception_reporter = ->(exception, server_context) { ... }
 ```
@@ -252,12 +310,14 @@ The instrumentation callback receives a hash with the following possible keys:
 - `duration`: (Float) Duration of the call in seconds
 
 **Type:**
+
 ```ruby
 instrumentation_callback = ->(data) { ... }
 # where data is a Hash with keys as described above
 ```
 
 **Example:**
+
 ```ruby
 config.instrumentation_callback = ->(data) {
   puts "Instrumentation: #{data.inspect}"

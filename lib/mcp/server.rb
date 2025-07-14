@@ -20,6 +20,15 @@ module MCP
       end
     end
 
+    class MethodAlreadyDefinedError < StandardError
+      attr_reader :method_name
+
+      def initialize(method_name)
+        super("Method #{method_name} already defined")
+        @method_name = method_name
+      end
+    end
+
     include Instrumentation
 
     attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
@@ -87,6 +96,14 @@ module MCP
     def define_prompt(name: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
+    end
+
+    def define_custom_method(method_name:, &block)
+      if @handlers.key?(method_name)
+        raise MethodAlreadyDefinedError, method_name
+      end
+
+      @handlers[method_name] = block
     end
 
     def notify_tools_list_changed

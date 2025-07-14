@@ -653,6 +653,46 @@ module MCP
       assert_instrumentation_data({ method: "unsupported_method" })
     end
 
+    test "#handle handles custom methods" do
+      @server.define_custom_method(method_name: "add") do |params|
+        params[:a] + params[:b]
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "add",
+        params: { a: 1, b: 2 },
+      }
+
+      response = @server.handle(request)
+      assert_equal 3, response[:result]
+      assert_instrumentation_data({ method: "add" })
+    end
+
+    test "#handle handles custom notifications" do
+      @server.define_custom_method(method_name: "notify") do
+        nil
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: "notify",
+      }
+
+      response = @server.handle(request)
+      assert_nil response
+      assert_instrumentation_data({ method: "notify" })
+    end
+
+    test "#define_custom_method raises an error if the method is already defined" do
+      assert_raises(Server::MethodAlreadyDefinedError) do
+        @server.define_custom_method(method_name: "tools/call") do
+          nil
+        end
+      end
+    end
+
     test "the global configuration is used if no configuration is passed to the server" do
       server = Server.new(name: "test_server")
       assert_equal MCP.configuration.instrumentation_callback,
