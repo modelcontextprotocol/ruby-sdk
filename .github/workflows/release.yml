@@ -1,14 +1,17 @@
 name: Release new version
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'lib/mcp/version.rb'
+      - "lib/mcp/version.rb"
 jobs:
   publish_gem:
     if: github.repository_owner == 'modelcontextprotocol'
     name: Release Gem Version to RubyGems.org
     runs-on: ubuntu-latest
+
+    environment: release
+
     permissions:
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
       contents: write # IMPORTANT: this permission is required for `rake release` to push the release tag
