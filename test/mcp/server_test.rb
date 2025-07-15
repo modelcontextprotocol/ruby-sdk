@@ -804,7 +804,7 @@ module MCP
     end
 
     test "server protocol version can be overridden via configuration" do
-      custom_version = "2025-03-27"
+      custom_version = "2025-03-26"
       configuration = Configuration.new(protocol_version: custom_version)
       server = Server.new(name: "test_server", configuration: configuration)
 
