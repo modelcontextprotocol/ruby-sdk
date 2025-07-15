@@ -156,7 +156,7 @@ end
 puts "Starting MCP HTTP server on http://localhost:9292"
 puts "Use POST requests to initialize and send JSON-RPC commands"
 puts "Example initialization:"
-puts '  curl -i -X POST http://localhost:9292 -H "Content-Type: application/json" -d \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}\''
+puts '  curl -i http://localhost:9292 --json \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}\''
 puts ""
 puts "The server will return a session ID in the Mcp-Session-Id header."
 puts "Use this session ID for subsequent requests."
