@@ -1,30 +1,17 @@
 ---
-description: writing changelog markdown when cutting a new release of the gem
-globs:
+description: Updating CHANGELOG.md before cutting a new release of the gem
+globs: CHANGELOG.md
 alwaysApply: false
 ---
-- output the changelog as markdown when asked.
+
+- start by refreshing your knowledge on the Keep a Changelog convention by reading the format spec referenced at the top of CHANGELOG.md
+- stick to Keep a Changelog
+- entries should be terse and in a top-level flat list: do not nest
+- follow this format for entries:
+  - Terse description of the change (#nnn)
 - git tags are used to mark the commit that cut a new release of the gem
 - the gem version is located in [version.rb](mdc:lib/mcp/version.rb)
 - use the git history, especially merge commits from PRs to construct the changelog
-- when necessary, look at the diff of files changed to determine whether a PR should be listed in
-  - ## Added; adds new functionality
-  - ## Changed; alters functionality; especially backward compatible changes
-  - ## Fixed; bugfixes that are forward compatible
-
-use the following format for changelogs:
-
-```
-## Added
-- New functionality added that was not present before
-
-## Changed
-- Alterations to functionality that may indicate breaking changes
-
-## Fixed
-- Bug fixes
-
-#### Full change list:
-- [Name of the PR #123](https:/github.com/modelcontextprotocol/ruby-sdk/pull/123) @github-author-username
-- [Name of the PR #456](https:/github.com/modelcontextprotocol/ruby-sdk/pull/456) @another-github-author
-```
+- when necessary, look at the diff of files changed to determine the true nature of the change
+- maintenance PRs that don't concern end users of the gem should not be listed in the changelog
+- when checking PRs, see if there's an upstream remote, and if so, fetch PRs from upstream instead of origin
