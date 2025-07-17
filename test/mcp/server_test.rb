@@ -257,6 +257,31 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: })
     end
 
+    test "#handle_json tools/call executes tool and returns structured response result" do
+      tool_name = "test_tool"
+      tool_args = { arg: "value" }
+      tool_response = Tool::StructuredResponse.new({ result: "success" })
+
+      @tool.expects(:call).with(arg: "value", server_context: nil).returns(tool_response)
+
+      request = JSON.generate({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: tool_name, arguments: tool_args },
+        id: 1,
+      })
+      expected_response = {
+        content: [{ type: "text", text: "{\"result\":\"success\"}" }],
+        structuredContent: { result: "success" },
+        isError: false,
+      }
+
+      raw_response = @server.handle_json(request)
+      response = JSON.parse(raw_response, symbolize_names: true) if raw_response
+      assert_equal expected_response, response[:result] if response
+      assert_instrumentation_data({ method: "tools/call", tool_name: })
+    end
+
     test "#handle_json tools/call executes tool and returns result, when the tool is typed with Sorbet" do
       class TypedTestTool < Tool
         tool_name "test_tool"
