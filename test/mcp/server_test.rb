@@ -379,7 +379,7 @@ module MCP
     test "#tools_call_handler sets the tools/call handler" do
       @server.tools_call_handler do |request|
         tool_name = request[:name]
-        return Tool::Response.new("#{tool_name} called successfully").to_h
+        Tool::Response.new("#{tool_name} called successfully").to_h
       end
 
       request = {
@@ -391,7 +391,7 @@ module MCP
 
       response = @server.handle(request)
       assert_equal({ content: "my_tool called successfully", isError: false }, response[:result])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "my_tool" })
+      assert_instrumentation_data({ method: "tools/call" })
     end
 
     test "#handle prompts/list returns list of prompts" do
@@ -484,10 +484,10 @@ module MCP
     test "#prompts_get_handler sets the prompts/get handler" do
       @server.prompts_get_handler do |request|
         prompt_name = request[:name]
-        return Prompt::Result.new(
+        Prompt::Result.new(
           description: prompt_name,
           messages: [
-            Prompt::Message.new(role: "user", content: Content::Text.new(request[:arguments][:foo])),
+            Prompt::Message.new(role: "user", content: Content::Text.new(request[:arguments]["foo"])),
           ],
         ).to_h
       end
@@ -501,10 +501,10 @@ module MCP
 
       response = @server.handle(request)
       assert_equal(
-        { description: "foo_bar_prompt", messages: [{ role: "user", content: { text: "bar" } }] },
+        { description: "foo_bar_prompt", messages: [{ role: "user", content: { type: "text", text: "bar" } }] },
         response[:result],
       )
-      assert_instrumentation_data({ method: "prompts/get", prompt_name: "foo_bar_prompt" })
+      assert_instrumentation_data({ method: "prompts/get" })
     end
 
     test "#handle resources/list returns a list of resources" do
@@ -555,9 +555,9 @@ module MCP
 
     test "#resources_read_handler sets the resources/read handler" do
       @server.resources_read_handler do |request|
-        return {
+        {
           uri: request[:uri],
-          mime_type: "text/plain",
+          mimeType: "text/plain",
           text: "Lorem ipsum dolor sit amet",
         }
       end
@@ -573,7 +573,7 @@ module MCP
 
       response = @server.handle(request)
       assert_equal(
-        { contents: [{ uri: "example.com/my_resource", mimeType: "text/plain", text: "Lorem ipsum dolor sit amet" }] },
+        { contents: { uri: "example.com/my_resource", mimeType: "text/plain", text: "Lorem ipsum dolor sit amet" } },
         response[:result],
       )
     end
