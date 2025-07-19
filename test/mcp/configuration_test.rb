@@ -48,18 +48,18 @@ module MCP
     end
 
     test "merges protocol version from other configuration" do
-      config1 = Configuration.new(protocol_version: "2025-03-27")
-      config2 = Configuration.new(protocol_version: "2025-03-28")
+      config1 = Configuration.new(protocol_version: "2025-03-26")
+      config2 = Configuration.new(protocol_version: "2025-06-18")
       config3 = Configuration.new
 
       merged = config1.merge(config2)
-      assert_equal "2025-03-28", merged.protocol_version
+      assert_equal "2025-06-18", merged.protocol_version
 
       merged = config1.merge(config3)
-      assert_equal "2025-03-27", merged.protocol_version
+      assert_equal "2025-03-26", merged.protocol_version
 
       merged = config3.merge(config1)
-      assert_equal "2025-03-27", merged.protocol_version
+      assert_equal "2025-03-26", merged.protocol_version
     end
 
     test "defaults validate_tool_call_arguments to true" do
@@ -96,10 +96,18 @@ module MCP
       refute merged.validate_tool_call_arguments
     end
 
+    test "raises ArgumentError when protocol_version is not a supported value" do
+      exception = assert_raises(ArgumentError) do
+        Configuration.new(protocol_version: "1999-12-31")
+      end
+      assert_match(/\Aprotocol_version must be/, exception.message)
+    end
+
     test "raises ArgumentError when validate_tool_call_arguments is not a boolean" do
-      assert_raises(ArgumentError) do
+      exception = assert_raises(ArgumentError) do
         Configuration.new(validate_tool_call_arguments: "true")
       end
+      assert_equal("validate_tool_call_arguments must be a boolean", exception.message)
     end
   end
 end

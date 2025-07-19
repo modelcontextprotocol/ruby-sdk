@@ -3,6 +3,7 @@
 module MCP
   class Configuration
     DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+    SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", DEFAULT_PROTOCOL_VERSION]
 
     attr_writer :exception_reporter, :instrumentation_callback, :protocol_version, :validate_tool_call_arguments
 
@@ -11,6 +12,10 @@ module MCP
       @exception_reporter = exception_reporter
       @instrumentation_callback = instrumentation_callback
       @protocol_version = protocol_version
+      if protocol_version && !SUPPORTED_PROTOCOL_VERSIONS.include?(protocol_version)
+        message = "protocol_version must be #{SUPPORTED_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_PROTOCOL_VERSIONS[-1]}"
+        raise ArgumentError, message
+      end
       unless validate_tool_call_arguments.is_a?(TrueClass) || validate_tool_call_arguments.is_a?(FalseClass)
         raise ArgumentError, "validate_tool_call_arguments must be a boolean"
       end
