@@ -141,6 +141,25 @@ module MCP
       assert_instrumentation_data({ method: "unsupported_method" })
     end
 
+    test "#handle notifications/initialized returns empty response" do
+      request = {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        id: "123",
+      }
+
+      response = @server.handle(request)
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: "123",
+          result: {},
+        },
+        response,
+      )
+      assert_instrumentation_data({ method: "notifications/initialized" })
+    end
+
     test "#handle tools/list returns available tools" do
       request = {
         jsonrpc: "2.0",
