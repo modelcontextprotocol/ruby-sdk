@@ -84,7 +84,7 @@ module MCP
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
-          assert_equal "2024-11-05", body["result"]["protocolVersion"]
+          assert_equal "2025-06-18", body["result"]["protocolVersion"]
         end
 
         test "handles GET request with valid session ID" do

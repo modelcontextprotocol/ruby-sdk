@@ -2,8 +2,8 @@
 
 module MCP
   class Configuration
-    DEFAULT_PROTOCOL_VERSION = "2024-11-05"
-    SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", DEFAULT_PROTOCOL_VERSION]
+    DEFAULT_PROTOCOL_VERSION = "2025-06-18"
+    SUPPORTED_PROTOCOL_VERSIONS = [DEFAULT_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]
 
     attr_writer :exception_reporter, :instrumentation_callback, :protocol_version, :validate_tool_call_arguments
 

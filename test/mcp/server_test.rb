@@ -114,7 +114,7 @@ module MCP
         jsonrpc: "2.0",
         id: 1,
         result: {
-          protocolVersion: "2024-11-05",
+          protocolVersion: "2025-06-18",
           capabilities: {
             prompts: { listChanged: true },
             resources: { listChanged: true },

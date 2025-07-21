@@ -148,7 +148,7 @@ server.notify_tools_list_changed()
 #### Rails Controller
 
 When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) transport
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) transport
 requests.
 
 You can use the `Server#handle_json` method to handle requests.
@@ -340,7 +340,7 @@ MCP::Server.protocol_version = nil
 
 If an invalid `protocol_version` value is set, an `ArgumentError` is raised.
 
-Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification/2025-03-26) for the protocol version to understand the supported features for the version being set.
+Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification) for the protocol version to understand the supported features for the version being set.
 
 ### Exception Reporting
 
