@@ -64,6 +64,7 @@ module MCP
       @server = Server.new(
         name: @server_name,
         version: "1.2.3",
+        instructions: "Optional instructions for the client",
         tools: [@tool, @tool_that_raises],
         prompts: [@prompt],
         resources: [@resource],
@@ -135,6 +136,7 @@ module MCP
             name: @server_name,
             version: "1.2.3",
           },
+          instructions: "Optional instructions for the client",
         },
       }
 
@@ -748,6 +750,33 @@ module MCP
 
       response = server.handle(request)
       assert_equal Server::DEFAULT_VERSION, response[:result][:serverInfo][:version]
+    end
+
+    test "server uses instructions when not configured" do
+      server = Server.new(name: "test_server")
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+
+      response = server.handle(request)
+      refute response[:result].key?(:instructions)
+    end
+
+    test "server uses instructions when configured with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+      server = Server.new(name: "test_server", instructions: "The server instructions.", configuration: configuration)
+      assert_equal("The server instructions.", server.instructions)
+    end
+
+    test "raises error if instructions are used with protocol version 2024-11-05" do
+      configuration = Configuration.new(protocol_version: "2024-11-05")
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", instructions: "The server instructions.", configuration: configuration)
+      end
+      assert_equal("`instructions` supported by protocol version 2025-03-26 or higher", exception.message)
     end
 
     test "#define_tool adds a tool to the server" do
