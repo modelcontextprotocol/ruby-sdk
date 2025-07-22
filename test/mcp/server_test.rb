@@ -141,22 +141,23 @@ module MCP
       assert_instrumentation_data({ method: "unsupported_method" })
     end
 
-    test "#handle notifications/initialized returns empty response" do
+    test "#handle notifications/initialized returns nil response" do
       request = {
         jsonrpc: "2.0",
         method: "notifications/initialized",
-        id: "123",
       }
 
-      response = @server.handle(request)
-      assert_equal(
-        {
-          jsonrpc: "2.0",
-          id: "123",
-          result: {},
-        },
-        response,
-      )
+      assert_nil @server.handle(request)
+      assert_instrumentation_data({ method: "notifications/initialized" })
+    end
+
+    test "#handle_json notifications/initialized returns nil response" do
+      request = JSON.generate({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      })
+
+      assert_nil @server.handle_json(request)
       assert_instrumentation_data({ method: "notifications/initialized" })
     end
 
