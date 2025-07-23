@@ -314,7 +314,7 @@ module MCP
     end
 
     def call_tool_with_args(tool, arguments)
-      args = arguments.transform_keys(&:to_sym)
+      args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
         tool.call(**args, server_context: server_context).to_h

@@ -17,6 +17,17 @@ module MCP
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
       ) { raise StandardError, "Tool error" }
 
+      @tool_with_no_args = Tool.define(
+        name: "tool_with_no_args",
+        description: "This tool performs specific functionality...",
+        annotations: {
+          title: "Tool with no args",
+          read_only_hint: true,
+        },
+      ) do
+        Tool::Response.new([{ type: "text", content: "OK" }])
+      end
+
       @prompt = Prompt.define(
         name: "test_prompt",
         description: "Test prompt",
@@ -885,6 +896,27 @@ module MCP
               strings: ["a", "b", "c"],
               objects: [{ name: "test" }],
             },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert response[:result], "Expected result key in response"
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "OK", response[:result][:content][0][:content]
+    end
+
+    test "tools/call with no args" do
+      server = Server.new(tools: [@tool_with_no_args])
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "tool_with_no_args",
           },
         },
       )
