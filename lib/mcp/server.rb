@@ -233,7 +233,7 @@ module MCP
         raise RequestHandlerError.new("Tool not found #{tool_name}", request, error_type: :tool_not_found)
       end
 
-      arguments = request[:arguments]
+      arguments = request[:arguments] || {}
       add_instrumentation_data(tool_name:)
 
       if tool.input_schema&.missing_required_arguments?(arguments)

@@ -829,6 +829,29 @@ module MCP
       assert_equal custom_version, response[:result][:protocolVersion]
     end
 
+    test "tools/call handles missing arguments field" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "test_tool",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32603, response[:error][:code])
+      assert_includes response[:error][:data], "Missing required arguments"
+    end
+
     test "tools/call validates arguments against input schema when validate_tool_call_arguments is true" do
       server = Server.new(
         tools: [TestTool],
