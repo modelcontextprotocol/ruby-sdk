@@ -340,7 +340,7 @@ MCP::Server.protocol_version = nil
 
 If an invalid `protocol_version` value is set, an `ArgumentError` is raised.
 
-Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification) for the protocol version to understand the supported features for the version being set.
+Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification/versioning) for the protocol version to understand the supported features for the version being set.
 
 ### Exception Reporting
 
@@ -364,7 +364,7 @@ If no exception reporter is configured, a default no-op reporter is used that si
 
 ## Tools
 
-MCP spec includes [Tools](https://modelcontextprotocol.io/docs/concepts/tools) which provide functionality to LLM apps.
+MCP spec includes [Tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) which provide functionality to LLM apps.
 
 This gem provides a `MCP::Tool` class that can be used to create tools in two ways:
 
@@ -427,7 +427,7 @@ Annotations can be set either through the class definition using the `annotation
 
 ## Prompts
 
-MCP spec includes [Prompts](https://modelcontextprotocol.io/docs/concepts/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
+MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
 The `MCP::Prompt` class provides two ways to create prompts:
 
@@ -550,7 +550,7 @@ This is to avoid potential issues with metric cardinality
 
 ## Resources
 
-MCP spec includes [Resources](https://modelcontextprotocol.io/docs/concepts/resources)
+MCP spec includes [Resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources).
 
 The `MCP::Resource` class provides a way to register resources with the server.
 
