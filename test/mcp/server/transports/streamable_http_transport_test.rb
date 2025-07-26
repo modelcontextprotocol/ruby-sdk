@@ -391,8 +391,7 @@ module MCP
           @server.define_singleton_method(:handle_json) do |request|
             result = original_handle_json.call(request)
             # Send notification while still in request context - broadcast to all sessions
-            notification = { jsonrpc: "2.0", method: "test_notification", params: { session: "current" } }
-            transport.send_notification(notification)
+            transport.send_notification("test_notification", { session: "current" })
             result
           end
 
@@ -452,8 +451,7 @@ module MCP
           sleep(0.1)
 
           # Send notification to specific session
-          notification = { jsonrpc: "2.0", method: "test_notification", params: { message: "Hello" } }
-          result = @transport.send_notification(notification, session_id: session_id)
+          result = @transport.send_notification("test_notification", { message: "Hello" }, session_id: session_id)
 
           assert result
 
@@ -507,8 +505,7 @@ module MCP
           sleep(0.1)
 
           # Broadcast notification to all sessions
-          notification = { jsonrpc: "2.0", method: "broadcast", params: { message: "Hello everyone" } }
-          sent_count = @transport.send_notification(notification)
+          sent_count = @transport.send_notification("broadcast", { message: "Hello everyone" })
 
           assert_equal 2, sent_count
 

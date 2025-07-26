@@ -58,9 +58,9 @@ module MCP
           io.rewind
           output = io.read
 
-          assert_includes output, "data: #{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}"
-          assert_includes output, "data: #{Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED}"
-          assert_includes output, "data: #{Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED}"
+          assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}\"}"
+          assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED}\"}"
+          assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED}\"}"
         end
 
         test "notifications are broadcast to all connected sessions" do
@@ -111,11 +111,11 @@ module MCP
           # Check both sessions received the notification
           io1.rewind
           output1 = io1.read
-          assert_includes output1, "data: #{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}"
+          assert_includes output1, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}\"}"
 
           io2.rewind
           output2 = io2.read
-          assert_includes output2, "data: #{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}"
+          assert_includes output2, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}\"}"
         end
 
         test "server continues to work when SSE connection is closed" do
@@ -191,7 +191,7 @@ module MCP
           # Check the notification was received
           io.rewind
           output = io.read
-          assert_includes output, "data: #{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}"
+          assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}\"}"
 
           # Verify the tool was added to the server
           assert @server.tools.key?("dynamic_tool")
@@ -229,7 +229,7 @@ module MCP
           output = io.read
 
           # SSE format should be "data: <message>\n\n"
-          assert_match(/data: #{Regexp.escape(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)}\n/, output)
+          assert_match(/data: \{"jsonrpc":"2\.0","method":"#{Regexp.escape(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)}"\}\n/, output)
         end
 
         private
