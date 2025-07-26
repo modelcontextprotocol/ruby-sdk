@@ -406,7 +406,7 @@ tool = MCP::Tool.define(
     read_only_hint: true
   }
 ) do |args, server_context|
-  Tool::Response.new([{ type: "text", text: "OK" }])
+  MCP::Tool::Response.new([{ type: "text", text: "OK" }])
 end
 ```
 
@@ -438,7 +438,7 @@ class MyPrompt < MCP::Prompt
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
   description "This prompt performs specific functionality..."
   arguments [
-    Prompt::Argument.new(
+    MCP::Prompt::Argument.new(
       name: "message",
       description: "Input message",
       required: true
@@ -447,16 +447,16 @@ class MyPrompt < MCP::Prompt
 
   class << self
     def template(args, server_context:)
-      Prompt::Result.new(
+      MCP::Prompt::Result.new(
         description: "Response description",
         messages: [
-          Prompt::Message.new(
+          MCP::Prompt::Message.new(
             role: "user",
-            content: Content::Text.new("User message")
+            content: MCP::Content::Text.new("User message")
           ),
-          Prompt::Message.new(
+          MCP::Prompt::Message.new(
             role: "assistant",
-            content: Content::Text.new(args["message"])
+            content: MCP::Content::Text.new(args["message"])
           )
         ]
       )
@@ -474,23 +474,23 @@ prompt = MCP::Prompt.define(
   name: "my_prompt",
   description: "This prompt performs specific functionality...",
   arguments: [
-    Prompt::Argument.new(
+    MCP::Prompt::Argument.new(
       name: "message",
       description: "Input message",
       required: true
     )
   ]
 ) do |args, server_context:|
-  Prompt::Result.new(
+  MCP::Prompt::Result.new(
     description: "Response description",
     messages: [
-      Prompt::Message.new(
+      MCP::Prompt::Message.new(
         role: "user",
-        content: Content::Text.new("User message")
+        content: MCP::Content::Text.new("User message")
       ),
-      Prompt::Message.new(
+      MCP::Prompt::Message.new(
         role: "assistant",
-        content: Content::Text.new(args["message"])
+        content: MCP::Content::Text.new(args["message"])
       )
     ]
   )
@@ -502,10 +502,10 @@ e.g. around authentication state or user preferences.
 
 ### Key Components
 
-- `Prompt::Argument` - Defines input parameters for the prompt template
-- `Prompt::Message` - Represents a message in the conversation with a role and content
-- `Prompt::Result` - The output of a prompt template containing description and messages
-- `Content::Text` - Text content for messages
+- `MCP::Prompt::Argument` - Defines input parameters for the prompt template
+- `MCP::Prompt::Message` - Represents a message in the conversation with a role and content
+- `MCP::Prompt::Result` - The output of a prompt template containing description and messages
+- `MCP::Content::Text` - Text content for messages
 
 ### Usage
 
