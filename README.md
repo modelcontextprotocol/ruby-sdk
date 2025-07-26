@@ -326,16 +326,17 @@ config.instrumentation_callback = ->(data) {
 
 ### Server Protocol Version
 
-The server's protocol version can be overridden using the `protocol_version` class method:
+The server's protocol version can be overridden using the `protocol_version` keyword argument:
 
 ```ruby
-MCP::Server.protocol_version = "2024-11-05"
+configuration = MCP::Configuration.new(protocol_version: "2024-11-05")
+MCP::Server.new(name: "test_server", configuration: configuration)
 ```
 
 This will make all new server instances use the specified protocol version instead of the default version. The protocol version can be reset to the default by setting it to `nil`:
 
 ```ruby
-MCP::Server.protocol_version = nil
+MCP::Configuration.new(protocol_version: nil)
 ```
 
 If an invalid `protocol_version` value is set, an `ArgumentError` is raised.
