@@ -1,10 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "json"
 require "rack"
-require "mcp/server"
-require "mcp/server/transports/streamable_http_transport"
 
 module MCP
   class Server
