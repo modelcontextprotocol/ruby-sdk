@@ -538,7 +538,7 @@ end
 ```
 
 The data contains the following keys:
-`method`: the metod called, e.g. `ping`, `tools/list`, `tools/call` etc
+`method`: the method called, e.g. `ping`, `tools/list`, `tools/call` etc
 `tool_name`: the name of the tool called
 `prompt_name`: the name of the prompt called
 `resource_uri`: the uri of the resource called
