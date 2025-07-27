@@ -61,7 +61,7 @@ server = MCP::Server.new(
   prompts: [ExamplePrompt],
   resources: [
     MCP::Resource.new(
-      uri: "test_resource",
+      uri: "https://test_resource.invalid",
       name: "Test resource",
       description: "Test resource that echoes back the uri as its content",
       mime_type: "text/plain",

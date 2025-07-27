@@ -44,14 +44,14 @@ module MCP
       end
 
       @resource = Resource.new(
-        uri: "test_resource",
+        uri: "https://test_resource.invalid",
         name: "Test resource",
         description: "Test resource",
         mime_type: "text/plain",
       )
 
       @resource_template = ResourceTemplate.new(
-        uri_template: "test_resource/{id}",
+        uri_template: "https://test_resource.invalid/{id}",
         name: "Test resource",
         description: "Test resource",
         mime_type: "text/plain",
@@ -532,7 +532,7 @@ module MCP
 
     test "#resources_list_handler sets the resources/list handler" do
       @server.resources_list_handler do
-        [{ uri: "test_resource", name: "Test resource", description: "Test resource" }]
+        [{ uri: "https://test_resource.invalid", name: "Test resource", description: "Test resource" }]
       end
 
       request = {
@@ -543,7 +543,7 @@ module MCP
 
       response = @server.handle(request)
       assert_equal(
-        { resources: [{ uri: "test_resource", name: "Test resource", description: "Test resource" }] },
+        { resources: [{ uri: "https://test_resource.invalid", name: "Test resource", description: "Test resource" }] },
         response[:result],
       )
       assert_instrumentation_data({ method: "resources/list" })
@@ -555,13 +555,13 @@ module MCP
         method: "resources/read",
         id: 1,
         params: {
-          uri: "example.com",
+          uri: "https://test_resource.invalid",
         },
       }
 
       response = @server.handle(request)
       assert_equal({ contents: [] }, response[:result])
-      assert_instrumentation_data({ method: "resources/read", resource_uri: "example.com" })
+      assert_instrumentation_data({ method: "resources/read", resource_uri: "https://test_resource.invalid" })
     end
 
     test "#resources_read_handler sets the resources/read handler" do
@@ -578,13 +578,13 @@ module MCP
         method: "resources/read",
         id: 1,
         params: {
-          uri: "example.com/my_resource",
+          uri: "https://test_resource.invalid/my_resource",
         },
       }
 
       response = @server.handle(request)
       assert_equal(
-        { contents: { uri: "example.com/my_resource", mimeType: "text/plain", text: "Lorem ipsum dolor sit amet" } },
+        { contents: { uri: "https://test_resource.invalid/my_resource", mimeType: "text/plain", text: "Lorem ipsum dolor sit amet" } },
         response[:result],
       )
     end
