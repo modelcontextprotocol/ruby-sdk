@@ -228,7 +228,7 @@ module MCP
           # Add a resource and notify
           @server.resources = [
             MCP::Resource.new(
-              uri: "test://resource",
+              uri: "https://test_resource.invalid",
               name: "Test Resource",
               description: "A test resource",
               mime_type: "text/plain",
