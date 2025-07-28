@@ -17,7 +17,10 @@ require "sorbet-runtime"
 
 require_relative "instrumentation_test_helper"
 
-Minitest::Reporters.use!(Minitest::Reporters::ProgressReporter.new)
+unless ENV["RM_INFO"]
+  # RubyMine does not support Minitest reporters, so we use the default reporter
+  Minitest::Reporters.use!(Minitest::Reporters::ProgressReporter.new)
+end
 
 module ActiveSupport
   class TestCase
