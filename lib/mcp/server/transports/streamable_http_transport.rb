@@ -34,7 +34,13 @@ module MCP
           end
         end
 
-        def send_notification(notification, session_id: nil)
+        def send_notification(method, params = nil, session_id: nil)
+          notification = {
+            jsonrpc: "2.0",
+            method:,
+          }
+          notification[:params] = params if params
+
           @mutex.synchronize do
             if session_id
               # Send to specific session
