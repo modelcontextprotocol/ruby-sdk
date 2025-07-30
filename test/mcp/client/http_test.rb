@@ -30,7 +30,9 @@ module MCP
         Http.any_instance.stubs(:require).with("faraday").raises(LoadError, "cannot load such file -- faraday")
 
         error = assert_raises(LoadError) do
-          client.send(:client) # Call the private method that triggers require_faraday!
+          # I picked #tools arbritarily.
+          # This should immediately try to instantiate the client and fail
+          client.tools
         end
 
         assert_includes(error.message, "The 'faraday' gem is required to use the MCP client HTTP transport")
