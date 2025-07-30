@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "model_context_protocol/server/transports/stdio"
+require "mcp/server/transports/stdio"
 require "json"
 
 module ModelContextProtocol
@@ -47,7 +47,7 @@ module ModelContextProtocol
             response = JSON.parse(output.string, symbolize_names: true)
             assert_equal("2.0", response[:jsonrpc])
             assert_equal("123", response[:id])
-            assert_equal({}, response[:result])
+            assert_empty(response[:result])
             refute(@transport.instance_variable_get(:@open))
           ensure
             $stdin = original_stdin
