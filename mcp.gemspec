@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "lib/mcp/shared/version"
+require_relative "lib/mcp/version"
 
 Gem::Specification.new do |spec|
   spec.name          = "mcp"
