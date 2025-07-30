@@ -1,7 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
-module ModelContextProtocol
+module MCP
   module Client
     class Tools
       include Enumerable

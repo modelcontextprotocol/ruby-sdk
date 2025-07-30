@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "mcp/client/tool"
 
-module ModelContextProtocol
+module MCP
   module Client
     class ToolTest < Minitest::Test
       def test_name_returns_name_from_payload

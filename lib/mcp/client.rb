@@ -4,7 +4,7 @@
 # require_relative "shared/instrumentation"
 # require_relative "shared/methods"
 
-module ModelContextProtocol
+module MCP
   module Client
     # Can be made an abstract class if we need shared behavior
 

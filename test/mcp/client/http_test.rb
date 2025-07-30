@@ -4,8 +4,12 @@ require "test_helper"
 require "faraday"
 require "securerandom"
 require "webmock/minitest"
+require "mcp/client/http"
+require "mcp/client/tool"
+require "mcp/client/tools"
+require "mcp/client"
 
-module ModelContextProtocol
+module MCP
   module Client
     class HttpTest < Minitest::Test
       def test_initialization_with_default_version
@@ -15,13 +19,13 @@ module ModelContextProtocol
 
       def test_initialization_with_custom_version
         custom_version = "1.2.3"
-        client = Http.new(url:, version: custom_version)
+        client = Http.new(url: url, version: custom_version)
         assert_equal(custom_version, client.version)
       end
 
       def test_headers_are_added_to_the_request
         headers = { "Authorization" => "Bearer token" }
-        client = Http.new(url:, headers:)
+        client = Http.new(url: url, headers: headers)
         client.stubs(:request_id).returns(mock_request_id)
 
         stub_request(:post, url)
@@ -467,7 +471,7 @@ module ModelContextProtocol
 
       def client
         @client ||= begin
-          client = Http.new(url:)
+          client = Http.new(url: url)
           client.stubs(:request_id).returns(mock_request_id)
           client
         end

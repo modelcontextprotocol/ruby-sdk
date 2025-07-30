@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ModelContextProtocol
+module MCP
   module Client
     class Http
       DEFAULT_VERSION = "0.1.0"
@@ -16,7 +16,7 @@ module ModelContextProtocol
       def tools
         response = make_request(method: "tools/list").body
 
-        ::ModelContextProtocol::Client::Tools.new(response)
+        ::MCP::Client::Tools.new(response)
       end
 
       def call_tool(tool:, input:)

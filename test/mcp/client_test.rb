@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-module ModelContextProtocol
+module MCP
   class ClientTest < Minitest::Test
   end
 end

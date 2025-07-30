@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "mcp/client/tools"
+require "mcp/client/tool"
 
-module ModelContextProtocol
+module MCP
   module Client
     class ToolsTest < Minitest::Test
       def test_each_iterates_over_tools
@@ -43,7 +45,7 @@ module ModelContextProtocol
         response = { "result" => { "tools" => [] } }
         tools = Tools.new(response)
 
-        assert_equal([], tools.all)
+        assert_empty(tools.all)
         assert_equal(0, tools.count)
       end
 
@@ -51,7 +53,7 @@ module ModelContextProtocol
         response = { "result" => {} }
         tools = Tools.new(response)
 
-        assert_equal([], tools.all)
+        assert_empty(tools.all)
         assert_equal(0, tools.count)
       end
 
@@ -59,7 +61,7 @@ module ModelContextProtocol
         response = {}
         tools = Tools.new(response)
 
-        assert_equal([], tools.all)
+        assert_empty(tools.all)
         assert_equal(0, tools.count)
       end
 
@@ -87,9 +89,9 @@ module ModelContextProtocol
         response = { "result" => { "tools" => [] } }
         tools = Tools.new(response)
 
-        assert(tools.respond_to?(:map))
-        assert(tools.respond_to?(:select))
-        assert(tools.respond_to?(:find))
+        assert_respond_to(tools, :map)
+        assert_respond_to(tools, :select)
+        assert_respond_to(tools, :find)
       end
     end
   end
