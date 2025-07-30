@@ -85,7 +85,7 @@ server.resources_read_handler do |params|
   [{
     uri: params[:uri],
     mimeType: "text/plain",
-    text: "Hello, world!",
+    text: "Hello, world! URI: #{params[:uri]}",
   }]
 end
 
