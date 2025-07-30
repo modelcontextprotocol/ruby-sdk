@@ -25,4 +25,5 @@ gem "sorbet-static-and-runtime"
 
 group :test do
   gem "webmock"
+  gem "faraday", ">= 2.0"
 end

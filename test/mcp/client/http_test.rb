@@ -23,6 +23,20 @@ module MCP
         assert_equal(custom_version, client.version)
       end
 
+      def test_raises_load_error_when_faraday_not_available
+        client = Http.new(url: url)
+
+        # simulate Faraday not being available
+        Http.any_instance.stubs(:require).with("faraday").raises(LoadError, "cannot load such file -- faraday")
+
+        error = assert_raises(LoadError) do
+          client.send(:client) # Call the private method that triggers require_faraday!
+        end
+
+        assert_includes(error.message, "The 'faraday' gem is required to use the MCP client HTTP transport")
+        assert_includes(error.message, "Add it to your Gemfile: gem 'faraday', '>= 2.0'")
+      end
+
       def test_headers_are_added_to_the_request
         headers = { "Authorization" => "Bearer token" }
         client = Http.new(url: url, headers: headers)

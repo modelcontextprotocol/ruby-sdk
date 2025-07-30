@@ -33,6 +33,7 @@ module MCP
       attr_reader :headers
 
       def client
+        require_faraday!
         @client ||= Faraday.new(url) do |faraday|
           faraday.request(:json)
           faraday.response(:json)
@@ -42,6 +43,13 @@ module MCP
             faraday.headers[key] = value
           end
         end
+      end
+
+      def require_faraday!
+        require "faraday"
+      rescue LoadError
+        raise LoadError, "The 'faraday' gem is required to use the MCP client HTTP transport. " \
+          "Add it to your Gemfile: gem 'faraday', '>= 2.0'"
       end
 
       def make_request(method:, params: nil)

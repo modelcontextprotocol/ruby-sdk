@@ -10,6 +10,21 @@ Add this line to your application's Gemfile:
 gem 'mcp'
 ```
 
+### Optional Dependencies
+
+The MCP gem has different dependency requirements depending on your use case:
+
+**For Server-only usage:**
+```ruby
+gem 'mcp'
+```
+
+**For client HTTP transport usage:**
+```ruby
+gem 'mcp'
+gem 'faraday', '>= 2.0'
+```
+
 And then execute:
 
 ```console
@@ -219,6 +234,8 @@ $ ruby examples/stdio_server.rb
 ## MCP Client
 
 The `ModelContextProtocol::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+
+**Note:** The client HTTP transport requires the `faraday` gem. Add `gem 'faraday', '>= 2.0'` to your Gemfile if you plan to use the client HTTP transport functionality.
 
 ### HTTP Client
 
