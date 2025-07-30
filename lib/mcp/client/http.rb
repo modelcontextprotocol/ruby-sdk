@@ -25,7 +25,7 @@ module MCP
           params: { name: tool.name, arguments: input },
         ).body
 
-        response.dig("result", "content", 0, "text")
+        response.dig("result", "content")
       end
 
       private

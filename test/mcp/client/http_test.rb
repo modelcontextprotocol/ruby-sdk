@@ -156,13 +156,18 @@ module MCP
                   {
                     text: "Tool response",
                   },
+                  {
+                    custom_property: "woah, something different",
+                  },
                 ],
               },
             }.to_json,
           )
 
         response = client.call_tool(tool: tool, input: input)
-        assert_equal("Tool response", response)
+        assert_equal(2, response.size)
+        assert_equal("Tool response", response.dig(0, "text"))
+        assert_equal("woah, something different", response.dig(1, "custom_property"))
       end
 
       def test_call_tool_handles_empty_response
@@ -210,7 +215,7 @@ module MCP
           )
 
         response = client.call_tool(tool: tool, input: input)
-        assert_nil(response)
+        assert_empty(response)
       end
 
       def test_raises_bad_request_error
