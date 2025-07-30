@@ -30,7 +30,7 @@ module MCP
         Http.any_instance.stubs(:require).with("faraday").raises(LoadError, "cannot load such file -- faraday")
 
         error = assert_raises(LoadError) do
-          # I picked #tools arbritarily.
+          # I picked #tools arbitrarily.
           # This should immediately try to instantiate the client and fail
           client.tools
         end
