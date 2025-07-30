@@ -233,16 +233,16 @@ $ ruby examples/stdio_server.rb
 
 ## MCP Client
 
-The `ModelContextProtocol::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+The `MCP::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
 
 **Note:** The client HTTP transport requires the `faraday` gem. Add `gem 'faraday', '>= 2.0'` to your Gemfile if you plan to use the client HTTP transport functionality.
 
 ### HTTP Client
 
-The `ModelContextProtocol::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
+The `MCP::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
 
 ```ruby
-client = ModelContextProtocol::Client::Http.new(url: "https://api.example.com/mcp")
+client = MCP::Client::Http.new(url: "https://api.example.com/mcp")
 
 # List available tools
 tools = client.tools
@@ -271,7 +271,7 @@ The HTTP client supports:
 By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
 
 ```ruby
-client = ModelContextProtocol::Client::Http.new(
+client = MCP::Client::Http.new(
   url: "https://api.example.com/mcp",
   headers: {
     "Authorization" => "Bearer my_token"
@@ -287,8 +287,8 @@ You can add any custom headers needed for your authentication scheme. The client
 
 The client provides wrapper objects for tools returned by the server:
 
-- `ModelContextProtocol::Client::Tool` - Represents a single tool with its metadata
-- `ModelContextProtocol::Client::Tools` - Collection of tools with enumerable functionality
+- `MCP::Client::Tool` - Represents a single tool with its metadata
+- `MCP::Client::Tools` - Collection of tools with enumerable functionality
 
 These objects provide easy access to tool properties like name, description, and input schema.
 
