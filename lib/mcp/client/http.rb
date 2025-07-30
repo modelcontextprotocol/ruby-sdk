@@ -14,13 +14,13 @@ module MCP
       end
 
       def tools
-        response = make_request(method: "tools/list").body
+        response = send_request(method: "tools/list").body
 
         ::MCP::Client::Tools.new(response)
       end
 
       def call_tool(tool:, input:)
-        response = make_request(
+        response = send_request(
           method: "tools/call",
           params: { name: tool.name, arguments: input },
         ).body
@@ -52,7 +52,7 @@ module MCP
           "Add it to your Gemfile: gem 'faraday', '>= 2.0'"
       end
 
-      def make_request(method:, params: nil)
+      def send_request(method:, params: nil)
         client.post(
           "",
           {
