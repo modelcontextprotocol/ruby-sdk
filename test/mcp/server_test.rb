@@ -164,7 +164,7 @@ module MCP
       assert_kind_of Array, result[:tools]
       assert_equal "test_tool", result[:tools][0][:name]
       assert_equal "Test tool", result[:tools][0][:description]
-      assert_empty(result[:tools][0][:inputSchema])
+      assert_equal({ type: "object" }, result[:tools][0][:inputSchema])
       assert_instrumentation_data({ method: "tools/list" })
     end
 

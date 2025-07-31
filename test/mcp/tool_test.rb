@@ -26,7 +26,7 @@ module MCP
 
     test "#to_h returns a hash with name, description, and inputSchema" do
       tool = Tool.define(name: "mock_tool", description: "a mock tool for testing")
-      assert_equal tool.to_h, { name: "mock_tool", description: "a mock tool for testing", inputSchema: {} }
+      assert_equal tool.to_h, { name: "mock_tool", description: "a mock tool for testing", inputSchema: { type: "object" } }
     end
 
     test "#to_h includes annotations when present" do
@@ -71,6 +71,15 @@ module MCP
       assert_equal tool.tool_name, "default_name_tool"
     end
 
+    test "input schema defaults to an empty hash" do
+      class NoInputSchemaTool < Tool; end
+
+      tool = NoInputSchemaTool
+
+      expected = { type: "object" }
+      assert_equal expected, tool.input_schema.to_h
+    end
+
     test "accepts input schema as an InputSchema object" do
       class InputSchemaTool < Tool
         input_schema InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
@@ -106,7 +115,7 @@ module MCP
 
       assert_equal tool.name_value, "mock_tool"
       assert_equal tool.description, "a mock tool for testing"
-      assert_equal tool.input_schema, nil
+      assert_equal tool.input_schema, Tool::InputSchema.new
     end
 
     test ".define allows definition of tools with annotations" do
@@ -123,7 +132,7 @@ module MCP
 
       assert_equal tool.name_value, "mock_tool"
       assert_equal tool.description, "a mock tool for testing"
-      assert_equal tool.input_schema, nil
+      assert_equal tool.input_schema, Tool::InputSchema.new
       assert_equal tool.annotations_value.to_h, { title: "Mock Tool", readOnlyHint: true }
     end
 

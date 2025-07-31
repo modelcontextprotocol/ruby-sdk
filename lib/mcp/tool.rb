@@ -6,7 +6,6 @@ module MCP
       NOT_SET = Object.new
 
       attr_reader :description_value
-      attr_reader :input_schema_value
       attr_reader :annotations_value
 
       def call(*args, server_context: nil)
@@ -41,6 +40,10 @@ module MCP
 
       def name_value
         @name_value || StringUtils.handle_from_class_name(name)
+      end
+
+      def input_schema_value
+        @input_schema_value || InputSchema.new
       end
 
       def description(value = NOT_SET)

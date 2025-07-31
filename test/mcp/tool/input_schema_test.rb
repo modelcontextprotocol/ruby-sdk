@@ -79,6 +79,21 @@ module MCP
           InputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: [:foo])
         end
       end
+
+      test "== compares two input schemas with the same properties and required fields" do
+        schema1 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema2 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        assert_equal schema1, schema2
+
+        schema3 = InputSchema.new(properties: { bar: { type: "string" } }, required: [:bar])
+        refute_equal schema1, schema3
+
+        schema4 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:bar])
+        refute_equal schema1, schema4
+
+        schema5 = InputSchema.new(properties: { bar: { type: "string" } }, required: [:foo])
+        refute_equal schema1, schema5
+      end
     end
   end
 end
