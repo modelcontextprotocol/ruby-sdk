@@ -10,6 +10,18 @@ Add this line to your application's Gemfile:
 gem 'mcp'
 ```
 
+And then execute:
+
+```console
+$ bundle install
+```
+
+Or install it yourself as:
+
+```console
+$ gem install mcp
+```
+
 You may need to add additional dependencies depending on which features you wish to access.
 
 ## Building an MCP Server
