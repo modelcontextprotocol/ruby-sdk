@@ -29,4 +29,6 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency("json_rpc_handler", "~> 0.1")
   spec.add_dependency("json-schema", ">= 4.1")
+
+  # Faraday is required for the client HTTP transport layer
 end

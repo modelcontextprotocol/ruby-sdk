@@ -22,7 +22,9 @@ Or install it yourself as:
 $ gem install mcp
 ```
 
-## MCP Server
+You may need to add additional dependencies depending on which features you wish to access.
+
+## Building an MCP Server
 
 The `MCP::Server` class is the core component that handles JSON-RPC requests and responses.
 It implements the Model Context Protocol specification, handling model context requests and responses.
@@ -216,7 +218,7 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 ```
 
-## Configuration
+### Configuration
 
 The gem can be configured using the `MCP.configure` block:
 
@@ -362,7 +364,7 @@ When an exception occurs:
 
 If no exception reporter is configured, a default no-op reporter is used that silently ignores exceptions.
 
-## Tools
+### Tools
 
 MCP spec includes [Tools](https://modelcontextprotocol.io/docs/concepts/tools) which provide functionality to LLM apps.
 
@@ -425,7 +427,7 @@ Tools can include annotations that provide additional metadata about their behav
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
 
-## Prompts
+### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/docs/concepts/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
@@ -548,7 +550,7 @@ The data contains the following keys:
 `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
 This is to avoid potential issues with metric cardinality
 
-## Resources
+### Resources
 
 MCP spec includes [Resources](https://modelcontextprotocol.io/docs/concepts/resources)
 
@@ -582,6 +584,74 @@ end
 ```
 
 otherwise `resources/read` requests will be a no-op.
+
+## Building an MCP Client
+
+The `MCP::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+
+**Note:** The client HTTP transport requires the `faraday` gem. Add `gem 'faraday', '>= 2.0'` to your Gemfile if you plan to use the client HTTP transport functionality.
+
+### HTTP Transport Layer
+
+You'll need to add `faraday` as a dependency to use the HTTP transport layer.
+
+```ruby
+gem 'mcp'
+gem 'faraday', '>= 2.0'
+```
+
+The `MCP::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
+
+```ruby
+client = MCP::Client::Http.new(url: "https://api.example.com/mcp")
+
+# List available tools
+tools = client.tools
+tools.each do |tool|
+  puts "Tool: #{tool.name}"
+  puts "Description: #{tool.description}"
+  puts "Input Schema: #{tool.input_schema}"
+end
+
+# Call a specific tool
+response = client.call_tool(
+  tool: tools.first,
+  input: { message: "Hello, world!" }
+)
+```
+
+The HTTP client supports:
+- Tool listing via the `tools/list` method
+- Tool invocation via the `tools/call` method
+- Automatic JSON-RPC 2.0 message formatting
+- UUID v7 request ID generation
+- Setting headers for things like authorization
+
+#### HTTP Authorization
+
+By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
+
+```ruby
+client = MCP::Client::Http.new(
+  url: "https://api.example.com/mcp",
+  headers: {
+    "Authorization" => "Bearer my_token"
+  }
+)
+
+client.tools # will make the call using Bearer auth
+```
+
+You can add any custom headers needed for your authentication scheme. The client will include these headers in all requests.
+
+### Tool Objects
+
+The client provides wrapper objects for tools returned by the server:
+
+- `MCP::Client::Tool` - Represents a single tool with its metadata
+- `MCP::Client::Tools` - Collection of tools with enumerable functionality
+
+These objects provide easy access to tool properties like name, description, and input schema.
 
 ## Releases
 
