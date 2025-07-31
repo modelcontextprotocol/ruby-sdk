@@ -126,12 +126,19 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 - **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
 - **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
+- **Stateless Streamable HTTP**: Notifications are not supported and all calls are request/response interactions; allows for easy multi-node deployment.
 
 #### Usage Example
 
 ```ruby
 server = MCP::Server.new(name: "my_server")
+
+# Default Streamable HTTP - session oriented
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+# OR Stateless Streamable HTTP - session-less
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+
 server.transport = transport
 
 # When tools change, notify clients
