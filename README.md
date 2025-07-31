@@ -206,7 +206,7 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 ```
 
-## Configuration
+### Configuration
 
 The gem can be configured using the `MCP.configure` block:
 
@@ -352,7 +352,7 @@ When an exception occurs:
 
 If no exception reporter is configured, a default no-op reporter is used that silently ignores exceptions.
 
-## Tools
+### Tools
 
 MCP spec includes [Tools](https://modelcontextprotocol.io/docs/concepts/tools) which provide functionality to LLM apps.
 
@@ -415,7 +415,7 @@ Tools can include annotations that provide additional metadata about their behav
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
 
-## Prompts
+### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/docs/concepts/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
@@ -538,7 +538,7 @@ The data contains the following keys:
 `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
 This is to avoid potential issues with metric cardinality
 
-## Resources
+### Resources
 
 MCP spec includes [Resources](https://modelcontextprotocol.io/docs/concepts/resources)
 
