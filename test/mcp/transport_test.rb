@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "mcp/server"
-require "mcp/transport"
 
 module MCP
   class TransportTest < ActiveSupport::TestCase

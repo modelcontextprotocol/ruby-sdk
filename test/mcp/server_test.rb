@@ -2,8 +2,6 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "json"
-require "debug"
 
 module MCP
   class ServerTest < ActiveSupport::TestCase

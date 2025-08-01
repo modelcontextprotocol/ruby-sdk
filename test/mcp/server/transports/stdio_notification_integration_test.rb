@@ -1,9 +1,6 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "json"
-require "mcp/server"
-require "mcp/server/transports/stdio_transport"
 
 module MCP
   class Server
