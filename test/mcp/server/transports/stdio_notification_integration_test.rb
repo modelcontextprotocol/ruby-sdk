@@ -79,8 +79,12 @@ module MCP
           # Test resources notification
           @server.notify_resources_list_changed
 
+          # Test log notification
+          @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
+          @server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
+
           # Check the notifications were sent
-          assert_equal 3, @mock_stdout.output.size
+          assert_equal 4, @mock_stdout.output.size
 
           # Parse and verify each notification
           notifications = @mock_stdout.output.map { |msg| JSON.parse(msg) }
@@ -96,6 +100,10 @@ module MCP
           assert_equal "2.0", notifications[2]["jsonrpc"]
           assert_equal Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED, notifications[2]["method"]
           assert_nil notifications[2]["params"]
+
+          assert_equal "2.0", notifications[3]["jsonrpc"]
+          assert_equal Methods::NOTIFICATIONS_MESSAGE, notifications[3]["method"]
+          assert_equal({ "level" => "error", "data" => { "error" => "Connection Failed" } }, notifications[3]["params"])
         end
 
         test "notifications include params when provided" do
@@ -120,6 +128,7 @@ module MCP
             @server.notify_tools_list_changed
             @server.notify_prompts_list_changed
             @server.notify_resources_list_changed
+            @server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
           end
         end
 
@@ -240,6 +249,16 @@ module MCP
           assert_equal 2, @mock_stdout.output.size
           second_notification = JSON.parse(@mock_stdout.output.last)
           assert_equal Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED, second_notification["method"]
+
+          # Set log level and notify
+          @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
+
+          # Manually trigger notification
+          @server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
+          assert_equal 3, @mock_stdout.output.size
+          third_notification = JSON.parse(@mock_stdout.output.last)
+          assert_equal Methods::NOTIFICATIONS_MESSAGE, third_notification["method"]
+          assert_equal({ "data" => { "error" => "Connection Failed" }, "level" => "error" }, third_notification["params"])
         end
       end
     end
