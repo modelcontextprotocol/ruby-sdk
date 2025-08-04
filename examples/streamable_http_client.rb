@@ -123,6 +123,10 @@ def main
     exit(1)
   end
 
+  if init_response[:body].dig("result", "capabilities", "logging")
+    make_request(session_id, "logging/setLevel", { level: "info" })
+  end
+
   logger.info("Session initialized: #{session_id}")
   logger.info("Server info: #{init_response[:body]["result"]["serverInfo"]}")
 

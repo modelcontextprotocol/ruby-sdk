@@ -109,6 +109,7 @@ app = proc do |env|
         mcp_logger.error("Response error: #{parsed_response["error"]["message"]}")
       elsif parsed_response["accepted"]
         # Response was sent via SSE
+        server.notify_log_message(data: { details: "Response accepted and sent via SSE" }, level: "info")
         sse_logger.info("Response sent via SSE stream")
       else
         mcp_logger.info("Response: success (id: #{parsed_response["id"]})")
