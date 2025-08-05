@@ -1,22 +1,25 @@
 # frozen_string_literal: true
 
 module MCP
-  module Client
-    class Http
-      DEFAULT_VERSION = "0.1.0"
+  class Client
+    class HTTP
+      attr_reader :url
 
-      attr_reader :url, :version
-
-      def initialize(url:, version: DEFAULT_VERSION, headers: {})
+      def initialize(url:, headers: {})
         @url = url
-        @version = version
         @headers = headers
       end
 
       def tools
         response = send_request(method: "tools/list").body
 
-        ::MCP::Client::Tools.new(response)
+        response.dig("result", "tools")&.map do |tool|
+          Tool.new(
+            name: tool["name"],
+            description: tool["description"],
+            input_schema: tool["inputSchema"],
+          )
+        end || []
       end
 
       def call_tool(tool:, input:)

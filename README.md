@@ -603,7 +603,7 @@ gem 'faraday', '>= 2.0'
 The `MCP::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
 
 ```ruby
-client = MCP::Client::Http.new(url: "https://api.example.com/mcp")
+client = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 
 # List available tools
 tools = client.tools
@@ -632,7 +632,7 @@ The HTTP client supports:
 By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
 
 ```ruby
-client = MCP::Client::Http.new(
+client = MCP::Client::HTTP.new(
   url: "https://api.example.com/mcp",
   headers: {
     "Authorization" => "Bearer my_token"
@@ -646,12 +646,11 @@ You can add any custom headers needed for your authentication scheme. The client
 
 ### Tool Objects
 
-The client provides wrapper objects for tools returned by the server:
+The client provides a wrapper class for tools returned by the server:
 
 - `MCP::Client::Tool` - Represents a single tool with its metadata
-- `MCP::Client::Tools` - Collection of tools with enumerable functionality
 
-These objects provide easy access to tool properties like name, description, and input schema.
+This class provide easy access to tool properties like name, description, and input schema.
 
 ## Releases
 

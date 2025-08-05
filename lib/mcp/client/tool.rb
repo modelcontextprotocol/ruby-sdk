@@ -2,24 +2,14 @@
 # frozen_string_literal: true
 
 module MCP
-  module Client
+  class Client
     class Tool
-      attr_reader :payload
+      attr_reader :name, :description, :input_schema
 
-      def initialize(payload)
-        @payload = payload
-      end
-
-      def name
-        payload["name"]
-      end
-
-      def description
-        payload["description"]
-      end
-
-      def input_schema
-        payload["inputSchema"]
+      def initialize(name:, description:, input_schema:)
+        @name = name
+        @description = description
+        @input_schema = input_schema
       end
     end
   end
