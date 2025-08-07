@@ -72,7 +72,7 @@ module MCP
       )
     end
 
-    # https://spec.MCP.io/specification/2025-03-26/basic/utilities/ping/#behavior-requirements
+    # https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/ping#behavior-requirements
     test "#handle ping request returns empty response" do
       request = {
         jsonrpc: "2.0",
