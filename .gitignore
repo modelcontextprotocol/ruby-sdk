@@ -8,3 +8,6 @@
 /spec/reports/
 /tmp/
 Gemfile.lock
+
+# Mac stuff
+.DS_Store
