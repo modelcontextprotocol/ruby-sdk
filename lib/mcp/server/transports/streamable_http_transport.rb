@@ -108,6 +108,8 @@ module MCP
 
           if body["method"] == "initialize"
             handle_initialization(body_string, body)
+          elsif body["method"] == MCP::Methods::NOTIFICATIONS_INITIALIZED
+            handle_notification_initialized
           else
             handle_regular_request(body_string, session_id)
           end
@@ -183,6 +185,10 @@ module MCP
           }
 
           [200, headers, [response]]
+        end
+
+        def handle_notification_initialized
+          [202, {}, []]
         end
 
         def handle_regular_request(body_string, session_id)

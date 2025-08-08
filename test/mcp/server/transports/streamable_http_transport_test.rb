@@ -595,6 +595,33 @@ module MCP
           assert_equal "Internal server error", body["error"]
         end
 
+        test "POST notifications/initialized returns 202 with no body" do
+          # Create a session first (optional for notification, but keep consistent with flow)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          notif_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: MCP::Methods::NOTIFICATIONS_INITIALIZED }.to_json,
+          )
+
+          response = @transport.handle_request(notif_request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)
