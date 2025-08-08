@@ -31,11 +31,12 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :name, :version, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :name, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
       name: "model_context_protocol",
       version: DEFAULT_VERSION,
+      instructions: nil,
       tools: [],
       prompts: [],
       resources: [],
@@ -47,6 +48,7 @@ module MCP
     )
       @name = name
       @version = version
+      @instructions = instructions
       @tools = tools.to_h { |t| [t.name_value, t] }
       @prompts = prompts.to_h { |p| [p.name_value, p] }
       @resources = resources
@@ -54,6 +56,12 @@ module MCP
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
       @configuration = MCP.configuration.merge(configuration)
+
+      if @configuration.protocol_version == "2024-11-05" && @instructions
+        message = "`instructions` supported by protocol version 2025-03-26 or higher"
+        raise ArgumentError, message
+      end
+
       @capabilities = capabilities || default_capabilities
 
       @handlers = {
@@ -218,7 +226,8 @@ module MCP
         protocolVersion: configuration.protocol_version,
         capabilities: capabilities,
         serverInfo: server_info,
-      }
+        instructions: instructions,
+      }.compact
     end
 
     def list_tools(request)

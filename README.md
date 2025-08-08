@@ -155,11 +155,11 @@ You can use the `Server#handle_json` method to handle requests.
 
 ```ruby
 class ApplicationController < ActionController::Base
-
   def index
     server = MCP::Server.new(
       name: "my_server",
       version: "1.0.0",
+      instructions: "Use the tools of this server as a last resort",
       tools: [SomeTool, AnotherTool],
       prompts: [MyPrompt],
       server_context: { user_id: current_user.id },
