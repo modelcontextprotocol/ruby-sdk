@@ -575,6 +575,126 @@ module MCP
           assert_equal "Method not allowed", body["error"]
         end
 
+        test "stateless mode allows requests without session IDs, responding with no session ID" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = stateless_transport.handle_request(init_request)
+          assert_nil init_response[1]["Mcp-Session-Id"]
+        end
+
+        test "stateless mode responds without any session ID when session ID is present" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => "unseen_session_id",
+            },
+            { jsonrpc: "2.0", method: "ping", id: "123" }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+          assert_equal 200, response[0]
+          assert_equal(
+            {
+              "Content-Type" => "application/json",
+            },
+            response[1],
+          )
+
+          body = JSON.parse(response[2][0])
+          assert_equal "2.0", body["jsonrpc"]
+          assert_equal "123", body["id"]
+        end
+
+        test "stateless mode responds with 405 when SSE is requested" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json,text/event-stream",
+            },
+          )
+          response = stateless_transport.handle_request(get_request)
+          assert_equal 405, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Method not allowed", body["error"]
+        end
+
+        test "stateless mode silently responds with success to session DELETE when session ID is not present" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            {},
+          )
+          response = stateless_transport.handle_request(delete_request)
+          assert_equal 200, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert body["success"]
+        end
+
+        test "stateless mode silently responds with success to session DELETE when session ID is provided" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => "session_id" },
+          )
+          response = stateless_transport.handle_request(delete_request)
+          assert_equal 200, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert body["success"]
+        end
+
+        test "stateless mode does not support server-sent events" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          assert_raises(RuntimeError, "Stateless mode does not support notifications") do
+            stateless_transport.send_notification(
+              "test_notification",
+              { message: "Hello" },
+              session_id: "some_session_id",
+            )
+          end
+        end
+
+        test "stateless mode responds with 202 when client sends a notification/initialized request" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "notifications/initialized" }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+          assert_equal 202, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = response[2][0]
+          assert body.blank?
+        end
+
         test "handle post request with a standard error" do
           request = create_rack_request(
             "POST",

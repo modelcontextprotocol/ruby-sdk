@@ -8,11 +8,13 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransport < Transport
-        def initialize(server)
-          super
+        def initialize(server, stateless: false)
+          super(server)
           # { session_id => { stream: stream_object }
           @sessions = {}
           @mutex = Mutex.new
+
+          @stateless = stateless
         end
 
         def handle_request(request)
@@ -24,7 +26,7 @@ module MCP
           when "DELETE"
             handle_delete(request)
           else
-            [405, { "Content-Type" => "application/json" }, [{ error: "Method not allowed" }.to_json]]
+            method_not_allowed_response
           end
         end
 
@@ -35,6 +37,9 @@ module MCP
         end
 
         def send_notification(method, params = nil, session_id: nil)
+          # Stateless mode doesn't support notifications
+          raise "Stateless mode does not support notifications" if @stateless
+
           notification = {
             jsonrpc: "2.0",
             method:,
@@ -117,6 +122,10 @@ module MCP
         end
 
         def handle_get(request)
+          if @stateless
+            return method_not_allowed_response
+          end
+
           session_id = extract_session_id(request)
 
           return missing_session_id_response unless session_id
@@ -126,6 +135,13 @@ module MCP
         end
 
         def handle_delete(request)
+          success_response = [200, { "Content-Type" => "application/json" }, [{ success: true }.to_json]]
+
+          if @stateless
+            # Stateless mode doesn't support sessions, so we can just return a success response
+            return success_response
+          end
+
           session_id = request.env["HTTP_MCP_SESSION_ID"]
 
           return [
@@ -135,7 +151,7 @@ module MCP
           ] unless session_id
 
           cleanup_session(session_id)
-          [200, { "Content-Type" => "application/json" }, [{ success: true }.to_json]]
+          success_response
         end
 
         def cleanup_session(session_id)
@@ -167,38 +183,54 @@ module MCP
         end
 
         def handle_initialization(body_string, body)
-          session_id = SecureRandom.uuid
+          session_id = nil
 
-          @mutex.synchronize do
-            @sessions[session_id] = {
-              stream: nil,
-            }
+          unless @stateless
+            session_id = SecureRandom.uuid
+
+            @mutex.synchronize do
+              @sessions[session_id] = {
+                stream: nil,
+              }
+            end
           end
 
           response = @server.handle_json(body_string)
 
           headers = {
             "Content-Type" => "application/json",
-            "Mcp-Session-Id" => session_id,
           }
+
+          headers["Mcp-Session-Id"] = session_id if session_id
 
           [200, headers, [response]]
         end
 
         def handle_regular_request(body_string, session_id)
-          # If session ID is provided, but not in the sessions hash, return an error
-          if session_id && !@sessions.key?(session_id)
-            return [400, { "Content-Type" => "application/json" }, [{ error: "Invalid session ID" }.to_json]]
+          unless @stateless
+            # If session ID is provided, but not in the sessions hash, return an error
+            if session_id && !@sessions.key?(session_id)
+              return [400, { "Content-Type" => "application/json" }, [{ error: "Invalid session ID" }.to_json]]
+            end
           end
 
           response = @server.handle_json(body_string)
+
+          # Stream can be nil since stateless mode doesn't retain streams
           stream = get_session_stream(session_id) if session_id
 
           if stream
             send_response_to_stream(stream, response, session_id)
+          elsif response.nil? && notification_request?(body_string)
+            [202, { "Content-Type" => "application/json" }, [response]]
           else
             [200, { "Content-Type" => "application/json" }, [response]]
           end
+        end
+
+        def notification_request?(body_string)
+          body = parse_request_body(body_string)
+          body.is_a?(Hash) && body["method"].start_with?("notifications/")
         end
 
         def get_session_stream(session_id)
@@ -220,6 +252,10 @@ module MCP
 
         def session_exists?(session_id)
           @mutex.synchronize { @sessions.key?(session_id) }
+        end
+
+        def method_not_allowed_response
+          [405, { "Content-Type" => "application/json" }, [{ error: "Method not allowed" }.to_json]]
         end
 
         def missing_session_id_response
