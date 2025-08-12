@@ -129,6 +129,7 @@ module MCP
             prompts: { listChanged: true },
             resources: { listChanged: true },
             tools: { listChanged: true },
+            logging: {},
           },
           serverInfo: {
             name: @server_name,
