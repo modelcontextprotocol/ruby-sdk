@@ -45,7 +45,7 @@ module MCP
       tool = TestTool
       response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
-      assert_equal response.is_error, false
+      refute response.error?
     end
 
     test "allows declarative definition of tools as classes" do
@@ -250,7 +250,7 @@ module MCP
       tool = TypedTestTool
       response = tool.call(message: "test")
       assert_equal response.content, [{ type: "text", content: "OK" }]
-      assert_equal response.is_error, false
+      refute response.error?
     end
 
     class TestToolWithoutServerContext < Tool
