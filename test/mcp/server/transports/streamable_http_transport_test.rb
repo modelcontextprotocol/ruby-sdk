@@ -666,13 +666,15 @@ module MCP
         test "stateless mode does not support server-sent events" do
           stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
 
-          assert_raises(RuntimeError, "Stateless mode does not support notifications") do
+          e = assert_raises(RuntimeError) do
             stateless_transport.send_notification(
               "test_notification",
               { message: "Hello" },
               session_id: "some_session_id",
             )
           end
+
+          assert_equal("Stateless mode does not support notifications", e.message)
         end
 
         test "stateless mode responds with 202 when client sends a notification/initialized request" do
