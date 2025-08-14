@@ -25,6 +25,7 @@ module MCP
     attr_reader :transport
 
     # Returns the list of tools available from the server.
+    # Each call will make a new request – the result is not cached.
     #
     # @return [Array<MCP::Client::Tool>] An array of available tools.
     #
@@ -34,7 +35,7 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      @tools ||= transport.tools
+      transport.tools
     end
 
     # Calls a tool via the transport layer.

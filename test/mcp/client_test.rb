@@ -4,7 +4,7 @@ require "test_helper"
 
 module MCP
   class ClientTest < Minitest::Test
-    def test_tools_delegates_to_transport_and_caches_result
+    def test_tools_delegates_to_transport
       transport = mock
       mock_tools = [
         MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {}),
@@ -12,7 +12,6 @@ module MCP
       ]
       transport.expects(:tools).returns(mock_tools).once
       client = Client.new(transport: transport)
-      assert_equal(mock_tools, client.tools)
       assert_equal(mock_tools, client.tools)
     end
 
