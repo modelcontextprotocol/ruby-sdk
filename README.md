@@ -667,7 +667,7 @@ client = MCP::Client.new(transport: http_transport)
 client.tools # will make the call using Bearer auth
 ```
 
-You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every requests.
+You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every request.
 
 ### Tool Objects
 
