@@ -37,13 +37,12 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      request = {
+      response = transport.send_request(request: {
         jsonrpc: JSON_RPC_VERSION,
         id: request_id,
         method: "tools/list",
-      }
+      })
 
-      response = transport.send_request(request: request)
       response.dig("result", "tools")&.map do |tool|
         Tool.new(
           name: tool["name"],
@@ -67,14 +66,13 @@ module MCP
     #   The exact requirements for `input` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(tool:, input: nil)
-      request = {
+      response = transport.send_request(request: {
         jsonrpc: JSON_RPC_VERSION,
         id: request_id,
         method: "tools/call",
         params: { name: tool.name, arguments: input },
-      }
+      })
 
-      response = transport.send_request(request: request)
       response.dig("result", "content")
     end
 
