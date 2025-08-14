@@ -19,8 +19,7 @@ module MCP
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
         args.dig(:request, :method) == "tools/list" &&
-          args.dig(:request, :jsonrpc) == "2.0" &&
-          args.dig(:request, :mcp, :method) == "tools/list"
+          args.dig(:request, :jsonrpc) == "2.0"
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)

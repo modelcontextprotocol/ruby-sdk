@@ -41,11 +41,6 @@ module MCP
         jsonrpc: JSON_RPC_VERSION,
         id: request_id,
         method: "tools/list",
-        mcp: {
-          jsonrpc: JSON_RPC_VERSION,
-          id: request_id,
-          method: "tools/list",
-        }.compact,
       }
 
       response = transport.send_request(request: request)
@@ -77,12 +72,6 @@ module MCP
         id: request_id,
         method: "tools/call",
         params: { name: tool.name, arguments: input },
-        mcp: {
-          jsonrpc: JSON_RPC_VERSION,
-          id: request_id,
-          method: "tools/call",
-          params: { name: tool.name, arguments: input },
-        }.compact,
       }
 
       response = transport.send_request(request: request)
