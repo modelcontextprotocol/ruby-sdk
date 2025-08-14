@@ -620,7 +620,7 @@ The HTTP client supports:
 - Tool listing via the `tools/list` method
 - Tool invocation via the `tools/call` method
 - Automatic JSON-RPC 2.0 message formatting
-- UUID v7 request ID generation
+- UUID request ID generation
 - Setting headers for things like authorization
 
 You'll need to add `faraday` as a dependency in order to use the HTTP transport layer:
