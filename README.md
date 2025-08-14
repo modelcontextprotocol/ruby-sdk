@@ -599,9 +599,9 @@ class CustomTransport
   # Sends a JSON-RPC request to the server and returns the raw response
   #
   # @param request [Hash] A complete JSON-RPC request object.
-  # https://www.jsonrpc.org/specification#request_object
-  # @return [Hash] A hash modeling a JSON-RPC response object:
-  # https://www.jsonrpc.org/specification#response_object
+  #     https://www.jsonrpc.org/specification#request_object
+  # @return [Hash] A hash modeling a JSON-RPC response object.
+  #     https://www.jsonrpc.org/specification#response_object
   def send_request(request:)
     # Your transport-specific logic here
     # - HTTP: POST to endpoint with JSON body
