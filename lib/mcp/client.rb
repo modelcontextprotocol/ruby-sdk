@@ -92,7 +92,7 @@ module MCP
     private
 
     def request_id
-      SecureRandom.uuid_v7
+      SecureRandom.uuid
     end
 
     class RequestHandlerError < StandardError
