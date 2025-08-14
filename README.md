@@ -588,25 +588,29 @@ otherwise `resources/read` requests will be a no-op.
 ## Building an MCP Client
 
 The `MCP::Client` class provides an interface for interacting with MCP servers.
-Clients are initialized with a transport layer instance that instructs them how to interact with the server.
+Clients are initialized with a transport layer instance that handles the low-level communication mechanics.
+
+## Transport Layer Interface
 
 If the transport layer you need is not included in the gem, you can build and pass your own instances so long as they conform to the following interface:
 
 ```ruby
 class CustomTransport
-  def tools
-    # Must return Array<MCP::Client::Tool>
-  end
-
-  def call_tool(tool:, input:)
-    # tool: MCP::Client::Tool
-    # input: Hash - the arguments to pass to the tool
-    # Returns: Hash - the content from the response (typically response.dig("result", "content"))
+  # Sends a JSON-RPC request to the server and returns the raw response
+  #
+  # @param request [Hash] A complete JSON-RPC request object.
+  # https://www.jsonrpc.org/specification#request_object
+  # @return [Hash] A hash modeling a JSON-RPC response object:
+  # https://www.jsonrpc.org/specification#response_object
+  def send_request(request:)
+    # Your transport-specific logic here
+    # - HTTP: POST to endpoint with JSON body
+    # - WebSocket: Send message over WebSocket
+    # - stdio: Write to stdout, read from stdin
+    # - etc.
   end
 end
 ```
-
-**Note:** We strongly recommend returning `MCP::Client::Tool` instances rather than custom tool objects with the same interface, as this ensures compatibility with future SDK features and provides a consistent interface.
 
 ### HTTP Transport Layer
 
@@ -685,3 +689,4 @@ Releases are triggered by PRs to the `main` branch updating the version number i
 1. **Merge your PR to the main branch** - This will automatically trigger the release workflow via GitHub Actions
 
 When changes are merged to the `main` branch, the GitHub Actions workflow (`.github/workflows/release.yml`) is triggered and the gem is published to RubyGems.
+

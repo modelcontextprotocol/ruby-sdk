@@ -11,17 +11,6 @@ require "mcp/client"
 module MCP
   class Client
     class HTTPTest < Minitest::Test
-      # def test_initialization_with_default_version
-      #   assert_equal("0.1.0", client.version)
-      #   assert_equal(url, client.url)
-      # end
-
-      # def test_initialization_with_custom_version
-      #   custom_version = "1.2.3"
-      #   client = HTTP.new(url: url, version: custom_version)
-      #   assert_equal(custom_version, client.version)
-      # end
-
       def test_raises_load_error_when_faraday_not_available
         client = HTTP.new(url: url)
 
@@ -29,9 +18,8 @@ module MCP
         HTTP.any_instance.stubs(:require).with("faraday").raises(LoadError, "cannot load such file -- faraday")
 
         error = assert_raises(LoadError) do
-          # I picked #tools arbitrarily.
           # This should immediately try to instantiate the client and fail
-          client.tools
+          client.send_request(request: {})
         end
 
         assert_includes(error.message, "The 'faraday' gem is required to use the MCP client HTTP transport")
@@ -41,7 +29,12 @@ module MCP
       def test_headers_are_added_to_the_request
         headers = { "Authorization" => "Bearer token" }
         client = HTTP.new(url: url, headers: headers)
-        client.stubs(:request_id).returns(mock_request_id)
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
           .with(
@@ -49,16 +42,7 @@ module MCP
               "Authorization" => "Bearer token",
               "Content-Type" => "application/json",
             },
-            body: {
-              method: "tools/list",
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              mcp: {
-                method: "tools/list",
-                jsonrpc: "2.0",
-                id: mock_request_id,
-              },
-            },
+            body: request.to_json,
           )
           .to_return(
             status: 200,
@@ -68,411 +52,147 @@ module MCP
 
         # The test passes if the request is made with the correct headers
         # If headers are wrong, the stub_request won't match and will raise
-        client.tools
+        client.send_request(request: request)
       end
 
-      def test_tools_returns_tools_instance
+      def test_send_request_returns_faraday_response
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
         stub_request(:post, url)
-          .with(
-            body: {
-              method: "tools/list",
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              mcp: {
-                method: "tools/list",
-                jsonrpc: "2.0",
-                id: mock_request_id,
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(
             status: 200,
-            headers: {
-              "Content-Type" => "application/json",
-            },
-            body: {
-              result: {
-                tools: [
-                  {
-                    name: "test_tool",
-                    description: "A test tool",
-                    inputSchema: {
-                      type: "object",
-                      properties: {},
-                    },
-                  },
-                ],
-              },
-            }.to_json,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
           )
 
-        tools = client.tools
-        assert_instance_of(Array, tools)
-        assert_equal(1, tools.count)
-        assert_equal("test_tool", tools.first.name)
+        response = client.send_request(request: request)
+        assert_instance_of(Hash, response)
+        assert_equal({ "result" => { "tools" => [] } }, response)
       end
 
-      def test_call_tool_returns_tool_response
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_bad_request_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
-          .to_return(
-            status: 200,
-            headers: {
-              "Content-Type" => "application/json",
-            },
-            body: {
-              result: {
-                content: [
-                  {
-                    text: "Tool response",
-                  },
-                  {
-                    custom_property: "woah, something different",
-                  },
-                ],
-              },
-            }.to_json,
-          )
-
-        response = client.call_tool(tool: tool, input: input)
-        assert_equal(2, response.size)
-        assert_equal("Tool response", response.dig(0, "text"))
-        assert_equal("woah, something different", response.dig(1, "custom_property"))
-      end
-
-      def test_call_tool_handles_empty_response
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
-
-        stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
-          .to_return(
-            status: 200,
-            headers: {
-              "Content-Type" => "application/json",
-            },
-            body: {
-              result: {
-                content: [],
-              },
-            }.to_json,
-          )
-
-        response = client.call_tool(tool: tool, input: input)
-        assert_empty(response)
-      end
-
-      def test_raises_bad_request_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
-
-        stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 400)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("The tools/call request is invalid", error.message)
+        assert_equal("The tools/list request is invalid", error.message)
         assert_equal(:bad_request, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_raises_unauthorized_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_unauthorized_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 401)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("You are unauthorized to make tools/call requests", error.message)
+        assert_equal("You are unauthorized to make tools/list requests", error.message)
         assert_equal(:unauthorized, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_raises_forbidden_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_forbidden_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 403)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("You are forbidden to make tools/call requests", error.message)
+        assert_equal("You are forbidden to make tools/list requests", error.message)
         assert_equal(:forbidden, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_raises_not_found_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_not_found_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 404)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("The tools/call request is not found", error.message)
+        assert_equal("The tools/list request is not found", error.message)
         assert_equal(:not_found, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_raises_unprocessable_entity_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_unprocessable_entity_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 422)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("The tools/call request is unprocessable", error.message)
+        assert_equal("The tools/list request is unprocessable", error.message)
         assert_equal(:unprocessable_entity, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_raises_internal_error
-        tool = Tool.new(
-          name: "test_tool",
-          description: "A test tool",
-          input_schema: {
-            "type" => "object",
-            "properties" => {},
-          },
-        )
-        input = { "param" => "value" }
+      def test_send_request_raises_internal_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
 
         stub_request(:post, url)
-          .with(
-            body: {
-              jsonrpc: "2.0",
-              id: mock_request_id,
-              method: "tools/call",
-              params: {
-                name: "test_tool",
-                arguments: input,
-              },
-              mcp: {
-                jsonrpc: "2.0",
-                id: mock_request_id,
-                method: "tools/call",
-                params: {
-                  name: "test_tool",
-                  arguments: input,
-                },
-              },
-            },
-          )
+          .with(body: request.to_json)
           .to_return(status: 500)
 
         error = assert_raises(RequestHandlerError) do
-          client.call_tool(tool: tool, input: input)
+          client.send_request(request: request)
         end
 
-        assert_equal("Internal error handling tools/call request", error.message)
+        assert_equal("Internal error handling tools/list request", error.message)
         assert_equal(:internal_error, error.error_type)
-        assert_equal({ method: "tools/call", params: { name: "test_tool", arguments: input } }, error.request)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
       private
@@ -481,20 +201,12 @@ module MCP
         WebMock.stub_request(method, url)
       end
 
-      def mock_request_id
-        "random_request_id"
-      end
-
       def url
         "http://example.com"
       end
 
       def client
-        @client ||= begin
-          client = HTTP.new(url: url)
-          client.stubs(:request_id).returns(mock_request_id)
-          client
-        end
+        @client ||= HTTP.new(url: url)
       end
     end
   end

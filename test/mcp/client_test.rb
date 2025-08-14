@@ -4,23 +4,52 @@ require "test_helper"
 
 module MCP
   class ClientTest < Minitest::Test
-    def test_tools_delegates_to_transport
+    def test_tools_sends_request_to_transport_and_returns_tools_array
       transport = mock
-      mock_tools = [
-        MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {}),
-        MCP::Client::Tool.new(name: "tool2", description: "tool2", input_schema: {}),
-      ]
-      transport.expects(:tools).returns(mock_tools).once
+      mock_response = {
+        "result" => {
+          "tools" => [
+            { "name" => "tool1", "description" => "tool1", "inputSchema" => {} },
+            { "name" => "tool2", "description" => "tool2", "inputSchema" => {} },
+          ],
+        },
+      }
+
+      # Only checking for the essential parts of the request
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/list" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :mcp, :method) == "tools/list"
+      end.returns(mock_response).once
+
       client = Client.new(transport: transport)
-      assert_equal(mock_tools, client.tools)
+      tools = client.tools
+
+      assert_equal(2, tools.size)
+      assert_equal("tool1", tools.first.name)
+      assert_equal("tool2", tools.last.name)
     end
 
-    def test_call_tool_delegates_to_transport
+    def test_call_tool_sends_request_to_transport_and_returns_content
       transport = mock
       tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
-      transport.expects(:call_tool).with(tool: tool, input: { foo: "bar" }).returns("result")
+      input = { foo: "bar" }
+      mock_response = {
+        "result" => { "content" => "result" },
+      }
+
+      # Only checking for the essential parts of the request
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/call" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :params, :name) == "tool1" &&
+          args.dig(:request, :params, :arguments) == input
+      end.returns(mock_response).once
+
       client = Client.new(transport: transport)
-      assert_equal("result", client.call_tool(tool: tool, input: { foo: "bar" }))
+      result = client.call_tool(tool: tool, input: input)
+
+      assert_equal("result", result)
     end
   end
 end

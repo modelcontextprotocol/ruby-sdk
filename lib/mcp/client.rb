@@ -2,6 +2,8 @@
 
 module MCP
   class Client
+    JSON_RPC_VERSION = "2.0"
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
@@ -35,7 +37,25 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      transport.tools
+      request = {
+        jsonrpc: JSON_RPC_VERSION,
+        id: request_id,
+        method: "tools/list",
+        mcp: {
+          jsonrpc: JSON_RPC_VERSION,
+          id: request_id,
+          method: "tools/list",
+        }.compact,
+      }
+
+      response = transport.send_request(request: request)
+      response.dig("result", "tools")&.map do |tool|
+        Tool.new(
+          name: tool["name"],
+          description: tool["description"],
+          input_schema: tool["inputSchema"],
+        )
+      end || []
     end
 
     # Calls a tool via the transport layer.
@@ -52,7 +72,27 @@ module MCP
     #   The exact requirements for `input` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(tool:, input: nil)
-      transport.call_tool(tool: tool, input: input)
+      request = {
+        jsonrpc: JSON_RPC_VERSION,
+        id: request_id,
+        method: "tools/call",
+        params: { name: tool.name, arguments: input },
+        mcp: {
+          jsonrpc: JSON_RPC_VERSION,
+          id: request_id,
+          method: "tools/call",
+          params: { name: tool.name, arguments: input },
+        }.compact,
+      }
+
+      response = transport.send_request(request: request)
+      response.dig("result", "content")
+    end
+
+    private
+
+    def request_id
+      SecureRandom.uuid_v7
     end
 
     class RequestHandlerError < StandardError

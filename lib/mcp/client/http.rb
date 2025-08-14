@@ -10,62 +10,11 @@ module MCP
         @headers = headers
       end
 
-      def tools
-        response = send_request(method: "tools/list").body
+      def send_request(request:)
+        method = request[:method] || request["method"]
+        params = request[:params] || request["params"]
 
-        response.dig("result", "tools")&.map do |tool|
-          Tool.new(
-            name: tool["name"],
-            description: tool["description"],
-            input_schema: tool["inputSchema"],
-          )
-        end || []
-      end
-
-      def call_tool(tool:, input:)
-        response = send_request(
-          method: "tools/call",
-          params: { name: tool.name, arguments: input },
-        ).body
-
-        response.dig("result", "content")
-      end
-
-      private
-
-      attr_reader :headers
-
-      def client
-        require_faraday!
-        @client ||= Faraday.new(url) do |faraday|
-          faraday.request(:json)
-          faraday.response(:json)
-          faraday.response(:raise_error)
-
-          headers.each do |key, value|
-            faraday.headers[key] = value
-          end
-        end
-      end
-
-      def require_faraday!
-        require "faraday"
-      rescue LoadError
-        raise LoadError, "The 'faraday' gem is required to use the MCP client HTTP transport. " \
-          "Add it to your Gemfile: gem 'faraday', '>= 2.0'"
-      end
-
-      def send_request(method:, params: nil)
-        client.post(
-          "",
-          {
-            jsonrpc: "2.0",
-            id: request_id,
-            method:,
-            params:,
-            mcp: { jsonrpc: "2.0", id: request_id, method:, params: }.compact,
-          }.compact,
-        )
+        client.post("", request).body
       rescue Faraday::BadRequestError => e
         raise RequestHandlerError.new(
           "The #{method} request is invalid",
@@ -110,8 +59,28 @@ module MCP
         )
       end
 
-      def request_id
-        SecureRandom.uuid_v7
+      private
+
+      attr_reader :headers
+
+      def client
+        require_faraday!
+        @client ||= Faraday.new(url) do |faraday|
+          faraday.request(:json)
+          faraday.response(:json)
+          faraday.response(:raise_error)
+
+          headers.each do |key, value|
+            faraday.headers[key] = value
+          end
+        end
+      end
+
+      def require_faraday!
+        require "faraday"
+      rescue LoadError
+        raise LoadError, "The 'faraday' gem is required to use the MCP client HTTP transport. " \
+          "Add it to your Gemfile: gem 'faraday', '>= 2.0'"
       end
     end
   end
