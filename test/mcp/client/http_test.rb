@@ -2,7 +2,6 @@
 
 require "test_helper"
 require "faraday"
-require "securerandom"
 require "webmock/minitest"
 require "mcp/client/http"
 require "mcp/client/tool"
