@@ -587,23 +587,50 @@ otherwise `resources/read` requests will be a no-op.
 
 ## Building an MCP Client
 
-The `MCP::Client` module provides client implementations for interacting with MCP servers. Currently, it supports HTTP transport for making JSON-RPC requests to MCP servers.
+The `MCP::Client` class provides an interface for interacting with MCP servers.
+Clients are initialized with a transport layer instance that instructs them how to interact with the server.
 
-**Note:** The client HTTP transport requires the `faraday` gem. Add `gem 'faraday', '>= 2.0'` to your Gemfile if you plan to use the client HTTP transport functionality.
+If the transport layer you need is not included in the gem, you can build and pass your own instances so long as they conform to the following interface:
+
+```ruby
+class CustomTransport
+  def tools
+    # Must return Array<MCP::Client::Tool>
+  end
+
+  def call_tool(tool:, input:)
+    # tool: MCP::Client::Tool
+    # input: Hash - the arguments to pass to the tool
+    # Returns: Hash - the content from the response (typically response.dig("result", "content"))
+  end
+end
+```
+
+**Note:** We strongly recommend returning `MCP::Client::Tool` instances rather than custom tool objects with the same interface, as this ensures compatibility with future SDK features and provides a consistent interface.
 
 ### HTTP Transport Layer
 
-You'll need to add `faraday` as a dependency to use the HTTP transport layer.
+Use the `MCP::Client::Http` transport to interact with MCP servers using simple HTTP requests.
+
+The HTTP client supports:
+- Tool listing via the `tools/list` method
+- Tool invocation via the `tools/call` method
+- Automatic JSON-RPC 2.0 message formatting
+- UUID v7 request ID generation
+- Setting headers for things like authorization
+
+You'll need to add `faraday` as a dependency in order to use the HTTP transport layer:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
 ```
 
-The `MCP::Client::Http` class provides a simple HTTP client for interacting with MCP servers:
+Example usage:
 
 ```ruby
-client = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
+http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
+client = MCP::Client.new(transport: http_transport)
 
 # List available tools
 tools = client.tools
@@ -620,29 +647,23 @@ response = client.call_tool(
 )
 ```
 
-The HTTP client supports:
-- Tool listing via the `tools/list` method
-- Tool invocation via the `tools/call` method
-- Automatic JSON-RPC 2.0 message formatting
-- UUID v7 request ID generation
-- Setting headers for things like authorization
-
 #### HTTP Authorization
 
-By default, the HTTP client has no authentication, but it supports custom headers for authentication. For example, to use Bearer token authentication:
+By default, the HTTP transport layer provides no authentication to the server, but you can provide custom headers if you need authentication. For example, to use Bearer token authentication:
 
 ```ruby
-client = MCP::Client::HTTP.new(
+http_transport = MCP::Client::HTTP.new(
   url: "https://api.example.com/mcp",
   headers: {
     "Authorization" => "Bearer my_token"
   }
 )
 
+client = MCP::Client.new(transport: http_transport)
 client.tools # will make the call using Bearer auth
 ```
 
-You can add any custom headers needed for your authentication scheme. The client will include these headers in all requests.
+You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every requests.
 
 ### Tool Objects
 
