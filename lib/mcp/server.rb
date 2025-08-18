@@ -96,13 +96,13 @@ module MCP
       end
     end
 
-    def define_tool(name: nil, description: nil, input_schema: nil, annotations: nil, &block)
-      tool = Tool.define(name:, description:, input_schema:, annotations:, &block)
+    def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, &block)
+      tool = Tool.define(name:, title:, description:, input_schema:, annotations:, &block)
       @tools[tool.name_value] = tool
     end
 
-    def define_prompt(name: nil, description: nil, arguments: [], &block)
-      prompt = Prompt.define(name:, description:, arguments:, &block)
+    def define_prompt(name: nil, title: nil, description: nil, arguments: [], &block)
+      prompt = Prompt.define(name:, title:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
     end
 

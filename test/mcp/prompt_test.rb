@@ -111,6 +111,7 @@ module MCP
     test ".define allows definition of simple prompts with a block" do
       prompt = Prompt.define(
         name: "mock_prompt",
+        title: "Mock Prompt",
         description: "a mock prompt for testing",
         arguments: [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),

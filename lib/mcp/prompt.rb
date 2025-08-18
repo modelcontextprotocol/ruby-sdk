@@ -6,6 +6,7 @@ module MCP
     class << self
       NOT_SET = Object.new
 
+      attr_reader :title_value
       attr_reader :description_value
       attr_reader :arguments_value
 
@@ -14,12 +15,13 @@ module MCP
       end
 
       def to_h
-        { name: name_value, description: description_value, arguments: arguments_value.map(&:to_h) }.compact
+        { name: name_value, title: title_value, description: description_value, arguments: arguments_value.map(&:to_h) }.compact
       end
 
       def inherited(subclass)
         super
         subclass.instance_variable_set(:@name_value, nil)
+        subclass.instance_variable_set(:@title_value, nil)
         subclass.instance_variable_set(:@description_value, nil)
         subclass.instance_variable_set(:@arguments_value, nil)
       end
@@ -34,6 +36,14 @@ module MCP
 
       def name_value
         @name_value || StringUtils.handle_from_class_name(name)
+      end
+
+      def title(value = NOT_SET)
+        if value == NOT_SET
+          @title_value
+        else
+          @title_value = value
+        end
       end
 
       def description(value = NOT_SET)
@@ -52,9 +62,10 @@ module MCP
         end
       end
 
-      def define(name: nil, description: nil, arguments: [], &block)
+      def define(name: nil, title: nil, description: nil, arguments: [], &block)
         Class.new(self) do
           prompt_name name
+          title title
           description description
           arguments arguments
           define_singleton_method(:template) do |args, server_context: nil|

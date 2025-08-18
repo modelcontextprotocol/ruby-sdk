@@ -373,6 +373,7 @@ This gem provides a `MCP::Tool` class that can be used to create tools in two wa
 
 ```ruby
 class MyTool < MCP::Tool
+  title "My Tool"
   description "This tool performs specific functionality..."
   input_schema(
     properties: {
@@ -381,7 +382,6 @@ class MyTool < MCP::Tool
     required: ["message"]
   )
   annotations(
-    title: "My Tool",
     read_only_hint: true,
     destructive_hint: false,
     idempotent_hint: true,
@@ -401,9 +401,9 @@ tool = MyTool
 ```ruby
 tool = MCP::Tool.define(
   name: "my_tool",
+  title: "My Tool",
   description: "This tool performs specific functionality...",
   annotations: {
-    title: "My Tool",
     read_only_hint: true
   }
 ) do |args, server_context|
@@ -437,6 +437,7 @@ The `MCP::Prompt` class provides two ways to create prompts:
 ```ruby
 class MyPrompt < MCP::Prompt
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
+  title "My Prompt"
   description "This prompt performs specific functionality..."
   arguments [
     MCP::Prompt::Argument.new(
@@ -473,6 +474,7 @@ prompt = MyPrompt
 ```ruby
 prompt = MCP::Prompt.define(
   name: "my_prompt",
+  title: "My Prompt",
   description: "This prompt performs specific functionality...",
   arguments: [
     MCP::Prompt::Argument.new(
@@ -558,7 +560,8 @@ The `MCP::Resource` class provides a way to register resources with the server.
 ```ruby
 resource = MCP::Resource.new(
   uri: "https://example.com/my_resource",
-  name: "My Resource",
+  name: "my-resource",
+  title: "My Resource",
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
 )

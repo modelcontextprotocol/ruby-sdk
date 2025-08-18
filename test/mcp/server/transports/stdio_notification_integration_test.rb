@@ -226,7 +226,8 @@ module MCP
           @server.resources = [
             MCP::Resource.new(
               uri: "https://test_resource.invalid",
-              name: "Test Resource",
+              name: "test-resource",
+              title: "Test Resource",
               description: "A test resource",
               mime_type: "text/plain",
             ),
