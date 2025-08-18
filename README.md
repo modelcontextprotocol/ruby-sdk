@@ -108,9 +108,9 @@ The server supports sending notifications to clients when lists of tools, prompt
 
 The server provides three notification methods:
 
-- `notify_tools_list_changed()` - Send a notification when the tools list changes
-- `notify_prompts_list_changed()` - Send a notification when the prompts list changes
-- `notify_resources_list_changed()` - Send a notification when the resources list changes
+- `notify_tools_list_changed` - Send a notification when the tools list changes
+- `notify_prompts_list_changed` - Send a notification when the prompts list changes
+- `notify_resources_list_changed` - Send a notification when the resources list changes
 
 #### Notification Format
 
@@ -134,7 +134,7 @@ server.transport = transport
 
 # When tools change, notify clients
 server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
-server.notify_tools_list_changed()
+server.notify_tools_list_changed
 ```
 
 ### Unsupported Features ( to be implemented in future versions )
