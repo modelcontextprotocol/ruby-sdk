@@ -3,21 +3,23 @@
 
 module MCP
   class Resource
-    attr_reader :uri, :name, :description, :mime_type
+    attr_reader :uri, :name, :title, :description, :mime_type
 
-    def initialize(uri:, name:, description: nil, mime_type: nil)
+    def initialize(uri:, name:, title: nil, description: nil, mime_type: nil)
       @uri = uri
       @name = name
+      @title = title
       @description = description
       @mime_type = mime_type
     end
 
     def to_h
       {
-        uri: @uri,
-        name: @name,
-        description: @description,
-        mimeType: @mime_type,
+        uri: uri,
+        name: name,
+        title: title,
+        description: description,
+        mimeType: mime_type,
       }.compact
     end
   end

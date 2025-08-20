@@ -7,19 +7,24 @@ module MCP
   class ServerTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
     setup do
-      @tool = Tool.define(name: "test_tool", description: "Test tool")
+      @tool = Tool.define(
+        name: "test_tool",
+        title: "Test tool",
+        description: "A test tool",
+      )
 
       @tool_that_raises = Tool.define(
         name: "tool_that_raises",
-        description: "Tool that raises",
+        title: "Tool that raises",
+        description: "A tool that raises",
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
       ) { raise StandardError, "Tool error" }
 
       @tool_with_no_args = Tool.define(
         name: "tool_with_no_args",
+        title: "Tool with no args",
         description: "This tool performs specific functionality...",
         annotations: {
-          title: "Tool with no args",
           read_only_hint: true,
         },
       ) do
@@ -28,6 +33,7 @@ module MCP
 
       @prompt = Prompt.define(
         name: "test_prompt",
+        title: "Test Prompt",
         description: "Test prompt",
         arguments: [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
@@ -43,14 +49,16 @@ module MCP
 
       @resource = Resource.new(
         uri: "https://test_resource.invalid",
-        name: "Test resource",
+        name: "test-resource",
+        title: "Test Resource",
         description: "Test resource",
         mime_type: "text/plain",
       )
 
       @resource_template = ResourceTemplate.new(
         uri_template: "https://test_resource.invalid/{id}",
-        name: "Test resource",
+        name: "test-resource",
+        title: "Test Resource",
         description: "Test resource",
         mime_type: "text/plain",
       )
@@ -163,7 +171,8 @@ module MCP
       result = response[:result]
       assert_kind_of Array, result[:tools]
       assert_equal "test_tool", result[:tools][0][:name]
-      assert_equal "Test tool", result[:tools][0][:description]
+      assert_equal "Test tool", result[:tools][0][:title]
+      assert_equal "A test tool", result[:tools][0][:description]
       assert_equal({ type: "object" }, result[:tools][0][:inputSchema])
       assert_instrumentation_data({ method: "tools/list" })
     end
@@ -179,7 +188,8 @@ module MCP
       result = response[:result]
       assert_kind_of Array, result[:tools]
       assert_equal "test_tool", result[:tools][0][:name]
-      assert_equal "Test tool", result[:tools][0][:description]
+      assert_equal "Test tool", result[:tools][0][:title]
+      assert_equal "A test tool", result[:tools][0][:description]
     end
 
     test "#tools_list_handler sets the tools/list handler" do
@@ -224,7 +234,8 @@ module MCP
     test "#handle tools/call returns error if required tool arguments are missing" do
       tool_with_required_argument = Tool.define(
         name: "test_tool",
-        description: "Test tool",
+        title: "Test tool",
+        description: "A test tool",
         input_schema: { properties: { message: { type: "string" } }, required: ["message"] },
       ) do |message: nil|
         Tool::Response.new("success #{message}")
@@ -532,7 +543,7 @@ module MCP
 
     test "#resources_list_handler sets the resources/list handler" do
       @server.resources_list_handler do
-        [{ uri: "https://test_resource.invalid", name: "Test resource", description: "Test resource" }]
+        [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }]
       end
 
       request = {
@@ -543,7 +554,7 @@ module MCP
 
       response = @server.handle(request)
       assert_equal(
-        { resources: [{ uri: "https://test_resource.invalid", name: "Test resource", description: "Test resource" }] },
+        { resources: [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }] },
         response[:result],
       )
       assert_instrumentation_data({ method: "resources/list" })
