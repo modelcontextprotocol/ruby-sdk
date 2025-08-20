@@ -7,7 +7,6 @@ gemspec
 
 # Specify development dependencies below
 gem "minitest", "~> 5.1", require: false
-gem "minitest-reporters"
 gem "mocha"
 
 gem "rubocop-minitest", require: false
