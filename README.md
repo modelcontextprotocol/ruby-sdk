@@ -373,7 +373,7 @@ This gem provides a `MCP::Tool` class that can be used to create tools in two wa
 
 ```ruby
 class MyTool < MCP::Tool
-  title "My Tool"
+  title "My Tool" # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description "This tool performs specific functionality..."
   input_schema(
     properties: {
@@ -385,7 +385,8 @@ class MyTool < MCP::Tool
     read_only_hint: true,
     destructive_hint: false,
     idempotent_hint: true,
-    open_world_hint: false
+    open_world_hint: false,
+    title: "My Tool"
   )
 
   def self.call(message:, server_context:)
@@ -401,10 +402,11 @@ tool = MyTool
 ```ruby
 tool = MCP::Tool.define(
   name: "my_tool",
-  title: "My Tool",
+  title: "My Tool", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description: "This tool performs specific functionality...",
   annotations: {
-    read_only_hint: true
+    read_only_hint: true,
+    title: "My Tool"
   }
 ) do |args, server_context|
   MCP::Tool::Response.new([{ type: "text", text: "OK" }])
@@ -418,11 +420,11 @@ e.g. around authentication state.
 
 Tools can include annotations that provide additional metadata about their behavior. The following annotations are supported:
 
-- `title`: A human-readable title for the tool
-- `read_only_hint`: Indicates if the tool only reads data (doesn't modify state)
 - `destructive_hint`: Indicates if the tool performs destructive operations
 - `idempotent_hint`: Indicates if the tool's operations are idempotent
 - `open_world_hint`: Indicates if the tool operates in an open world context
+- `read_only_hint`: Indicates if the tool only reads data (doesn't modify state)
+- `title`: A human-readable title for the tool
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
 
@@ -437,7 +439,7 @@ The `MCP::Prompt` class provides two ways to create prompts:
 ```ruby
 class MyPrompt < MCP::Prompt
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
-  title "My Prompt"
+  title "My Prompt" # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description "This prompt performs specific functionality..."
   arguments [
     MCP::Prompt::Argument.new(
@@ -474,7 +476,7 @@ prompt = MyPrompt
 ```ruby
 prompt = MCP::Prompt.define(
   name: "my_prompt",
-  title: "My Prompt",
+  title: "My Prompt", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description: "This prompt performs specific functionality...",
   arguments: [
     MCP::Prompt::Argument.new(
@@ -561,7 +563,7 @@ The `MCP::Resource` class provides a way to register resources with the server.
 resource = MCP::Resource.new(
   uri: "https://example.com/my_resource",
   name: "my-resource",
-  title: "My Resource",
+  title: "My Resource", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
 )
