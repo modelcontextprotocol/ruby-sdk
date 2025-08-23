@@ -133,6 +133,7 @@ module MCP
         description: "a mock tool for testing",
         annotations: {
           read_only_hint: true,
+          title: "Mock Tool",
         },
       ) do |_|
         Tool::Response.new([{ type: "text", content: "OK" }])
@@ -142,7 +143,7 @@ module MCP
       assert_equal tool.title, "Mock Tool"
       assert_equal tool.description, "a mock tool for testing"
       assert_equal tool.input_schema, Tool::InputSchema.new
-      assert_equal tool.annotations_value.to_h, { readOnlyHint: true }
+      assert_equal tool.annotations_value.to_h, { readOnlyHint: true, title: "Mock Tool" }
     end
 
     # Tests for Tool::Annotations class
