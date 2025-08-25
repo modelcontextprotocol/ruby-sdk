@@ -74,6 +74,7 @@ module MCP
         Methods::PROMPTS_GET => method(:get_prompt),
         Methods::INITIALIZE => method(:init),
         Methods::PING => ->(_) { {} },
+        Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
 
         # No op handlers for currently unsupported methods
         Methods::RESOURCES_SUBSCRIBE => ->(_) {},
