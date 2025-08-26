@@ -413,14 +413,12 @@ module MCP
           io1.rewind
           output1 = io1.read
           # Session 1 should have received two notifications (one from each request since we broadcast)
-          assert_equal 2,
-            output1.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
+          assert_equal 2, output1.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
 
           io2.rewind
           output2 = io2.read
           # Session 2 should have received two notifications (one from each request since we broadcast)
-          assert_equal 2,
-            output2.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
+          assert_equal 2, output2.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
         end
 
         test "send_notification to specific session" do
