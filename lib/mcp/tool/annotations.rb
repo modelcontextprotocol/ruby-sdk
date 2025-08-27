@@ -3,9 +3,9 @@
 module MCP
   class Tool
     class Annotations
-      attr_reader :title, :read_only_hint, :destructive_hint, :idempotent_hint, :open_world_hint
+      attr_reader :destructive_hint, :idempotent_hint, :open_world_hint, :read_only_hint, :title
 
-      def initialize(title: nil, read_only_hint: nil, destructive_hint: nil, idempotent_hint: nil, open_world_hint: nil)
+      def initialize(destructive_hint: true, idempotent_hint: false, open_world_hint: true, read_only_hint: false, title: nil)
         @title = title
         @read_only_hint = read_only_hint
         @destructive_hint = destructive_hint
@@ -15,11 +15,11 @@ module MCP
 
       def to_h
         {
-          title:,
-          readOnlyHint: read_only_hint,
           destructiveHint: destructive_hint,
           idempotentHint: idempotent_hint,
           openWorldHint: open_world_hint,
+          readOnlyHint: read_only_hint,
+          title:,
         }.compact
       end
     end
