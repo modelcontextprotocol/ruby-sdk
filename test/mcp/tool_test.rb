@@ -30,7 +30,7 @@ module MCP
         title: "Mock Tool",
         description: "a mock tool for testing",
       )
-      assert_equal tool.to_h, { name: "mock_tool", title: "Mock Tool", description: "a mock tool for testing", inputSchema: { type: "object" } }
+      assert_equal({ name: "mock_tool", title: "Mock Tool", description: "a mock tool for testing", inputSchema: { type: "object" } }, tool.to_h)
     end
 
     test "#to_h includes annotations when present" do
@@ -42,13 +42,13 @@ module MCP
         idempotentHint: true,
         openWorldHint: false,
       }
-      assert_equal tool.to_h[:annotations], expected_annotations
+      assert_equal expected_annotations, tool.to_h[:annotations]
     end
 
     test "#call invokes the tool block and returns the response" do
       tool = TestTool
       response = tool.call(message: "test")
-      assert_equal response.content, [{ type: "text", content: "OK" }]
+      assert_equal [{ type: "text", content: "OK" }], response.content
       refute response.error?
     end
 
@@ -60,10 +60,9 @@ module MCP
       end
 
       tool = MockTool
-      assert_equal tool.name_value, "my_mock_tool"
-      assert_equal tool.description, "a mock tool for testing"
-      assert_equal tool.input_schema.to_h,
-        { type: "object", properties: { message: { type: "string" } }, required: [:message] }
+      assert_equal "my_mock_tool",  tool.name_value
+      assert_equal "a mock tool for testing", tool.description
+      assert_equal({ type: "object", properties: { message: { type: "string" } }, required: [:message] }, tool.input_schema.to_h)
     end
 
     test "defaults to class name as tool name" do
@@ -72,7 +71,7 @@ module MCP
 
       tool = DefaultNameTool
 
-      assert_equal tool.tool_name, "default_name_tool"
+      assert_equal "default_name_tool", tool.tool_name
     end
 
     test "input schema defaults to an empty hash" do
@@ -121,9 +120,9 @@ module MCP
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
-      assert_equal tool.name_value, "mock_tool"
-      assert_equal tool.description, "a mock tool for testing"
-      assert_equal tool.input_schema, Tool::InputSchema.new
+      assert_equal "mock_tool", tool.name_value
+      assert_equal "a mock tool for testing", tool.description
+      assert_equal Tool::InputSchema.new, tool.input_schema
     end
 
     test ".define allows definition of tools with annotations" do
@@ -139,11 +138,11 @@ module MCP
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
-      assert_equal tool.name_value, "mock_tool"
-      assert_equal tool.title, "Mock Tool"
-      assert_equal tool.description, "a mock tool for testing"
+      assert_equal "mock_tool", tool.name_value
+      assert_equal "Mock Tool", tool.title
+      assert_equal "a mock tool for testing", tool.description
       assert_equal tool.input_schema, Tool::InputSchema.new
-      assert_equal tool.annotations_value.to_h, { readOnlyHint: true, title: "Mock Tool" }
+      assert_equal({ readOnlyHint: true, title: "Mock Tool" }, tool.annotations_value.to_h)
     end
 
     # Tests for Tool::Annotations class
@@ -156,11 +155,11 @@ module MCP
         open_world_hint: false,
       )
 
-      assert_equal annotations.title, "Test Tool"
-      assert_equal annotations.read_only_hint, true
-      assert_equal annotations.destructive_hint, false
-      assert_equal annotations.idempotent_hint, true
-      assert_equal annotations.open_world_hint, false
+      assert_equal "Test Tool", annotations.title
+      assert annotations.read_only_hint
+      refute annotations.destructive_hint
+      assert annotations.idempotent_hint
+      refute annotations.open_world_hint
     end
 
     test "Tool::Annotations initializes with partial properties" do
@@ -169,8 +168,8 @@ module MCP
         read_only_hint: true,
       )
 
-      assert_equal annotations.title, "Test Tool"
-      assert_equal annotations.read_only_hint, true
+      assert_equal "Test Tool", annotations.title
+      assert annotations.read_only_hint
       assert_nil annotations.destructive_hint
       assert_nil annotations.idempotent_hint
       assert_nil annotations.open_world_hint
@@ -186,7 +185,7 @@ module MCP
         title: "Test Tool",
         readOnlyHint: true,
       }
-      assert_equal annotations.to_h, expected
+      assert_equal expected, annotations.to_h
     end
 
     test "Tool::Annotations#to_h handles all properties" do
@@ -205,7 +204,7 @@ module MCP
         idempotentHint: true,
         openWorldHint: false,
       }
-      assert_equal annotations.to_h, expected
+      assert_equal expected, annotations.to_h
     end
 
     test "Tool::Annotations#to_h returns empty hash when all values are nil" do
@@ -224,8 +223,8 @@ module MCP
 
       tool = AnnotationsTestTool
       assert_instance_of Tool::Annotations, tool.annotations_value
-      assert_equal tool.annotations_value.title, "Annotations Test"
-      assert_equal tool.annotations_value.read_only_hint, true
+      assert_equal "Annotations Test", tool.annotations_value.title
+      assert tool.annotations_value.read_only_hint
     end
 
     test "Tool class method annotations can be updated" do
@@ -235,10 +234,10 @@ module MCP
 
       tool = UpdatableAnnotationsTool
       tool.annotations(title: "Initial")
-      assert_equal tool.annotations_value.title, "Initial"
+      assert_equal "Initial", tool.annotations_value.title
 
       tool.annotations(title: "Updated")
-      assert_equal tool.annotations_value.title, "Updated"
+      assert_equal "Updated", tool.annotations_value.title
     end
 
     test "#call with Sorbet typed tools invokes the tool block and returns the response" do
@@ -259,7 +258,7 @@ module MCP
 
       tool = TypedTestTool
       response = tool.call(message: "test")
-      assert_equal response.content, [{ type: "text", content: "OK" }]
+      assert_equal [{ type: "text", content: "OK" }], response.content
       refute response.error?
     end
 
@@ -289,13 +288,13 @@ module MCP
     test "tool call without server context" do
       tool = TestToolWithoutServerContext
       response = tool.call(message: "test")
-      assert_equal response.content, [{ type: "text", content: "OK" }]
+      assert_equal [{ type: "text", content: "OK" }], response.content
     end
 
     test "tool call with server context and without required" do
       tool = TestToolWithoutRequired
       response = tool.call("test", server_context: { foo: "bar" })
-      assert_equal response.content, [{ type: "text", content: "OK" }]
+      assert_equal [{ type: "text", content: "OK" }], response.content
     end
 
     test "input_schema rejects any $ref in schema" do

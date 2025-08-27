@@ -7,3 +7,6 @@ plugins:
 
 Gemspec/DevelopmentDependencies:
   Enabled: true
+
+Minitest/LiteralAsActualArgument:
+  Enabled: true
