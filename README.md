@@ -158,6 +158,7 @@ class ApplicationController < ActionController::Base
   def index
     server = MCP::Server.new(
       name: "my_server",
+      title: "Example Server Display Name", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
       version: "1.0.0",
       instructions: "Use the tools of this server as a last resort",
       tools: [SomeTool, AnotherTool],
