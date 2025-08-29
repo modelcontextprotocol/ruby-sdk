@@ -620,6 +620,62 @@ module MCP
           assert_empty(response[2])
         end
 
+        test "handles POST request when JSON-RPC notification object is received" do
+          notification_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "some_notification" }.to_json,
+          )
+
+          response = @transport.handle_request(notification_request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
+        test "handles POST request when JSON-RPC response object with result is received" do
+          response_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", id: "123", result: { content: { type: "text" } } }.to_json,
+          )
+
+          response = @transport.handle_request(response_request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
+        test "handles POST request when JSON-RPC response object with error is received" do
+          response_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", id: "123", error: { content: { type: "text" } } }.to_json,
+          )
+
+          response = @transport.handle_request(response_request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
+        test "handles POST request when JSON-RPC error object is received" do
+          response_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", id: "123", error: { content: { type: "text" } } }.to_json,
+          )
+
+          response = @transport.handle_request(response_request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)
