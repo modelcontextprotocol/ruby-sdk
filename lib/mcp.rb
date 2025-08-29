@@ -22,6 +22,9 @@ require_relative "mcp/tool/response"
 require_relative "mcp/tool/annotations"
 require_relative "mcp/transport"
 require_relative "mcp/version"
+require_relative "mcp/client"
+require_relative "mcp/client/http"
+require_relative "mcp/client/tool"
 
 module MCP
   class << self
