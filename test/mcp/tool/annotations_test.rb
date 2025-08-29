@@ -7,31 +7,31 @@ module MCP
     class AnnotationsTest < ActiveSupport::TestCase
       test "Tool::Annotations initializes with all properties" do
         annotations = Tool::Annotations.new(
-          title: "Test Tool",
-          read_only_hint: true,
           destructive_hint: false,
           idempotent_hint: true,
           open_world_hint: false,
+          read_only_hint: true,
+          title: "Test Tool",
         )
 
-        assert_equal "Test Tool", annotations.title
-        assert annotations.read_only_hint
         refute annotations.destructive_hint
         assert annotations.idempotent_hint
         refute annotations.open_world_hint
+        assert annotations.read_only_hint
+        assert_equal "Test Tool", annotations.title
       end
 
       test "Tool::Annotations initializes with partial properties" do
         annotations = Tool::Annotations.new(
-          title: "Test Tool",
           read_only_hint: true,
+          title: "Test Tool",
         )
 
-        assert_equal "Test Tool", annotations.title
+        assert annotations.destructive_hint
+        refute annotations.idempotent_hint
+        assert annotations.open_world_hint
         assert annotations.read_only_hint
-        assert_nil annotations.destructive_hint
-        assert_nil annotations.idempotent_hint
-        assert_nil annotations.open_world_hint
+        assert_equal "Test Tool", annotations.title
       end
 
       test "Tool::Annotations#to_h omits nil values" do
@@ -41,34 +41,37 @@ module MCP
         )
 
         expected = {
-          title: "Test Tool",
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: true,
           readOnlyHint: true,
+          title: "Test Tool",
         }
         assert_equal expected, annotations.to_h
       end
 
       test "Tool::Annotations#to_h handles all properties" do
         annotations = Tool::Annotations.new(
-          title: "Test Tool",
-          read_only_hint: true,
           destructive_hint: false,
           idempotent_hint: true,
           open_world_hint: false,
+          read_only_hint: true,
+          title: "Test Tool",
         )
 
         expected = {
-          title: "Test Tool",
-          readOnlyHint: true,
           destructiveHint: false,
           idempotentHint: true,
           openWorldHint: false,
+          readOnlyHint: true,
+          title: "Test Tool",
         }
         assert_equal expected, annotations.to_h
       end
 
-      test "Tool::Annotations#to_h returns empty hash when all values are nil" do
+      test "Tool::Annotations#to_h returns hash with default hint values" do
         annotations = Tool::Annotations.new
-        assert_empty annotations.to_h
+        assert_equal({ destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false }, annotations.to_h)
       end
     end
   end

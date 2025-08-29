@@ -421,10 +421,10 @@ e.g. around authentication state.
 
 Tools can include annotations that provide additional metadata about their behavior. The following annotations are supported:
 
-- `destructive_hint`: Indicates if the tool performs destructive operations
-- `idempotent_hint`: Indicates if the tool's operations are idempotent
-- `open_world_hint`: Indicates if the tool operates in an open world context
-- `read_only_hint`: Indicates if the tool only reads data (doesn't modify state)
+- `destructive_hint`: Indicates if the tool performs destructive operations. Defaults to true
+- `idempotent_hint`: Indicates if the tool's operations are idempotent. Defaults to false
+- `open_world_hint`: Indicates if the tool operates in an open world context. Defaults to true
+- `read_only_hint`: Indicates if the tool only reads data (doesn't modify state). Defaults to false
 - `title`: A human-readable title for the tool
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.

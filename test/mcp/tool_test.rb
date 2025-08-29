@@ -10,11 +10,11 @@ module MCP
       description "a test tool for testing"
       input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
       annotations(
-        title: "Test Tool",
-        read_only_hint: true,
         destructive_hint: false,
         idempotent_hint: true,
         open_world_hint: false,
+        read_only_hint: true,
+        title: "Test Tool",
       )
 
       class << self
@@ -36,11 +36,11 @@ module MCP
     test "#to_h includes annotations when present" do
       tool = TestTool
       expected_annotations = {
-        title: "Test Tool",
-        readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false,
+        readOnlyHint: true,
+        title: "Test Tool",
       }
       assert_equal expected_annotations, tool.to_h[:annotations]
     end
@@ -142,15 +142,15 @@ module MCP
       assert_equal "Mock Tool", tool.title
       assert_equal "a mock tool for testing", tool.description
       assert_equal tool.input_schema, Tool::InputSchema.new
-      assert_equal({ readOnlyHint: true, title: "Mock Tool" }, tool.annotations_value.to_h)
+      assert_equal({ destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: true, title: "Mock Tool" }, tool.annotations_value.to_h)
     end
 
     test "Tool class method annotations can be set and retrieved" do
       class AnnotationsTestTool < Tool
         tool_name "annotations_test"
         annotations(
-          title: "Annotations Test",
           read_only_hint: true,
+          title: "Annotations Test",
         )
       end
 
