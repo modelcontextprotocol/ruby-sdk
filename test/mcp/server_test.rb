@@ -69,6 +69,7 @@ module MCP
 
       @server = Server.new(
         name: @server_name,
+        title: "Example Server Display Name",
         version: "1.2.3",
         instructions: "Optional instructions for the client",
         tools: [@tool, @tool_that_raises],
@@ -140,6 +141,7 @@ module MCP
           },
           serverInfo: {
             name: @server_name,
+            title: "Example Server Display Name",
             version: "1.2.3",
           },
           instructions: "Optional instructions for the client",
@@ -767,6 +769,18 @@ module MCP
 
       response = @server.handle(request)
       assert_equal Configuration::DEFAULT_PROTOCOL_VERSION, response[:result][:protocolVersion]
+    end
+
+    test "server uses default title when not configured" do
+      server = Server.new(name: "test_server")
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+
+      response = server.handle(request)
+      assert_nil response[:result][:serverInfo][:title]
     end
 
     test "server uses default version when not configured" do
