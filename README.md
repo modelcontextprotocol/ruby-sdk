@@ -214,6 +214,7 @@ You can run this script and then type in requests to the server at the command l
 $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"1","method":"ping"}
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
+{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
 
 ## Configuration
