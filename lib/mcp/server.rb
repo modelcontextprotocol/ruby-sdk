@@ -3,6 +3,7 @@
 require "json_rpc_handler"
 require_relative "instrumentation"
 require_relative "methods"
+require_relative "logging_message_notification"
 
 module MCP
   class Server
@@ -31,7 +32,7 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :name, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :name, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
 
     def initialize(
       name: "model_context_protocol",
@@ -63,6 +64,7 @@ module MCP
       end
 
       @capabilities = capabilities || default_capabilities
+      @logging_message_notification = nil
 
       @handlers = {
         Methods::RESOURCES_LIST => method(:list_resources),
@@ -75,12 +77,12 @@ module MCP
         Methods::INITIALIZE => method(:init),
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
+        Methods::LOGGING_SET_LEVEL => method(:logging_level=),
 
         # No op handlers for currently unsupported methods
         Methods::RESOURCES_SUBSCRIBE => ->(_) {},
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) {},
         Methods::COMPLETION_COMPLETE => ->(_) {},
-        Methods::LOGGING_SET_LEVEL => ->(_) {},
       }
       @transport = transport
     end
@@ -137,6 +139,20 @@ module MCP
       @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
     rescue => e
       report_exception(e, { notification: "resources_list_changed" })
+    end
+
+    def notify_log_message(data:, level:, logger: nil)
+      return unless @transport
+      raise LoggingMessageNotification::NotSpecifiedLevelError unless logging_message_notification&.level
+
+      return unless logging_message_notification.should_notify?(level)
+
+      params = { data:, level: }
+      params[:logger] = logger if logger
+
+      @transport.send_notification(Methods::NOTIFICATIONS_MESSAGE, params)
+    rescue => e
+      report_exception(e, { notification: "logging_message_notification" })
     end
 
     def resources_list_handler(&block)
@@ -212,6 +228,7 @@ module MCP
         tools: { listChanged: true },
         prompts: { listChanged: true },
         resources: { listChanged: true },
+        logging: {},
       }
     end
 
@@ -229,6 +246,13 @@ module MCP
         serverInfo: server_info,
         instructions: instructions,
       }.compact
+    end
+
+    def logging_level=(params)
+      logging_message_notification = LoggingMessageNotification.new(level: params[:level])
+      raise LoggingMessageNotification::InvalidLevelError unless logging_message_notification.valid_level?
+
+      @logging_message_notification = logging_message_notification
     end
 
     def list_tools(request)
