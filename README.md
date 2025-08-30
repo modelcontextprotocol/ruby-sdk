@@ -560,6 +560,8 @@ This is to avoid potential issues with metric cardinality
 
 MCP spec includes [Resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources).
 
+### Reading Resources
+
 The `MCP::Resource` class provides a way to register resources with the server.
 
 ```ruby
@@ -587,10 +589,28 @@ server.resources_read_handler do |params|
     text: "Hello from example resource! URI: #{params[:uri]}"
   }]
 end
-
 ```
 
 otherwise `resources/read` requests will be a no-op.
+
+### Resource Templates
+
+The `MCP::ResourceTemplate` class provides a way to register resource templates with the server.
+
+```ruby
+resource_template = MCP::ResourceTemplate.new(
+  uri_template: "https://example.com/my_resource_template",
+  name: "my-resource-template",
+  title: "My Resource Template", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  description: "Lorem ipsum dolor sit amet",
+  mime_type: "text/html",
+)
+
+server = MCP::Server.new(
+  name: "my_server",
+  resource_templates: [resource_template],
+)
+```
 
 ## Releases
 
