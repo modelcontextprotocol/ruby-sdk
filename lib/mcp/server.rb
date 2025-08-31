@@ -59,10 +59,7 @@ module MCP
       @server_context = server_context
       @configuration = MCP.configuration.merge(configuration)
 
-      if @configuration.protocol_version == "2024-11-05" && @instructions
-        message = "`instructions` supported by protocol version 2025-03-26 or higher"
-        raise ArgumentError, message
-      end
+      validate!
 
       @capabilities = capabilities || default_capabilities
 
@@ -102,6 +99,8 @@ module MCP
     def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, &block)
       tool = Tool.define(name:, title:, description:, input_schema:, annotations:, &block)
       @tools[tool.name_value] = tool
+
+      validate!
     end
 
     def define_prompt(name: nil, title: nil, description: nil, arguments: [], &block)
@@ -170,6 +169,25 @@ module MCP
     end
 
     private
+
+    def validate!
+      if @configuration.protocol_version == "2024-11-05"
+        if @instructions
+          message = "`instructions` supported by protocol version 2025-03-26 or higher"
+          raise ArgumentError, message
+        end
+
+        error_tool_names = @tools.each_with_object([]) do |(tool_name, tool), error_tool_names|
+          if tool.annotations
+            error_tool_names << tool_name
+          end
+        end
+        unless error_tool_names.empty?
+          message = "Error occurred in #{error_tool_names.join(", ")}. `annotations` are supported by protocol version 2025-03-26 or higher"
+          raise ArgumentError, message
+        end
+      end
+    end
 
     def handle_request(request, method)
       handler = @handlers[method]

@@ -822,6 +822,28 @@ module MCP
       assert_equal("`instructions` supported by protocol version 2025-03-26 or higher", exception.message)
     end
 
+    test "server uses annotations when configured with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+      server = Server.new(name: "test_server", configuration: configuration)
+      server.define_tool(
+        name: "defined_tool",
+        annotations: { title: "test server" },
+      )
+      assert_equal({ destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false, title: "test server" }, server.tools.first[1].annotations.to_h)
+    end
+
+    test "raises error if annotations are used with protocol version 2024-11-05" do
+      configuration = Configuration.new(protocol_version: "2024-11-05")
+      exception = assert_raises(ArgumentError) do
+        server = Server.new(name: "test_server", configuration: configuration)
+        server.define_tool(
+          name: "defined_tool",
+          annotations: { title: "test server" },
+        )
+      end
+      assert_equal("Error occurred in defined_tool. `annotations` are supported by protocol version 2025-03-26 or higher", exception.message)
+    end
+
     test "#define_tool adds a tool to the server" do
       @server.define_tool(
         name: "defined_tool",
