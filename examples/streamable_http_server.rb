@@ -136,37 +136,38 @@ rack_app = Rack::Builder.new do
 end
 
 # Print usage instructions
-puts "=== MCP Streaming HTTP Test Server ==="
-puts ""
-puts "Starting server on http://localhost:9393"
-puts ""
-puts "Available Tools:"
-puts "1. NotificationTool - Returns messages that are sent via SSE when stream is active"
-puts "2. echo - Simple echo tool"
-puts ""
-puts "Testing SSE:"
-puts ""
-puts "1. Initialize session:"
-puts "   curl -i http://localhost:9393 \\"
-puts '     --json \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}\''
-puts ""
-puts "2. Connect SSE stream (use the session ID from step 1):"
-puts '   curl -i -N -H "Mcp-Session-Id: YOUR_SESSION_ID" http://localhost:9393'
-puts ""
-puts "3. In another terminal, test tools (responses will be sent via SSE if stream is active):"
-puts ""
-puts "   Echo tool:"
-puts '   curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
-puts '     --json \'{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"echo","arguments":{"message":"Hello SSE!"}}}\''
-puts ""
-puts "   Notification tool (with 2 second delay):"
-puts '   curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\'
-puts '     --json \'{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!", "delay": 2}}}\''
-puts ""
-puts "Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return {\"accepted\": true}"
-puts ""
-puts "Press Ctrl+C to stop the server"
-puts ""
+puts <<~MESSAGE
+  === MCP Streaming HTTP Test Server ===
+
+  Starting server on http://localhost:9393
+
+  Available Tools:
+  1. NotificationTool - Returns messages that are sent via SSE when stream is active"
+  2. echo - Simple echo tool
+
+  Testing SSE:
+
+  1. Initialize session:
+     curl -i http://localhost:9393 \\
+       --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}'
+
+  2. Connect SSE stream (use the session ID from step 1):"
+     curl -i -N -H "Mcp-Session-Id: YOUR_SESSION_ID" http://localhost:9393
+
+  3. In another terminal, test tools (responses will be sent via SSE if stream is active):
+
+     Echo tool:
+     curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\
+       --json '{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"echo","arguments":{"message":"Hello SSE!"}}}'
+
+     Notification tool (with 2 second delay):
+     curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\
+       --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!", "delay": 2}}}'
+
+  Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return {"accepted": true}
+
+  Press Ctrl+C to stop the server
+MESSAGE
 
 # Start the server
 Rackup::Handler.get("puma").run(rack_app, Port: 9393, Host: "localhost")
