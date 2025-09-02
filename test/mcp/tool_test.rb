@@ -33,6 +33,14 @@ module MCP
       assert_equal({ name: "mock_tool", title: "Mock Tool", description: "a mock tool for testing", inputSchema: { type: "object" } }, tool.to_h)
     end
 
+    test "#to_h does not have `:title` key when title is omitted" do
+      tool = Tool.define(
+        name: "mock_tool",
+        description: "a mock tool for testing",
+      )
+      refute tool.to_h.key?(:title)
+    end
+
     test "#to_h includes annotations when present" do
       tool = TestTool
       expected_annotations = {
