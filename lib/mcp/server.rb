@@ -320,10 +320,8 @@ module MCP
 
     def accepts_server_context?(method_object)
       parameters = method_object.parameters
-      accepts_server_context = parameters.any? { |_type, name| name == :server_context }
-      has_kwargs = parameters.any? { |type, _| type == :keyrest }
 
-      accepts_server_context || has_kwargs
+      parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
     def call_tool_with_args(tool, arguments)
