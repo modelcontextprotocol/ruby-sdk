@@ -6,9 +6,6 @@ source "https://rubygems.org"
 gemspec
 
 # Specify development dependencies below
-gem "minitest", "~> 5.1", require: false
-gem "mocha"
-
 gem "rubocop-minitest", require: false
 gem "rubocop-rake", require: false
 gem "rubocop-shopify", require: false
@@ -21,3 +18,10 @@ gem "activesupport"
 gem "debug"
 gem "rake", "~> 13.0"
 gem "sorbet-static-and-runtime"
+
+group :test do
+  gem "faraday", ">= 2.0"
+  gem "minitest", "~> 5.1", require: false
+  gem "mocha"
+  gem "webmock"
+end
