@@ -371,7 +371,7 @@ If no exception reporter is configured, a default no-op reporter is used that si
 
 MCP spec includes [Tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) which provide functionality to LLM apps.
 
-This gem provides a `MCP::Tool` class that can be used to create tools in two ways:
+This gem provides a `MCP::Tool` class that can be used to create tools in three ways:
 
 1. As a class definition:
 
@@ -417,6 +417,22 @@ tool = MCP::Tool.define(
 end
 ```
 
+3. By using the `ModelContextProtocol::Server#define_tool` method with a block:
+
+```ruby
+server = ModelContextProtocol::Server.new
+server.define_tool(
+  name: "my_tool",
+  description: "This tool performs specific functionality...",
+  annotations: {
+    title: "My Tool",
+    read_only_hint: true
+  }
+) do |args, server_context|
+  Tool::Response.new([{ type: "text", text: "OK" }])
+end
+```
+
 The server_context parameter is the server_context passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
@@ -436,7 +452,7 @@ Annotations can be set either through the class definition using the `annotation
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
-The `MCP::Prompt` class provides two ways to create prompts:
+The `MCP::Prompt` class provides three ways to create prompts:
 
 1. As a class definition with metadata:
 
@@ -500,6 +516,37 @@ prompt = MCP::Prompt.define(
       MCP::Prompt::Message.new(
         role: "assistant",
         content: MCP::Content::Text.new(args["message"])
+      )
+    ]
+  )
+end
+```
+
+3. Using the `ModelContextProtocol::Server#define_protocol` method:
+
+```ruby
+server = ModelContextProtocol::Server.new
+server.define_protocol(
+  name: "my_prompt",
+  description: "This prompt performs specific functionality...",
+  arguments: [
+    Prompt::Argument.new(
+      name: "message",
+      description: "Input message",
+      required: true
+    )
+  ]
+) do |args, server_context:|
+  Prompt::Result.new(
+    description: "Response description",
+    messages: [
+      Prompt::Message.new(
+        role: "user",
+        content: Content::Text.new("User message")
+      ),
+      Prompt::Message.new(
+        role: "assistant",
+        content: Content::Text.new(args["message"])
       )
     ]
   )
