@@ -222,7 +222,7 @@ module MCP
         name:,
         title:,
         version:,
-      }
+      }.compact
     end
 
     def init(request)

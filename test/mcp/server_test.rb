@@ -771,7 +771,7 @@ module MCP
       assert_equal Configuration::DEFAULT_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
-    test "server uses default title when not configured" do
+    test "server response does not include title when not configured" do
       server = Server.new(name: "test_server")
       request = {
         jsonrpc: "2.0",
@@ -780,7 +780,7 @@ module MCP
       }
 
       response = server.handle(request)
-      assert_nil response[:result][:serverInfo][:title]
+      refute response[:result][:serverInfo].key?(:title)
     end
 
     test "server uses default version when not configured" do

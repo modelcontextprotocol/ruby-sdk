@@ -19,7 +19,7 @@ module MCP
           title: title_value,
           description: description_value,
           inputSchema: input_schema_value.to_h,
-        }
+        }.compact
         result[:annotations] = annotations_value.to_h if annotations_value
         result
       end
