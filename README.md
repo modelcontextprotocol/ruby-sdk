@@ -124,8 +124,8 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 #### Transport Support
 
-- **HTTP Transport**: Notifications are sent as Server-Sent Events (SSE) to all connected sessions
-- **Stdio Transport**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
 
 #### Usage Example
 
