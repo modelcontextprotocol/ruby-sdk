@@ -255,5 +255,133 @@ module MCP
       end
       assert_match(/Invalid JSON Schema/, error.message)
     end
+
+    test "#to_h includes outputSchema when present" do
+      tool = Tool.define(
+        name: "mock_tool",
+        title: "Mock Tool",
+        description: "a mock tool for testing",
+        output_schema: { properties: { result: { type: "string" } }, required: ["result"] },
+      )
+      expected = {
+        name: "mock_tool",
+        title: "Mock Tool",
+        description: "a mock tool for testing",
+        inputSchema: { type: "object" },
+        outputSchema: { type: "object", properties: { result: { type: "string" } }, required: [:result] },
+      }
+      assert_equal expected, tool.to_h
+    end
+
+    test "#to_h does not include outputSchema when not set" do
+      tool = Tool.define(
+        name: "mock_tool",
+        description: "a mock tool for testing",
+      )
+      refute tool.to_h.key?(:outputSchema)
+    end
+
+    test "output_schema defaults to nil" do
+      class NoOutputSchemaTool < Tool; end
+      tool = NoOutputSchemaTool
+      assert_nil tool.output_schema
+    end
+
+    test "accepts output_schema as a hash" do
+      class HashOutputSchemaTool < Tool
+        output_schema({ properties: { result: { type: "string" } }, required: [:result] })
+      end
+
+      tool = HashOutputSchemaTool
+      expected = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      assert_equal expected, tool.output_schema.to_h
+    end
+
+    test "accepts output_schema as an OutputSchema object" do
+      class OutputSchemaObjectTool < Tool
+        output_schema Tool::OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+      end
+
+      tool = OutputSchemaObjectTool
+      expected = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      assert_equal expected, tool.output_schema.to_h
+    end
+
+    test "output_schema raises detailed error message for invalid schema" do
+      error = assert_raises(ArgumentError) do
+        Class.new(MCP::Tool) do
+          output_schema(
+            properties: {
+              count: { type: "integer", minimum: "not a number" },
+            },
+            required: [:count],
+          )
+        end
+      end
+
+      assert_includes error.message, "Invalid JSON Schema"
+      assert_includes error.message, "#/properties/count/minimum"
+      assert_includes error.message, "string did not match the following type: number"
+    end
+
+    test "output_schema rejects any $ref in schema" do
+      schema_with_ref = {
+        properties: {
+          foo: { "$ref" => "#/definitions/bar" },
+        },
+        required: ["foo"],
+        definitions: {
+          bar: { type: "string" },
+        },
+      }
+      error = assert_raises(ArgumentError) do
+        Class.new(MCP::Tool) do
+          output_schema schema_with_ref
+        end
+      end
+      assert_match(/Invalid JSON Schema/, error.message)
+    end
+
+    test ".define allows definition of tools with output_schema" do
+      tool = Tool.define(
+        name: "mock_tool",
+        title: "Mock Tool",
+        description: "a mock tool for testing",
+        output_schema: { properties: { result: { type: "string" } }, required: ["result"] },
+      ) do |_|
+        Tool::Response.new([{ type: "text", content: "OK" }])
+      end
+
+      assert_equal "mock_tool", tool.name_value
+      assert_equal "a mock tool for testing", tool.description
+      assert_instance_of Tool::OutputSchema, tool.output_schema
+      expected_output_schema = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      assert_equal expected_output_schema, tool.output_schema.to_h
+    end
+
+    class TestToolWithOutputSchema < Tool
+      tool_name "test_tool_with_output"
+      description "a test tool with output schema"
+      input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+      output_schema({ properties: { result: { type: "string" }, success: { type: "boolean" } }, required: ["result", "success"] })
+
+      class << self
+        def call(message:, server_context: nil)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
+
+    test "declarative definition of tools with output schema" do
+      tool = TestToolWithOutputSchema
+      assert_equal "test_tool_with_output", tool.name_value
+      assert_equal "a test tool with output schema", tool.description
+
+      expected_input = { type: "object", properties: { message: { type: "string" } }, required: [:message] }
+      assert_equal expected_input, tool.input_schema.to_h
+
+      expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: [:result, :success] }
+      assert_equal expected_output, tool.output_schema.to_h
+    end
   end
 end
