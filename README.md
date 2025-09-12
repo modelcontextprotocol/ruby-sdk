@@ -448,6 +448,9 @@ Tools can include annotations that provide additional metadata about their behav
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
 
+> [!NOTE]
+> This **Tool Annotations** feature is supported starting from `protocol_version: '2025-03-26'`.
+
 ### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
