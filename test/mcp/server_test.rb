@@ -138,6 +138,7 @@ module MCP
             prompts: { listChanged: true },
             resources: { listChanged: true },
             tools: { listChanged: true },
+            logging: {},
           },
           serverInfo: {
             name: @server_name,
@@ -1061,6 +1062,52 @@ module MCP
           Tool::Response.new([{ type: "text", content: "OK" }])
         end
       end
+    end
+
+    test "#notify_log_message raises RequestHandlerError when logging_message_notification is null" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "notifications/message",
+          params: {
+            level: "info",
+            data: "test message",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32603, response[:error][:code])
+      assert_includes response[:error][:data], "logging_message_notification must not be null"
+    end
+
+    test "#logging_level= raises RequestHandlerError when invalid log level is provided" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "logging/setLevel",
+          params: {
+            level: "invalid_level",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32602, response[:error][:code])
+      assert_includes response[:error][:data], "Invalid log level invalid_level"
     end
   end
 end

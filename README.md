@@ -113,6 +113,7 @@ The server provides three notification methods:
 - `notify_tools_list_changed` - Send a notification when the tools list changes
 - `notify_prompts_list_changed` - Send a notification when the prompts list changes
 - `notify_resources_list_changed` - Send a notification when the resources list changes
+- `notify_log_message` - Send a structured logging notification message
 
 #### Notification Format
 
@@ -121,6 +122,28 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 - `notifications/tools/list_changed`
 - `notifications/prompts/list_changed`
 - `notifications/resources/list_changed`
+- `notifications/message`
+
+#### Notification Logging Message Flow
+
+The `notifications/message` notification is used for structured logging between client and server.
+
+1. **Client sends logging configuration**: The client first sends a `logging/setLevel` request to configure the desired log level.
+2. **Server processes and notifies**: Upon receiving the log level configuration, the server uses `notify_log_message` to send log messages at the configured level and higher priority levels.For example, if "error" is configured, the server can send "error", "critical", "alert", and "emergency" messages. Please refer to `lib/mcp/logging_message_notification.rb` for log priorities in details.
+
+##### Usage Example
+
+```ruby
+# Client sets logging level
+# Request: { "jsonrpc": "2.0", "method": "logging/setLevel", "params": { "level": "error" } }
+
+# Server sends notifications for log events
+server.notify_log_message(
+  data: { error: "Connection Failed" },
+  level: "error",
+  logger: "DatabaseLogger"
+)
+```
 
 #### Transport Support
 
@@ -141,7 +164,6 @@ server.notify_tools_list_changed
 
 ### Unsupported Features ( to be implemented in future versions )
 
-- Log Level
 - Resource subscriptions
 - Completions
 
