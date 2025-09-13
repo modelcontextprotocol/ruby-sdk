@@ -124,8 +124,8 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 #### Transport Support
 
-- **HTTP Transport**: Notifications are sent as Server-Sent Events (SSE) to all connected sessions
-- **Stdio Transport**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
 
 #### Usage Example
 
@@ -455,6 +455,9 @@ Tools can include annotations that provide additional metadata about their behav
 - `title`: A human-readable title for the tool
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
+
+> [!NOTE]
+> This **Tool Annotations** feature is supported starting from `protocol_version: '2025-03-26'`.
 
 ### Tool Output Schemas
 
