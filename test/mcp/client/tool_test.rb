@@ -28,6 +28,38 @@ module MCP
           @tool.input_schema,
         )
       end
+
+      def test_output_schema_returns_nil_when_not_provided
+        assert_nil(@tool.output_schema)
+      end
+
+      def test_output_schema_returns_output_schema_when_provided
+        tool_with_output = Tool.new(
+          name: "test_tool_with_output",
+          description: "A test tool with output schema",
+          input_schema: { "type" => "object", "properties" => { "foo" => { "type" => "string" } } },
+          output_schema: { "type" => "object", "properties" => { "result" => { "type" => "string" } } },
+        )
+
+        assert_equal(
+          { "type" => "object", "properties" => { "result" => { "type" => "string" } } },
+          tool_with_output.output_schema,
+        )
+      end
+
+      def test_initialization_with_all_parameters
+        tool = Tool.new(
+          name: "full_tool",
+          description: "A tool with all parameters",
+          input_schema: { "type" => "object" },
+          output_schema: { "type" => "object", "properties" => { "status" => { "type" => "boolean" } } },
+        )
+
+        assert_equal("full_tool", tool.name)
+        assert_equal("A tool with all parameters", tool.description)
+        assert_equal({ "type" => "object" }, tool.input_schema)
+        assert_equal({ "type" => "object", "properties" => { "status" => { "type" => "boolean" } } }, tool.output_schema)
+      end
     end
   end
 end

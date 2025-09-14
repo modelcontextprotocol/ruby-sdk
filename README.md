@@ -385,6 +385,14 @@ class MyTool < MCP::Tool
     },
     required: ["message"]
   )
+  output_schema(
+    properties: {
+      result: { type: "string" },
+      success: { type: "boolean" },
+      timestamp: { type: "string", format: "date-time" }
+    },
+    required: ["result", "success", "timestamp"]
+  )
   annotations(
     read_only_hint: true,
     destructive_hint: false,
@@ -450,6 +458,102 @@ Annotations can be set either through the class definition using the `annotation
 
 > [!NOTE]
 > This **Tool Annotations** feature is supported starting from `protocol_version: '2025-03-26'`.
+
+### Tool Output Schemas
+
+Tools can optionally define an `output_schema` to specify the expected structure of their results. This works similarly to how `input_schema` is defined and can be used in three ways:
+
+1. **Class definition with output_schema:**
+
+```ruby
+class WeatherTool < MCP::Tool
+  tool_name "get_weather"
+  description "Get current weather for a location"
+
+  input_schema(
+    properties: {
+      location: { type: "string" },
+      units: { type: "string", enum: ["celsius", "fahrenheit"] }
+    },
+    required: ["location"]
+  )
+
+  output_schema(
+    properties: {
+      temperature: { type: "number" },
+      condition: { type: "string" },
+      humidity: { type: "integer" }
+    },
+    required: ["temperature", "condition", "humidity"]
+  )
+
+  def self.call(location:, units: "celsius", server_context:)
+    # Call weather API and structure the response
+    api_response = WeatherAPI.fetch(location, units)
+    weather_data = {
+      temperature: api_response.temp,
+      condition: api_response.description,
+      humidity: api_response.humidity_percent
+    }
+
+    output_schema.validate_result(weather_data)
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: weather_data.to_json
+    }])
+  end
+end
+```
+
+2. **Using Tool.define with output_schema:**
+
+```ruby
+tool = MCP::Tool.define(
+  name: "calculate_stats",
+  description: "Calculate statistics for a dataset",
+  input_schema: {
+    properties: {
+      numbers: { type: "array", items: { type: "number" } }
+    },
+    required: ["numbers"]
+  },
+  output_schema: {
+    properties: {
+      mean: { type: "number" },
+      median: { type: "number" },
+      count: { type: "integer" }
+    },
+    required: ["mean", "median", "count"]
+  }
+) do |args, server_context|
+  # Calculate statistics and validate against schema
+  MCP::Tool::Response.new([{ type: "text", text: "Statistics calculated" }])
+end
+```
+
+3. **Using OutputSchema objects:**
+
+```ruby
+class DataTool < MCP::Tool
+  output_schema MCP::Tool::OutputSchema.new(
+    properties: {
+      success: { type: "boolean" },
+      data: { type: "object" }
+    },
+    required: ["success"]
+  )
+end
+```
+
+MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#output-schema) specifies that:
+
+- **Server Validation**: Servers MUST provide structured results that conform to the output schema
+- **Client Validation**: Clients SHOULD validate structured results against the output schema
+- **Better Integration**: Enables strict schema validation, type information, and improved developer experience
+- **Backward Compatibility**: Tools returning structured content SHOULD also include serialized JSON in a TextContent block
+
+The output schema follows standard JSON Schema format and helps ensure consistent data exchange between MCP servers and clients.
 
 ### Prompts
 
@@ -758,7 +862,7 @@ The client provides a wrapper class for tools returned by the server:
 
 - `MCP::Client::Tool` - Represents a single tool with its metadata
 
-This class provide easy access to tool properties like name, description, and input schema.
+This class provides easy access to tool properties like name, description, input schema, and output schema.
 
 ## Releases
 
