@@ -1,26 +1,39 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Project overview
+This is the official Ruby SDK for the Model Context Protocol (MCP), implementing both server and client functionality for JSON-RPC 2.0 based communication between LLM applications and context providers.
 
-## Development Commands
+## Dev environment setup
+- Ruby 3.2.0+ required
+- Run `bundle install` to install dependencies
+- Dependencies: `json_rpc_handler` ~> 0.1, `json-schema` >= 4.1
 
-### Core Commands
+## Build and test commands
 - `bundle install` - Install dependencies
 - `rake test` - Run all tests
 - `rake rubocop` - Run linter
 - `rake` - Run tests and linting (default task)
-
-### Testing
 - `ruby -I lib -I test test/path/to/specific_test.rb` - Run single test file
-- Test files are located in `test/` directory with `_test.rb` suffix
-
-### Gem Management
 - `gem build mcp.gemspec` - Build the gem
+
+## Testing instructions
+- Test files are in `test/` directory with `_test.rb` suffix
+- Run full test suite with `rake test`
+- Run individual tests with `ruby -I lib -I test test/path/to/file_test.rb`
+- Tests should pass before submitting PRs
+
+## Code style guidelines
+- Follow RuboCop rules (run `rake rubocop`)
+- Use frozen string literals
+- Follow Ruby community conventions
+- Keep dependencies minimal
+
+## Commit message conventions
+- Use conventional commit format when possible
+- Include clear, descriptive commit messages
 - Releases are triggered by updating version in `lib/mcp/version.rb` and merging to main
 
-## Architecture Overview
-
-This is the official Ruby SDK for the Model Context Protocol (MCP), implementing both server and client functionality for JSON-RPC 2.0 based communication between LLM applications and context providers.
+## Architecture overview
 
 ### Core Components
 
@@ -68,7 +81,12 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - `json-schema` >= 4.1 - Schema validation
 - Ruby 3.2.0+ required
 
-### Example Integration Patterns
-- Rails controllers: Use `server.handle_json(request.body.read)` for HTTP endpoints
-- Command-line tools: Use `StdioTransport.new(server).open` for CLI applications
-- HTTP services: Use `StreamableHttpTransport` for web-based servers
+### Integration patterns
+- **Rails controllers**: Use `server.handle_json(request.body.read)` for HTTP endpoints
+- **Command-line tools**: Use `StdioTransport.new(server).open` for CLI applications
+- **HTTP services**: Use `StreamableHttpTransport` for web-based servers
+
+### Component definition patterns
+1. **Class inheritance**: `class MyTool < MCP::Tool`
+2. **Define methods**: `MCP::Tool.define(name: "my_tool") { ... }`
+3. **Server registration**: `server.define_tool(name: "my_tool") { ... }`
