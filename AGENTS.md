@@ -33,6 +33,16 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - Include clear, descriptive commit messages
 - Releases are triggered by updating version in `lib/mcp/version.rb` and merging to main
 
+## Release process
+- Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format in CHANGELOG.md
+- Update CHANGELOG.md before cutting releases
+- Use git history and PR merge commits to construct changelog entries
+- Format entries as: "Terse description of the change (#nnn)"
+- Keep entries in flat list format (no nesting)
+- Git tags mark commits that cut new releases
+- Exclude maintenance PRs that don't concern end users
+- Check upstream remote for PRs if available
+
 ## Architecture overview
 
 ### Core Components
