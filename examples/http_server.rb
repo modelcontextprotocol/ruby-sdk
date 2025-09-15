@@ -154,15 +154,17 @@ rack_app = Rack::Builder.new do
 end
 
 # Start the server
-puts "Starting MCP HTTP server on http://localhost:9292"
-puts "Use POST requests to initialize and send JSON-RPC commands"
-puts "Example initialization:"
-puts '  curl -i http://localhost:9292 --json \'{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}\''
-puts ""
-puts "The server will return a session ID in the Mcp-Session-Id header."
-puts "Use this session ID for subsequent requests."
-puts ""
-puts "Press Ctrl+C to stop the server"
+puts <<~MESSAGE
+  Starting MCP HTTP server on http://localhost:9292
+  Use POST requests to initialize and send JSON-RPC commands
+  Example initialization:
+    curl -i http://localhost:9292 --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+
+  The server will return a session ID in the Mcp-Session-Id header.
+  Use this session ID for subsequent requests.
+
+  Press Ctrl+C to stop the server
+MESSAGE
 
 # Run the server
 # Use Rackup to run the server

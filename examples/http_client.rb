@@ -50,7 +50,7 @@ class MCPHTTPClient
       },
     })
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -58,7 +58,7 @@ class MCPHTTPClient
     puts "=== Sending ping ==="
     result = send_request("ping")
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -66,7 +66,7 @@ class MCPHTTPClient
     puts "=== Listing tools ==="
     result = send_request("tools/list")
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -77,7 +77,7 @@ class MCPHTTPClient
       arguments: arguments,
     })
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -85,7 +85,7 @@ class MCPHTTPClient
     puts "=== Listing prompts ==="
     result = send_request("prompts/list")
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -96,7 +96,7 @@ class MCPHTTPClient
       arguments: arguments,
     })
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -104,7 +104,7 @@ class MCPHTTPClient
     puts "=== Listing resources ==="
     result = send_request("resources/list")
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -114,7 +114,7 @@ class MCPHTTPClient
       uri: uri,
     })
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
+
     result
   end
 
@@ -131,7 +131,6 @@ class MCPHTTPClient
     response = http.request(request)
     result = JSON.parse(response.body)
     puts "Response: #{JSON.pretty_generate(result)}"
-    puts
 
     @session_id = nil
     result
@@ -140,10 +139,11 @@ end
 
 # Main script
 if __FILE__ == $PROGRAM_NAME
-  puts "MCP HTTP Client Example"
-  puts "Make sure the HTTP server is running (ruby examples/http_server.rb)"
-  puts "=" * 50
-  puts
+  puts <<~MESSAGE
+    MCP HTTP Client Example
+    Make sure the HTTP server is running (ruby examples/http_server.rb)
+    #{"=" * 50}
+  MESSAGE
 
   client = MCPHTTPClient.new
 

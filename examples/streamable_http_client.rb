@@ -92,7 +92,6 @@ def main
   end
 
   puts "=== MCP SSE Test Client ==="
-  puts ""
 
   # Step 1: Initialize session
   logger.info("Initializing session...")
@@ -134,13 +133,16 @@ def main
 
   # Step 3: Interactive menu
   loop do
-    puts "\n=== Available Actions ==="
-    puts "1. Send custom notification"
-    puts "2. Test echo"
-    puts "3. List tools"
-    puts "0. Exit"
-    puts ""
-    print("Choose an action: ")
+    puts <<~MESSAGE.chomp
+
+      === Available Actions ===
+      1. Send custom notification
+      2. Test echo
+      3. List tools
+      0. Exit
+
+      Choose an action:#{" "}
+    MESSAGE
 
     choice = gets.chomp
 
@@ -167,19 +169,15 @@ def main
       else
         logger.error("Error: #{response[:body]["error"]}")
       end
-
     when "2"
       print("Enter message to echo: ")
       message = gets.chomp
       make_request(session_id, "tools/call", { name: "echo", arguments: { message: message } })
-
     when "3"
       make_request(session_id, "tools/list")
-
     when "0"
       logger.info("Exiting...")
       break
-
     else
       puts "Invalid choice"
     end
