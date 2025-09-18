@@ -42,9 +42,12 @@ module MCP
           accept_uri: false,
           accept_file: ->(path) { path.to_s.start_with?(Gem.loaded_specs["json-schema"].full_gem_path) },
         )
+        # Get the metaschema for the draft4 validator
         metaschema_path = Pathname.new(JSON::Validator.validator_for_name("draft4").metaschema)
-        metaschema_uri = URI::File.build(host: "", path: metaschema_path.expand_path.cleanpath.to_s.tr("\\", "/"))
+        # Converts metaschema to a file URI for Windows compatibility
+        metaschema_uri = JSON::Util::URI.file_uri(metaschema_path.expand_path.cleanpath.to_s.tr("\\", "/"))
         metaschema = metaschema_uri.to_s
+        # Validates the output returning any errors
         errors = JSON::Validator.fully_validate(metaschema, schema, schema_reader: schema_reader)
         if errors.any?
           raise ArgumentError, "Invalid JSON Schema: #{errors.join(", ")}"
