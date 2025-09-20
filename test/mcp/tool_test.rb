@@ -123,7 +123,7 @@ module MCP
         name: "mock_tool",
         title: "Mock Tool",
         description: "a mock tool for testing",
-      ) do |_|
+      ) do
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
@@ -141,7 +141,7 @@ module MCP
           read_only_hint: true,
           title: "Mock Tool",
         },
-      ) do |_|
+      ) do
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
@@ -347,7 +347,7 @@ module MCP
         title: "Mock Tool",
         description: "a mock tool for testing",
         output_schema: { properties: { result: { type: "string" } }, required: ["result"] },
-      ) do |_|
+      ) do
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
 
