@@ -37,7 +37,7 @@ module MCP
         arguments: [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
         ],
-      ) do |_|
+      ) do
         Prompt::Result.new(
           description: "Hello, world!",
           messages: [

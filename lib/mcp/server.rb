@@ -253,7 +253,7 @@ module MCP
     end
 
     def list_tools(request)
-      @tools.map { |_, tool| tool.to_h }
+      @tools.values.map(&:to_h)
     end
 
     def call_tool(request)
@@ -293,7 +293,7 @@ module MCP
     end
 
     def list_prompts(request)
-      @prompts.map { |_, prompt| prompt.to_h }
+      @prompts.values.map(&:to_h)
     end
 
     def get_prompt(request)
