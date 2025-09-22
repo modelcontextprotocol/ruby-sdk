@@ -8,13 +8,20 @@ module MCP
       attr_reader :title_value
       attr_reader :description_value
       attr_reader :arguments_value
+      attr_reader :meta_value
 
       def template(args, server_context: nil)
         raise NotImplementedError, "Subclasses must implement template"
       end
 
       def to_h
-        { name: name_value, title: title_value, description: description_value, arguments: arguments_value.map(&:to_h) }.compact
+        {
+          name: name_value,
+          title: title_value,
+          description: description_value,
+          arguments: arguments_value&.map(&:to_h),
+          _meta: meta_value,
+        }.compact
       end
 
       def inherited(subclass)
@@ -23,6 +30,7 @@ module MCP
         subclass.instance_variable_set(:@title_value, nil)
         subclass.instance_variable_set(:@description_value, nil)
         subclass.instance_variable_set(:@arguments_value, nil)
+        subclass.instance_variable_set(:@meta_value, nil)
       end
 
       def prompt_name(value = NOT_SET)
@@ -58,6 +66,14 @@ module MCP
           @arguments_value
         else
           @arguments_value = value
+        end
+      end
+
+      def meta(value = NOT_SET)
+        if value == NOT_SET
+          @meta_value
+        else
+          @meta_value = value
         end
       end
 

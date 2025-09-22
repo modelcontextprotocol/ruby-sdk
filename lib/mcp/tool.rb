@@ -8,6 +8,7 @@ module MCP
       attr_reader :title_value
       attr_reader :description_value
       attr_reader :annotations_value
+      attr_reader :meta_value
 
       def call(*args, server_context: nil)
         raise NotImplementedError, "Subclasses must implement call"
@@ -21,6 +22,7 @@ module MCP
           inputSchema: input_schema_value.to_h,
           outputSchema: @output_schema_value&.to_h,
           annotations: annotations_value&.to_h,
+          _meta: meta_value,
         }.compact
       end
 
@@ -32,6 +34,7 @@ module MCP
         subclass.instance_variable_set(:@input_schema_value, nil)
         subclass.instance_variable_set(:@output_schema_value, nil)
         subclass.instance_variable_set(:@annotations_value, nil)
+        subclass.instance_variable_set(:@meta_value, nil)
       end
 
       def tool_name(value = NOT_SET)
@@ -97,6 +100,14 @@ module MCP
           @annotations_value
         else
           @annotations_value = Annotations.new(**hash)
+        end
+      end
+
+      def meta(value = NOT_SET)
+        if value == NOT_SET
+          @meta_value
+        else
+          @meta_value = value
         end
       end
 
