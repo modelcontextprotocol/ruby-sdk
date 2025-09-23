@@ -5,20 +5,29 @@ module MCP
     DEFAULT_PROTOCOL_VERSION = "2025-06-18"
     SUPPORTED_PROTOCOL_VERSIONS = [DEFAULT_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]
 
-    attr_writer :exception_reporter, :instrumentation_callback, :protocol_version, :validate_tool_call_arguments
+    attr_writer :exception_reporter, :instrumentation_callback
 
     def initialize(exception_reporter: nil, instrumentation_callback: nil, protocol_version: nil,
       validate_tool_call_arguments: true)
       @exception_reporter = exception_reporter
       @instrumentation_callback = instrumentation_callback
       @protocol_version = protocol_version
-      if protocol_version && !SUPPORTED_PROTOCOL_VERSIONS.include?(protocol_version)
-        message = "protocol_version must be #{SUPPORTED_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_PROTOCOL_VERSIONS[-1]}"
-        raise ArgumentError, message
+      if protocol_version
+        validate_protocol_version!(protocol_version)
       end
-      unless validate_tool_call_arguments.is_a?(TrueClass) || validate_tool_call_arguments.is_a?(FalseClass)
-        raise ArgumentError, "validate_tool_call_arguments must be a boolean"
-      end
+      validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)
+
+      @validate_tool_call_arguments = validate_tool_call_arguments
+    end
+
+    def protocol_version=(protocol_version)
+      validate_protocol_version!(protocol_version)
+
+      @protocol_version = protocol_version
+    end
+
+    def validate_tool_call_arguments=(validate_tool_call_arguments)
+      validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)
 
       @validate_tool_call_arguments = validate_tool_call_arguments
     end
@@ -82,6 +91,19 @@ module MCP
     end
 
     private
+
+    def validate_protocol_version!(protocol_version)
+      unless SUPPORTED_PROTOCOL_VERSIONS.include?(protocol_version)
+        message = "protocol_version must be #{SUPPORTED_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_PROTOCOL_VERSIONS[-1]}"
+        raise ArgumentError, message
+      end
+    end
+
+    def validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)
+      unless validate_tool_call_arguments.is_a?(TrueClass) || validate_tool_call_arguments.is_a?(FalseClass)
+        raise ArgumentError, "validate_tool_call_arguments must be a boolean"
+      end
+    end
 
     def default_exception_reporter
       @default_exception_reporter ||= ->(exception, server_context) {}
