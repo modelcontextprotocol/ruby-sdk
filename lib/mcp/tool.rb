@@ -84,9 +84,7 @@ module MCP
         if value == NOT_SET
           output_schema_value
         elsif value.is_a?(Hash)
-          properties = value[:properties] || value["properties"] || {}
-          required = value[:required] || value["required"] || []
-          @output_schema_value = OutputSchema.new(properties:, required:)
+          @output_schema_value = OutputSchema.new(value)
         elsif value.is_a?(OutputSchema)
           @output_schema_value = value
         end

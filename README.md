@@ -546,6 +546,27 @@ class DataTool < MCP::Tool
 end
 ```
 
+Output schema may also describe an array of objects:
+
+```ruby
+class WeatherTool < MCP::Tool
+  output_schema(
+    type: "array",
+    item: {
+      properties: {
+        temperature: { type: "number" },
+        condition: { type: "string" },
+        humidity: { type: "integer" }
+      },
+      required: ["temperature", "condition", "humidity"]
+    }
+  )
+end
+```
+
+Please note: in this case, you must provide `type: "array"`. The default type
+for output schemas is `object`.
+
 MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#output-schema) specifies that:
 
 - **Server Validation**: Servers MUST provide structured results that conform to the output schema

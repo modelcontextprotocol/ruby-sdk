@@ -267,7 +267,7 @@ module MCP
         title: "Mock Tool",
         description: "a mock tool for testing",
         inputSchema: { type: "object" },
-        outputSchema: { type: "object", properties: { result: { type: "string" } }, required: [:result] },
+        outputSchema: { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
       }
       assert_equal expected, tool.to_h
     end
@@ -292,7 +292,7 @@ module MCP
       end
 
       tool = HashOutputSchemaTool
-      expected = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      expected = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
       assert_equal expected, tool.output_schema.to_h
     end
 
@@ -302,7 +302,7 @@ module MCP
       end
 
       tool = OutputSchemaObjectTool
-      expected = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      expected = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
       assert_equal expected, tool.output_schema.to_h
     end
 
@@ -354,7 +354,7 @@ module MCP
       assert_equal "mock_tool", tool.name_value
       assert_equal "a mock tool for testing", tool.description
       assert_instance_of Tool::OutputSchema, tool.output_schema
-      expected_output_schema = { type: "object", properties: { result: { type: "string" } }, required: [:result] }
+      expected_output_schema = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
       assert_equal expected_output_schema, tool.output_schema.to_h
     end
 
@@ -379,7 +379,7 @@ module MCP
       expected_input = { type: "object", properties: { message: { type: "string" } }, required: [:message] }
       assert_equal expected_input, tool.input_schema.to_h
 
-      expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: [:result, :success] }
+      expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: ["result", "success"] }
       assert_equal expected_output, tool.output_schema.to_h
     end
   end

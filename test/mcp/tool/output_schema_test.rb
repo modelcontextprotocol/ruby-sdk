@@ -5,15 +5,10 @@ require "test_helper"
 module MCP
   class Tool
     class OutputSchemaTest < ActiveSupport::TestCase
-      test "required arguments are converted to symbols" do
-        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
-        assert_equal [:result], output_schema.required
-      end
-
       test "to_h returns a hash representation of the output schema" do
         output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
         assert_equal(
-          { type: "object", properties: { result: { type: "string" } }, required: [:result] },
+          { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
           output_schema.to_h,
         )
       end
@@ -41,7 +36,7 @@ module MCP
 
       test "valid schema initialization" do
         schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
-        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: [:foo] }, schema.to_h)
+        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: ["foo"] }, schema.to_h)
       end
 
       test "invalid schema raises argument error" do
@@ -134,6 +129,26 @@ module MCP
         assert_raises(OutputSchema::ValidationError) do
           schema.validate_result(invalid_result)
         end
+      end
+
+      test "allow to declare array schemas" do
+        schema = OutputSchema.new({
+          type: "array",
+          items: {
+            properties: { foo: { type: "string" } },
+            required: [:foo],
+          },
+        })
+        assert_equal(
+          {
+            type: "array",
+            items: {
+              properties: { foo: { type: "string" } },
+              required: ["foo"],
+            },
+          },
+          schema.to_h,
+        )
       end
     end
   end
