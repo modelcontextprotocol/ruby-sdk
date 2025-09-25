@@ -425,10 +425,10 @@ tool = MCP::Tool.define(
 end
 ```
 
-3. By using the `ModelContextProtocol::Server#define_tool` method with a block:
+3. By using the `MCP::Server#define_tool` method with a block:
 
 ```ruby
-server = ModelContextProtocol::Server.new
+server = MCP::Server.new
 server.define_tool(
   name: "my_tool",
   description: "This tool performs specific functionality...",
@@ -629,11 +629,11 @@ prompt = MCP::Prompt.define(
 end
 ```
 
-3. Using the `ModelContextProtocol::Server#define_protocol` method:
+3. Using the `MCP::Server#define_prompt` method:
 
 ```ruby
-server = ModelContextProtocol::Server.new
-server.define_protocol(
+server = MCP::Server.new
+server.define_prompt(
   name: "my_prompt",
   description: "This prompt performs specific functionality...",
   arguments: [
