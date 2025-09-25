@@ -133,7 +133,7 @@ module MCP
         jsonrpc: "2.0",
         id: 1,
         result: {
-          protocolVersion: "2025-06-18",
+          protocolVersion: Configuration::DRAFT_PROTOCOL_VERSION,
           capabilities: {
             prompts: { listChanged: true },
             resources: { listChanged: true },
@@ -776,7 +776,7 @@ module MCP
       }
 
       response = @server.handle(request)
-      assert_equal Configuration::DEFAULT_PROTOCOL_VERSION, response[:result][:protocolVersion]
+      assert_equal Configuration::DRAFT_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
     test "server response does not include title when not configured" do
@@ -850,6 +850,67 @@ module MCP
         )
       end
       assert_equal("Error occurred in defined_tool. `annotations` are supported by protocol version 2025-03-26 or higher", exception.message)
+    end
+
+    test "raises error if `title` of `server_info` is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", title: "Example Server Display Name", configuration: configuration)
+      end
+      assert_equal("Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `title` of tool is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+      server = Server.new(name: "test_server", configuration: configuration)
+
+      exception = assert_raises(ArgumentError) do
+        server.define_tool(
+          title: "Test tool",
+        )
+      end
+      assert_equal("Error occurred in Test tool. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `title` of prompt is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+      server = Server.new(name: "test_server", configuration: configuration)
+
+      exception = assert_raises(ArgumentError) do
+        server.define_prompt(
+          title: "Test prompt",
+        )
+      end
+      assert_equal("Error occurred in Test prompt. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `title` of resource is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+
+      resource = Resource.new(
+        uri: "https://test_resource.invalid",
+        name: "test-resource",
+        title: "Test resource",
+      )
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", resources: [resource], configuration: configuration)
+      end
+      assert_equal("Error occurred in Test resource. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `title` of resource template is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+
+      resource = Resource.new(
+        uri: "https://test_resource.invalid",
+        name: "test-resource",
+        title: "Test resource template",
+      )
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", resources: [resource], configuration: configuration)
+      end
+      assert_equal("Error occurred in Test resource template. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
     end
 
     test "#define_tool adds a tool to the server" do

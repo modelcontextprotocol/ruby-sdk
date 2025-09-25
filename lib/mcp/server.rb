@@ -106,6 +106,8 @@ module MCP
     def define_prompt(name: nil, title: nil, description: nil, arguments: [], &block)
       prompt = Prompt.define(name:, title:, description:, arguments:, &block)
       @prompts[prompt.name_value] = prompt
+
+      validate!
     end
 
     def define_custom_method(method_name:, &block)
@@ -171,6 +173,21 @@ module MCP
     private
 
     def validate!
+      # NOTE: The draft protocol version is the next version after 2025-03-26.
+      if @configuration.protocol_version <= "2025-03-26"
+        if server_info.key?(:title)
+          message = "Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier"
+          raise ArgumentError, message
+        end
+
+        primitive_titles = [@tools.values, @prompts.values, @resources, @resource_templates].flatten.map(&:title)
+
+        if primitive_titles.any?
+          message = "Error occurred in #{primitive_titles.join(", ")}. `title` is not supported in protocol version 2025-03-26 or earlier"
+          raise ArgumentError, message
+        end
+      end
+
       if @configuration.protocol_version == "2024-11-05"
         if @instructions
           message = "`instructions` supported by protocol version 2025-03-26 or higher"
