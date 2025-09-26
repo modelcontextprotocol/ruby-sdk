@@ -555,6 +555,38 @@ MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/2
 
 The output schema follows standard JSON Schema format and helps ensure consistent data exchange between MCP servers and clients.
 
+### Tool Responses with Structured Content
+
+Tools can return structured data alongside text content using the `structured_content` parameter.
+
+The structured content will be included in the JSON-RPC response as the `structuredContent` field.
+
+```ruby
+class APITool < MCP::Tool
+  description "Get current weather and return structured data"
+
+  def self.call(endpoint:, server_context:)
+    # Call weather API and structure the response
+    api_response = WeatherAPI.fetch(location, units)
+    weather_data = {
+      temperature: api_response.temp,
+      condition: api_response.description,
+      humidity: api_response.humidity_percent
+    }
+
+    output_schema.validate_result(weather_data)
+
+    MCP::Tool::Response.new(
+      [{
+        type: "text",
+        text: weather_data.to_json
+      }],
+      structured_content: weather_data
+    )
+  end
+end
+```
+
 ### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
