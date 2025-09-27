@@ -620,6 +620,32 @@ module MCP
           assert_empty(response[2])
         end
 
+        test "handles POST request with body including JSON-RPC response object and returns with no body" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", result: "success", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 202, response[0]
+          assert_empty(response[1])
+          assert_empty(response[2])
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)

@@ -108,8 +108,8 @@ module MCP
 
           if body["method"] == "initialize"
             handle_initialization(body_string, body)
-          elsif body["method"] == MCP::Methods::NOTIFICATIONS_INITIALIZED
-            handle_notification_initialized
+          elsif notification?(body) || response?(body)
+            handle_accepted
           else
             handle_regular_request(body_string, session_id)
           end
@@ -168,6 +168,14 @@ module MCP
           [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
         end
 
+        def notification?(body)
+          !body["id"] && !!body["method"]
+        end
+
+        def response?(body)
+          !!body["id"] && !body["method"]
+        end
+
         def handle_initialization(body_string, body)
           session_id = SecureRandom.uuid
 
@@ -187,7 +195,7 @@ module MCP
           [200, headers, [response]]
         end
 
-        def handle_notification_initialized
+        def handle_accepted
           [202, {}, []]
         end
 
