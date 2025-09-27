@@ -7,23 +7,20 @@ module MCP
     class OutputSchema
       class ValidationError < StandardError; end
 
-      attr_reader :properties, :required
+      attr_reader :schema
 
-      def initialize(properties: {}, required: [])
-        @properties = properties
-        @required = required.map(&:to_sym)
+      def initialize(schema = {})
+        @schema = deep_transform_keys(JSON.parse(JSON.dump(schema)), &:to_sym)
+        @schema[:type] ||= "object"
         validate_schema!
       end
 
       def ==(other)
-        other.is_a?(OutputSchema) && properties == other.properties && required == other.required
+        other.is_a?(OutputSchema) && schema == other.schema
       end
 
       def to_h
-        { type: "object" }.tap do |hsh|
-          hsh[:properties] = properties if properties.any?
-          hsh[:required] = required if required.any?
-        end
+        @schema
       end
 
       def validate_result(result)
@@ -35,8 +32,24 @@ module MCP
 
       private
 
+      def deep_transform_keys(schema, &block)
+        case schema
+        when Hash
+          schema.each_with_object({}) do |(key, value), result|
+            if key.casecmp?("$ref")
+              raise ArgumentError, "Invalid JSON Schema: $ref is not allowed in tool output schemas"
+            end
+
+            result[yield(key)] = deep_transform_keys(value, &block)
+          end
+        when Array
+          schema.map { |e| deep_transform_keys(e, &block) }
+        else
+          schema
+        end
+      end
+
       def validate_schema!
-        check_for_refs!
         schema = to_h
         schema_reader = JSON::Schema::Reader.new(
           accept_uri: false,
@@ -46,19 +59,6 @@ module MCP
         errors = JSON::Validator.fully_validate(metaschema, schema, schema_reader: schema_reader)
         if errors.any?
           raise ArgumentError, "Invalid JSON Schema: #{errors.join(", ")}"
-        end
-      end
-
-      def check_for_refs!(obj = properties)
-        case obj
-        when Hash
-          if obj.key?("$ref") || obj.key?(:$ref)
-            raise ArgumentError, "Invalid JSON Schema: $ref is not allowed in tool output schemas"
-          end
-
-          obj.each_value { |value| check_for_refs!(value) }
-        when Array
-          obj.each { |item| check_for_refs!(item) }
         end
       end
     end
