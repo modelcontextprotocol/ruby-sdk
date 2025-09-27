@@ -40,11 +40,21 @@ module MCP
       assert_equal Configuration::DEFAULT_PROTOCOL_VERSION, config.protocol_version
     end
 
-    test "allows setting a custom protocol version" do
+    test "raises ArgumentError when protocol_version is not a supported protocol version" do
       config = Configuration.new
-      custom_version = "2025-03-27"
-      config.protocol_version = custom_version
-      assert_equal custom_version, config.protocol_version
+      exception = assert_raises(ArgumentError) do
+        custom_version = "2025-03-27"
+        config.protocol_version = custom_version
+      end
+      assert_equal("protocol_version must be 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
+    end
+
+    test "raises ArgumentError when protocol_version is not a boolean value" do
+      config = Configuration.new
+      exception = assert_raises(ArgumentError) do
+        config.validate_tool_call_arguments = "true"
+      end
+      assert_equal("validate_tool_call_arguments must be a boolean", exception.message)
     end
 
     test "merges protocol version from other configuration" do
