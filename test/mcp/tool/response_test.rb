@@ -69,7 +69,7 @@ module MCP
         response = Response.new(content)
         actual = response.to_h
 
-        assert_equal [:content, :isError].sort, actual.keys.sort
+        assert_equal [:content, :isError], actual.keys
         assert_equal content, actual[:content]
         refute actual[:isError]
       end
@@ -81,7 +81,7 @@ module MCP
         }]
         response = Response.new(content, error: true)
         actual = response.to_h
-        assert_equal [:content, :isError].sort, actual.keys.sort
+        assert_equal [:content, :isError], actual.keys
         assert_equal content, actual[:content]
         assert actual[:isError]
       end
@@ -95,7 +95,7 @@ module MCP
         response = Response.new(content, structured_content: structured_content)
         actual = response.to_h
 
-        assert_equal [:content, :isError, :structuredContent].sort, actual.keys.sort
+        assert_equal [:content, :isError, :structuredContent], actual.keys
         assert_equal content, actual[:content]
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
@@ -106,7 +106,7 @@ module MCP
         response = Response.new(structured_content: structured_content)
         actual = response.to_h
 
-        assert_equal [:isError, :structuredContent].sort, actual.keys.sort
+        assert_equal [:isError, :structuredContent], actual.keys
         assert_nil actual[:content]
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
