@@ -210,7 +210,7 @@ module MCP
           @server.define_prompt(
             name: "test_prompt",
             description: "Test prompt",
-          ) do |_args, _server_context:|
+          ) do
             MCP::PromptResponse.new(messages: [{ role: "user", content: "Test" }])
           end
 

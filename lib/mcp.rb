@@ -18,10 +18,14 @@ require_relative "mcp/server/transports/stdio_transport"
 require_relative "mcp/string_utils"
 require_relative "mcp/tool"
 require_relative "mcp/tool/input_schema"
+require_relative "mcp/tool/output_schema"
 require_relative "mcp/tool/response"
 require_relative "mcp/tool/annotations"
 require_relative "mcp/transport"
 require_relative "mcp/version"
+require_relative "mcp/client"
+require_relative "mcp/client/http"
+require_relative "mcp/client/tool"
 
 module MCP
   class << self

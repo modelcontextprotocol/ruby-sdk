@@ -22,7 +22,9 @@ Or install it yourself as:
 $ gem install mcp
 ```
 
-## MCP Server
+You may need to add additional dependencies depending on which features you wish to access.
+
+## Building an MCP Server
 
 The `MCP::Server` class is the core component that handles JSON-RPC requests and responses.
 It implements the Model Context Protocol specification, handling model context requests and responses.
@@ -122,8 +124,8 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 #### Transport Support
 
-- **HTTP Transport**: Notifications are sent as Server-Sent Events (SSE) to all connected sessions
-- **Stdio Transport**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
 
 #### Usage Example
 
@@ -218,7 +220,7 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
 
-## Configuration
+### Configuration
 
 The gem can be configured using the `MCP.configure` block:
 
@@ -365,11 +367,11 @@ When an exception occurs:
 
 If no exception reporter is configured, a default no-op reporter is used that silently ignores exceptions.
 
-## Tools
+### Tools
 
 MCP spec includes [Tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) which provide functionality to LLM apps.
 
-This gem provides a `MCP::Tool` class that can be used to create tools in two ways:
+This gem provides a `MCP::Tool` class that can be used to create tools in three ways:
 
 1. As a class definition:
 
@@ -382,6 +384,14 @@ class MyTool < MCP::Tool
       message: { type: "string" },
     },
     required: ["message"]
+  )
+  output_schema(
+    properties: {
+      result: { type: "string" },
+      success: { type: "boolean" },
+      timestamp: { type: "string", format: "date-time" }
+    },
+    required: ["result", "success", "timestamp"]
   )
   annotations(
     read_only_hint: true,
@@ -415,6 +425,22 @@ tool = MCP::Tool.define(
 end
 ```
 
+3. By using the `MCP::Server#define_tool` method with a block:
+
+```ruby
+server = MCP::Server.new
+server.define_tool(
+  name: "my_tool",
+  description: "This tool performs specific functionality...",
+  annotations: {
+    title: "My Tool",
+    read_only_hint: true
+  }
+) do |args, server_context|
+  Tool::Response.new([{ type: "text", text: "OK" }])
+end
+```
+
 The server_context parameter is the server_context passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
@@ -430,11 +456,163 @@ Tools can include annotations that provide additional metadata about their behav
 
 Annotations can be set either through the class definition using the `annotations` class method or when defining a tool using the `define` method.
 
-## Prompts
+> [!NOTE]
+> This **Tool Annotations** feature is supported starting from `protocol_version: '2025-03-26'`.
+
+### Tool Output Schemas
+
+Tools can optionally define an `output_schema` to specify the expected structure of their results. This works similarly to how `input_schema` is defined and can be used in three ways:
+
+1. **Class definition with output_schema:**
+
+```ruby
+class WeatherTool < MCP::Tool
+  tool_name "get_weather"
+  description "Get current weather for a location"
+
+  input_schema(
+    properties: {
+      location: { type: "string" },
+      units: { type: "string", enum: ["celsius", "fahrenheit"] }
+    },
+    required: ["location"]
+  )
+
+  output_schema(
+    properties: {
+      temperature: { type: "number" },
+      condition: { type: "string" },
+      humidity: { type: "integer" }
+    },
+    required: ["temperature", "condition", "humidity"]
+  )
+
+  def self.call(location:, units: "celsius", server_context:)
+    # Call weather API and structure the response
+    api_response = WeatherAPI.fetch(location, units)
+    weather_data = {
+      temperature: api_response.temp,
+      condition: api_response.description,
+      humidity: api_response.humidity_percent
+    }
+
+    output_schema.validate_result(weather_data)
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: weather_data.to_json
+    }])
+  end
+end
+```
+
+2. **Using Tool.define with output_schema:**
+
+```ruby
+tool = MCP::Tool.define(
+  name: "calculate_stats",
+  description: "Calculate statistics for a dataset",
+  input_schema: {
+    properties: {
+      numbers: { type: "array", items: { type: "number" } }
+    },
+    required: ["numbers"]
+  },
+  output_schema: {
+    properties: {
+      mean: { type: "number" },
+      median: { type: "number" },
+      count: { type: "integer" }
+    },
+    required: ["mean", "median", "count"]
+  }
+) do |args, server_context|
+  # Calculate statistics and validate against schema
+  MCP::Tool::Response.new([{ type: "text", text: "Statistics calculated" }])
+end
+```
+
+3. **Using OutputSchema objects:**
+
+```ruby
+class DataTool < MCP::Tool
+  output_schema MCP::Tool::OutputSchema.new(
+    properties: {
+      success: { type: "boolean" },
+      data: { type: "object" }
+    },
+    required: ["success"]
+  )
+end
+```
+
+Output schema may also describe an array of objects:
+
+```ruby
+class WeatherTool < MCP::Tool
+  output_schema(
+    type: "array",
+    item: {
+      properties: {
+        temperature: { type: "number" },
+        condition: { type: "string" },
+        humidity: { type: "integer" }
+      },
+      required: ["temperature", "condition", "humidity"]
+    }
+  )
+end
+```
+
+Please note: in this case, you must provide `type: "array"`. The default type
+for output schemas is `object`.
+
+MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#output-schema) specifies that:
+
+- **Server Validation**: Servers MUST provide structured results that conform to the output schema
+- **Client Validation**: Clients SHOULD validate structured results against the output schema
+- **Better Integration**: Enables strict schema validation, type information, and improved developer experience
+- **Backward Compatibility**: Tools returning structured content SHOULD also include serialized JSON in a TextContent block
+
+The output schema follows standard JSON Schema format and helps ensure consistent data exchange between MCP servers and clients.
+
+### Tool Responses with Structured Content
+
+Tools can return structured data alongside text content using the `structured_content` parameter.
+
+The structured content will be included in the JSON-RPC response as the `structuredContent` field.
+
+```ruby
+class APITool < MCP::Tool
+  description "Get current weather and return structured data"
+
+  def self.call(endpoint:, server_context:)
+    # Call weather API and structure the response
+    api_response = WeatherAPI.fetch(location, units)
+    weather_data = {
+      temperature: api_response.temp,
+      condition: api_response.description,
+      humidity: api_response.humidity_percent
+    }
+
+    output_schema.validate_result(weather_data)
+
+    MCP::Tool::Response.new(
+      [{
+        type: "text",
+        text: weather_data.to_json
+      }],
+      structured_content: weather_data
+    )
+  end
+end
+```
+
+### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
-The `MCP::Prompt` class provides two ways to create prompts:
+The `MCP::Prompt` class provides three ways to create prompts:
 
 1. As a class definition with metadata:
 
@@ -504,6 +682,37 @@ prompt = MCP::Prompt.define(
 end
 ```
 
+3. Using the `MCP::Server#define_prompt` method:
+
+```ruby
+server = MCP::Server.new
+server.define_prompt(
+  name: "my_prompt",
+  description: "This prompt performs specific functionality...",
+  arguments: [
+    Prompt::Argument.new(
+      name: "message",
+      description: "Input message",
+      required: true
+    )
+  ]
+) do |args, server_context:|
+  Prompt::Result.new(
+    description: "Response description",
+    messages: [
+      Prompt::Message.new(
+        role: "user",
+        content: Content::Text.new("User message")
+      ),
+      Prompt::Message.new(
+        role: "assistant",
+        content: Content::Text.new(args["message"])
+      )
+    ]
+  )
+end
+```
+
 The server_context parameter is the server_context passed into the server and can be used to pass per request information,
 e.g. around authentication state or user preferences.
 
@@ -556,7 +765,7 @@ The data contains the following keys:
 `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
 This is to avoid potential issues with metric cardinality
 
-## Resources
+### Resources
 
 MCP spec includes [Resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources).
 
@@ -611,6 +820,102 @@ server = MCP::Server.new(
   resource_templates: [resource_template],
 )
 ```
+
+## Building an MCP Client
+
+The `MCP::Client` class provides an interface for interacting with MCP servers.
+
+This class supports:
+
+- Tool listing via the `tools/list` method
+- Tool invocation via the `tools/call` method
+- Automatic JSON-RPC 2.0 message formatting
+- UUID request ID generation
+
+Clients are initialized with a transport layer instance that handles the low-level communication mechanics.
+Authorization is handled by the transport layer.
+
+## Transport Layer Interface
+
+If the transport layer you need is not included in the gem, you can build and pass your own instances so long as they conform to the following interface:
+
+```ruby
+class CustomTransport
+  # Sends a JSON-RPC request to the server and returns the raw response.
+  #
+  # @param request [Hash] A complete JSON-RPC request object.
+  #     https://www.jsonrpc.org/specification#request_object
+  # @return [Hash] A hash modeling a JSON-RPC response object.
+  #     https://www.jsonrpc.org/specification#response_object
+  def send_request(request:)
+    # Your transport-specific logic here
+    # - HTTP: POST to endpoint with JSON body
+    # - WebSocket: Send message over WebSocket
+    # - stdio: Write to stdout, read from stdin
+    # - etc.
+  end
+end
+```
+
+### HTTP Transport Layer
+
+Use the `MCP::Client::HTTP` transport to interact with MCP servers using simple HTTP requests.
+
+You'll need to add `faraday` as a dependency in order to use the HTTP transport layer:
+
+```ruby
+gem 'mcp'
+gem 'faraday', '>= 2.0'
+```
+
+Example usage:
+
+```ruby
+http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
+client = MCP::Client.new(transport: http_transport)
+
+# List available tools
+tools = client.tools
+tools.each do |tool|
+  puts <<~TOOL_INFORMATION
+    Tool: #{tool.name}
+    Description: #{tool.description}
+    Input Schema: #{tool.input_schema}
+  TOOL_INFORMATION
+end
+
+# Call a specific tool
+response = client.call_tool(
+  tool: tools.first,
+  arguments: { message: "Hello, world!" }
+)
+```
+
+#### HTTP Authorization
+
+By default, the HTTP transport layer provides no authentication to the server, but you can provide custom headers if you need authentication. For example, to use Bearer token authentication:
+
+```ruby
+http_transport = MCP::Client::HTTP.new(
+  url: "https://api.example.com/mcp",
+  headers: {
+    "Authorization" => "Bearer my_token"
+  }
+)
+
+client = MCP::Client.new(transport: http_transport)
+client.tools # will make the call using Bearer auth
+```
+
+You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every request.
+
+### Tool Objects
+
+The client provides a wrapper class for tools returned by the server:
+
+- `MCP::Client::Tool` - Represents a single tool with its metadata
+
+This class provides easy access to tool properties like name, description, input schema, and output schema.
 
 ## Releases
 
