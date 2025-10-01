@@ -10,6 +10,7 @@ module MCP
         name: "test_tool",
         title: "Test tool",
         description: "A test tool",
+        meta: { foo: "bar" },
       )
 
       @tool_that_raises = Tool.define(
@@ -195,6 +196,7 @@ module MCP
       assert_equal "Test tool", result[:tools][0][:title]
       assert_equal "A test tool", result[:tools][0][:description]
       assert_equal({ type: "object" }, result[:tools][0][:inputSchema])
+      assert_equal({ foo: "bar" }, result[:tools][0][:_meta])
       assert_instrumentation_data({ method: "tools/list" })
     end
 
@@ -211,6 +213,7 @@ module MCP
       assert_equal "test_tool", result[:tools][0][:name]
       assert_equal "Test tool", result[:tools][0][:title]
       assert_equal "A test tool", result[:tools][0][:description]
+      assert_equal({ foo: "bar" }, result[:tools][0][:_meta])
     end
 
     test "#tools_list_handler sets the tools/list handler" do
@@ -848,6 +851,7 @@ module MCP
         name: "defined_tool",
         description: "Defined tool",
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+        meta: { foo: "bar" },
       ) do |message:|
         Tool::Response.new(message)
       end

@@ -8,6 +8,7 @@ module MCP
       attr_reader :title_value
       attr_reader :description_value
       attr_reader :annotations_value
+      attr_reader :meta_value
 
       def call(*args, server_context: nil)
         raise NotImplementedError, "Subclasses must implement call"
@@ -21,6 +22,7 @@ module MCP
           inputSchema: input_schema_value.to_h,
           outputSchema: @output_schema_value&.to_h,
           annotations: annotations_value&.to_h,
+          _meta: meta_value,
         }.compact
       end
 
@@ -32,6 +34,7 @@ module MCP
         subclass.instance_variable_set(:@input_schema_value, nil)
         subclass.instance_variable_set(:@output_schema_value, nil)
         subclass.instance_variable_set(:@annotations_value, nil)
+        subclass.instance_variable_set(:@meta_value, nil)
       end
 
       def tool_name(value = NOT_SET)
@@ -90,6 +93,14 @@ module MCP
         end
       end
 
+      def meta(value = NOT_SET)
+        if value == NOT_SET
+          @meta_value
+        else
+          @meta_value = value
+        end
+      end
+
       def annotations(hash = NOT_SET)
         if hash == NOT_SET
           @annotations_value
@@ -98,12 +109,13 @@ module MCP
         end
       end
 
-      def define(name: nil, title: nil, description: nil, input_schema: nil, output_schema: nil, annotations: nil, &block)
+      def define(name: nil, title: nil, description: nil, input_schema: nil, output_schema: nil, meta: nil, annotations: nil, &block)
         Class.new(self) do
           tool_name name
           title title
           description description
           input_schema input_schema
+          meta meta
           output_schema output_schema
           self.annotations(annotations) if annotations
           define_singleton_method(:call, &block) if block
