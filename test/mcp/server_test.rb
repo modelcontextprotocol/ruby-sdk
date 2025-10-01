@@ -10,7 +10,7 @@ module MCP
         name: "test_tool",
         title: "Test tool",
         description: "A test tool",
-        metadata: { foo: "bar" },
+        meta: { foo: "bar" },
       )
 
       @tool_that_raises = Tool.define(
@@ -851,7 +851,7 @@ module MCP
         name: "defined_tool",
         description: "Defined tool",
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
-        metadata: { foo: "bar" },
+        meta: { foo: "bar" },
       ) do |message:|
         Tool::Response.new(message)
       end

@@ -15,7 +15,7 @@ module MCP
         read_only_hint: true,
         title: "Test Tool",
       )
-      metadata(
+      meta(
         foo: "bar",
       )
 
@@ -55,12 +55,12 @@ module MCP
       assert_equal expected_annotations, tool.to_h[:annotations]
     end
 
-    test "#to_h includes metadata when present" do
+    test "#to_h includes meta when present" do
       tool = TestTool
-      expected_metadata = {
+      expected_meta = {
         foo: "bar",
       }
-      assert_equal expected_metadata, tool.to_h[:_meta]
+      assert_equal expected_meta, tool.to_h[:_meta]
     end
 
     test "#call invokes the tool block and returns the response" do
@@ -163,12 +163,12 @@ module MCP
       assert_equal({ destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: true, title: "Mock Tool" }, tool.annotations_value.to_h)
     end
 
-    test ".define allows definition of tools with metadata" do
+    test ".define allows definition of tools with meta" do
       tool = Tool.define(
         name: "mock_tool",
         title: "Mock Tool",
         description: "a mock tool for testing",
-        metadata: { foo: "bar" },
+        meta: { foo: "bar" },
       ) do |_|
         Tool::Response.new([{ type: "text", content: "OK" }])
       end
@@ -177,7 +177,7 @@ module MCP
       assert_equal "Mock Tool", tool.title
       assert_equal "a mock tool for testing", tool.description
       assert_equal tool.input_schema, Tool::InputSchema.new
-      assert_equal({ foo: "bar" }, tool.metadata_value)
+      assert_equal({ foo: "bar" }, tool.meta_value)
     end
 
     test "Tool class method annotations can be set and retrieved" do
@@ -208,28 +208,28 @@ module MCP
       assert_equal "Updated", tool.annotations_value.title
     end
 
-    test "Tool class method metadata can be set and retrieved" do
-      class MetadataTestTool < Tool
-        tool_name "annotations_test"
-        metadata(foo: "bar")
+    test "Tool class method meta can be set and retrieved" do
+      class MetaTestTool < Tool
+        tool_name "meta_test"
+        meta(foo: "bar")
       end
 
-      tool = MetadataTestTool
-      assert_instance_of Hash, tool.metadata_value
-      assert_equal "bar", tool.metadata_value[:foo]
+      tool = MetaTestTool
+      assert_instance_of Hash, tool.meta_value
+      assert_equal "bar", tool.meta_value[:foo]
     end
 
-    test "Tool class method metadata can be updated" do
-      class UpdatableMetadataTool < Tool
-        tool_name "updatable_metadata"
+    test "Tool class method meta can be updated" do
+      class UpdatableMetaTool < Tool
+        tool_name "updatable_meta"
       end
 
-      tool = UpdatableMetadataTool
-      tool.metadata(foo: "baz")
-      assert_equal({ foo: "baz" }, tool.metadata_value)
+      tool = UpdatableMetaTool
+      tool.meta(foo: "baz")
+      assert_equal({ foo: "baz" }, tool.meta_value)
 
-      tool.metadata(foo: "qux")
-      assert_equal({ foo: "qux" }, tool.metadata_value)
+      tool.meta(foo: "qux")
+      assert_equal({ foo: "qux" }, tool.meta_value)
     end
 
     test "#call with Sorbet typed tools invokes the tool block and returns the response" do
