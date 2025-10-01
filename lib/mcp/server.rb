@@ -99,8 +99,8 @@ module MCP
       end
     end
 
-    def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, metadata: nil, &block)
-      tool = Tool.define(name:, title:, description:, input_schema:, annotations:, metadata:, &block)
+    def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, meta: nil, &block)
+      tool = Tool.define(name:, title:, description:, input_schema:, annotations:, meta:, &block)
       @tools[tool.name_value] = tool
     end
 
