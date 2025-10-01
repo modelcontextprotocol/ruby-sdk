@@ -101,13 +101,24 @@ module MCP
         refute actual[:isError]
       end
 
+      test "#to_h for a standard response with nil content and structured content" do
+        structured_content = { code: 401, message: "Unauthorized" }
+        response = Response.new(nil, structured_content: structured_content)
+        actual = response.to_h
+
+        assert_equal [:content, :isError, :structuredContent], actual.keys
+        assert_empty actual[:content]
+        assert_equal structured_content, actual[:structuredContent]
+        refute actual[:isError]
+      end
+
       test "#to_h for a standard response with structured content only" do
         structured_content = { code: 401, message: "Unauthorized" }
         response = Response.new(structured_content: structured_content)
         actual = response.to_h
 
-        assert_equal [:isError, :structuredContent], actual.keys
-        assert_nil actual[:content]
+        assert_equal [:content, :isError, :structuredContent], actual.keys
+        assert_empty actual[:content]
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
       end
