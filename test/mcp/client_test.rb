@@ -53,8 +53,9 @@ module MCP
 
       client = Client.new(transport: transport)
       result = client.call_tool(tool: tool, arguments: arguments)
+      content = result.dig("result", "content")
 
-      assert_equal("result", result)
+      assert_equal("result", content)
     end
   end
 end
