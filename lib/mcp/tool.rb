@@ -92,6 +92,7 @@ module MCP
           @output_schema_value = value
         end
       end
+
       def meta(value = NOT_SET)
         if value == NOT_SET
           @meta_value
