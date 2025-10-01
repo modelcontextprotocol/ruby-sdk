@@ -44,28 +44,27 @@ module MCP
       end || []
     end
 
-    # Calls a tool via the transport layer.
+    # Calls a tool via the transport layer and returns the full response from the server.
     #
     # @param tool [MCP::Client::Tool] The tool to be called.
     # @param arguments [Object, nil] The arguments to pass to the tool.
-    # @return [Object] The result of the tool call, as returned by the transport.
+    # @return [Hash] The full JSON-RPC response from the transport.
     #
     # @example
     #   tool = client.tools.first
-    #   result = client.call_tool(tool: tool, arguments: { foo: "bar" })
+    #   response = client.call_tool(tool: tool, arguments: { foo: "bar" })
+    #   structured_content = response.dig("result", "structuredContent")
     #
     # @note
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(tool:, arguments: nil)
-      response = transport.send_request(request: {
+      transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
         method: "tools/call",
         params: { name: tool.name, arguments: arguments },
       })
-
-      response.dig("result", "content")
     end
 
     private
