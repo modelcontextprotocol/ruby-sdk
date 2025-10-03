@@ -13,7 +13,7 @@ module MCP
           error = deprecated_error
         end
 
-        @content = content
+        @content = content || []
         @error = error
         @structured_content = structured_content
       end
