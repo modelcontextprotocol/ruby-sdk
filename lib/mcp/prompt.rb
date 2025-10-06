@@ -3,9 +3,10 @@
 module MCP
   class Prompt
     class << self
+      include BaseMetadata::ClassMethods
+
       NOT_SET = Object.new
 
-      attr_reader :title_value
       attr_reader :description_value
       attr_reader :arguments_value
       attr_reader :meta_value
@@ -43,14 +44,6 @@ module MCP
 
       def name_value
         @name_value || StringUtils.handle_from_class_name(name)
-      end
-
-      def title(value = NOT_SET)
-        if value == NOT_SET
-          @title_value
-        else
-          @title_value = value
-        end
       end
 
       def description(value = NOT_SET)

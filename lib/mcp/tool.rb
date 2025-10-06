@@ -3,9 +3,10 @@
 module MCP
   class Tool
     class << self
+      include BaseMetadata::ClassMethods
+
       NOT_SET = Object.new
 
-      attr_reader :title_value
       attr_reader :description_value
       attr_reader :annotations_value
       attr_reader :meta_value
@@ -54,14 +55,6 @@ module MCP
       end
 
       attr_reader :output_schema_value
-
-      def title(value = NOT_SET)
-        if value == NOT_SET
-          @title_value
-        else
-          @title_value = value
-        end
-      end
 
       def description(value = NOT_SET)
         if value == NOT_SET

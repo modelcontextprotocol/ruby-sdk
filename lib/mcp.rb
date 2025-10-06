@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "mcp/base_metadata"
 require_relative "mcp/configuration"
 require_relative "mcp/content"
 require_relative "mcp/instrumentation"

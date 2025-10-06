@@ -3,6 +3,8 @@
 module MCP
   class Prompt
     class Argument
+      include BaseMetadata
+
       attr_reader :name, :title, :description, :required
 
       def initialize(name:, title: nil, description: nil, required: false)

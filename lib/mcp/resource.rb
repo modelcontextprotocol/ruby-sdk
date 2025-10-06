@@ -2,6 +2,8 @@
 
 module MCP
   class Resource
+    include BaseMetadata
+
     attr_reader :uri, :name, :title, :description, :mime_type
 
     def initialize(uri:, name:, title: nil, description: nil, mime_type: nil)
