@@ -624,6 +624,7 @@ class MyPrompt < MCP::Prompt
   arguments [
     MCP::Prompt::Argument.new(
       name: "message",
+      title: "Message Title",
       description: "Input message",
       required: true
     )
@@ -661,6 +662,7 @@ prompt = MCP::Prompt.define(
   arguments: [
     MCP::Prompt::Argument.new(
       name: "message",
+      title: "Message Title",
       description: "Input message",
       required: true
     )
@@ -692,6 +694,7 @@ server.define_prompt(
   arguments: [
     Prompt::Argument.new(
       name: "message",
+      title: "Message Title",
       description: "Input message",
       required: true
     )
@@ -718,7 +721,7 @@ e.g. around authentication state or user preferences.
 
 ### Key Components
 
-- `MCP::Prompt::Argument` - Defines input parameters for the prompt template
+- `MCP::Prompt::Argument` - Defines input parameters for the prompt template with name, title, description, and required flag
 - `MCP::Prompt::Message` - Represents a message in the conversation with a role and content
 - `MCP::Prompt::Result` - The output of a prompt template containing description and messages
 - `MCP::Content::Text` - Text content for messages

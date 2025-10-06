@@ -113,7 +113,12 @@ module MCP
         title: "Mock Prompt",
         description: "a mock prompt for testing",
         arguments: [
-          Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
+          Prompt::Argument.new(
+            name: "test_argument",
+            title: "Test argument title",
+            description: "This is a test argument description",
+            required: true,
+          ),
         ],
       ) do |args, server_context:|
         content = Content::Text.new(args["test_argument"] + " user: #{server_context[:user_id]}")
