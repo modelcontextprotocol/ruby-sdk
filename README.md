@@ -629,6 +629,7 @@ class MyPrompt < MCP::Prompt
       required: true
     )
   ]
+  meta({ version: "1.0", category: "example" })
 
   class << self
     def template(args, server_context:)
@@ -666,7 +667,8 @@ prompt = MCP::Prompt.define(
       description: "Input message",
       required: true
     )
-  ]
+  ],
+  meta: { version: "1.0", category: "example" }
 ) do |args, server_context:|
   MCP::Prompt::Result.new(
     description: "Response description",
@@ -698,7 +700,8 @@ server.define_prompt(
       description: "Input message",
       required: true
     )
-  ]
+  ],
+  meta: { version: "1.0", category: "example" }
 ) do |args, server_context:|
   Prompt::Result.new(
     description: "Response description",

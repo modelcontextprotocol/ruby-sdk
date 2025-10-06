@@ -120,6 +120,7 @@ module MCP
             required: true,
           ),
         ],
+        meta: { foo: "bar" },
       ) do |args, server_context:|
         content = Content::Text.new(args["test_argument"] + " user: #{server_context[:user_id]}")
 
@@ -135,6 +136,10 @@ module MCP
       assert_equal "mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
       assert_equal "test_argument", prompt.arguments.first.name
+      assert_equal "Test argument title", prompt.arguments.first.title
+      assert_equal "This is a test argument description", prompt.arguments.first.description
+      assert prompt.arguments.first.required
+      assert_equal({ foo: "bar" }, prompt.meta_value)
 
       expected = {
         description: "Hello, world!",
