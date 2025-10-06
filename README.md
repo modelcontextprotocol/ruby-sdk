@@ -780,6 +780,9 @@ resource = MCP::Resource.new(
   title: "My Resource", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
+  annotations: { category: "documentation" },
+  size: 1024,
+  meta: { version: "1.0", last_updated: "2024-01-01" }
 )
 
 server = MCP::Server.new(
@@ -813,6 +816,8 @@ resource_template = MCP::ResourceTemplate.new(
   title: "My Resource Template", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
+  annotations: { category: "template" },
+  meta: { version: "1.0", template_type: "dynamic" }
 )
 
 server = MCP::Server.new(
