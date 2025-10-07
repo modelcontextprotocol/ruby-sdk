@@ -178,7 +178,6 @@ If you want to build a local command-line application, you can use the stdio tra
 
 ```ruby
 require "mcp"
-require "mcp/server/transports/stdio_transport"
 
 # Create a simple tool
 class ExampleTool < MCP::Tool
