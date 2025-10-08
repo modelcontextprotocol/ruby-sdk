@@ -131,7 +131,7 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 ```ruby
 server = MCP::Server.new(name: "my_server")
-transport = MCP::Transports::HTTP.new(server)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 server.transport = transport
 
 # When tools change, notify clients
