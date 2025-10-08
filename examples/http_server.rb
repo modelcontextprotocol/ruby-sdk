@@ -2,7 +2,6 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "mcp"
-require "mcp/server/transports/streamable_http_transport"
 require "rack"
 require "rackup"
 require "json"
