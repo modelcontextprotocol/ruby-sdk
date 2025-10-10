@@ -44,6 +44,20 @@ module MCP
       end || []
     end
 
+    # Returns the list of resources available from the server.
+    # Each call will make a new request – the result is not cached.
+    #
+    # @return [Array<Hash>] An array of available resources.
+    def resources
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "resources/list",
+      })
+
+      response.dig("result", "resources") || []
+    end
+
     # Calls a tool via the transport layer and returns the full response from the server.
     #
     # @param tool [MCP::Client::Tool] The tool to be called.
@@ -65,6 +79,21 @@ module MCP
         method: "tools/call",
         params: { name: tool.name, arguments: arguments },
       })
+    end
+
+    # Reads a resource from the server by URI and returns the contents.
+    #
+    # @param uri [String] The URI of the resource to read.
+    # @return [Array<Hash>] An array of resource contents (text or blob).
+    def read_resource(uri:)
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "resources/read",
+        params: { uri: uri },
+      })
+
+      response.dig("result", "contents") || []
     end
 
     private
