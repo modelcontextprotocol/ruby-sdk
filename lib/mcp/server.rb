@@ -288,7 +288,14 @@ module MCP
       begin
         call_tool_with_args(tool, arguments)
       rescue => e
-        raise RequestHandlerError.new("Internal error calling tool #{tool_name}", request, original_error: e)
+        report_exception(e, { request: request })
+        Tool::Response.new(
+          [{
+            type: "text",
+            text: "Internal error calling tool #{tool_name}",
+          }],
+          error: true,
+        ).to_h
       end
     end
 

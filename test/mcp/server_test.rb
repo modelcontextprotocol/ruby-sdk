@@ -340,17 +340,12 @@ module MCP
       assert_equal({ content: [{ type: "text", content: "OK" }], isError: false }, response[:result])
     end
 
-    test "#handle tools/call returns internal error and reports exception if the tool raises an error" do
+    test "#handle tools/call returns error response with isError true if the tool raises an error" do
       @server.configuration.exception_reporter.expects(:call).with do |exception, server_context|
         assert_not_nil exception
         assert_equal(
           {
-            request: {
-              jsonrpc: "2.0",
-              method: "tools/call",
-              params: { name: "tool_that_raises", arguments: { message: "test" } },
-              id: 1,
-            },
+            request: { name: "tool_that_raises", arguments: { message: "test" } },
           },
           server_context,
         )
@@ -368,12 +363,14 @@ module MCP
 
       response = @server.handle(request)
 
-      assert_equal "Internal error", response[:error][:message]
-      assert_equal "Internal error calling tool tool_that_raises", response[:error][:data]
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", error: :internal_error })
+      assert_nil response[:error], "Expected no JSON-RPC error"
+      assert response[:result][:isError]
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "Internal error calling tool tool_that_raises", response[:result][:content][0][:text]
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
     end
 
-    test "#handle_json returns internal error and reports exception if the tool raises an error" do
+    test "#handle_json returns error response with isError true if the tool raises an error" do
       request = JSON.generate({
         jsonrpc: "2.0",
         method: "tools/call",
@@ -385,9 +382,11 @@ module MCP
       })
 
       response = JSON.parse(@server.handle_json(request), symbolize_names: true)
-      assert_equal "Internal error", response[:error][:message]
-      assert_equal "Internal error calling tool tool_that_raises", response[:error][:data]
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", error: :internal_error })
+      assert_nil response[:error], "Expected no JSON-RPC error"
+      assert response[:result][:isError]
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "Internal error calling tool tool_that_raises", response[:result][:content][0][:text]
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
     end
 
     test "#handle tools/call returns error for unknown tool" do
