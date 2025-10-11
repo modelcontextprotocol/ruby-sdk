@@ -828,6 +828,8 @@ This class supports:
 
 - Tool listing via the `tools/list` method
 - Tool invocation via the `tools/call` method
+- Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
+- Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
 - Automatic JSON-RPC 2.0 message formatting
 - UUID request ID generation
 
