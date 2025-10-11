@@ -84,6 +84,18 @@ module MCP
       assert_equal("file:///path/to/resource2", resources.last["uri"])
     end
 
+    def test_resources_returns_empty_array_when_no_resources
+      transport = mock
+      mock_response = { "result" => { "resources" => [] } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      resources = client.resources
+
+      assert_empty(resources)
+    end
+
     def test_read_resource_sends_request_to_transport_and_returns_contents
       transport = mock
       uri = "file:///path/to/resource.txt"
@@ -128,18 +140,6 @@ module MCP
       contents = client.read_resource(uri: uri)
 
       assert_empty(contents)
-    end
-
-    def test_resources_returns_empty_array_when_no_resources
-      transport = mock
-      mock_response = { "result" => {} }
-
-      transport.expects(:send_request).returns(mock_response).once
-
-      client = Client.new(transport: transport)
-      resources = client.resources
-
-      assert_empty(resources)
     end
   end
 end
