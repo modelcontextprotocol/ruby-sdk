@@ -141,5 +141,135 @@ module MCP
 
       assert_empty(contents)
     end
+
+    def test_prompts_sends_request_to_transport_and_returns_prompts_array
+      transport = mock
+      mock_response = {
+        "result" => {
+          "prompts" => [
+            {
+              "name" => "prompt_1",
+              "description" => "First prompt",
+              "arguments" => [
+                {
+                  "name" => "code_1",
+                  "description" => "The code_1 to review",
+                  "required" => true,
+                },
+              ],
+            },
+            {
+              "name" => "prompt_2",
+              "description" => "Second prompt",
+              "arguments" => [
+                {
+                  "name" => "code_2",
+                  "description" => "The code_2 to review",
+                  "required" => true,
+                },
+              ],
+            },
+          ],
+        },
+      }
+
+      # Only checking for the essential parts of the request
+      transport.expects(:send_request).with do |args|
+        args in { request: { method: "prompts/list", jsonrpc: "2.0" } }
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      prompts = client.prompts
+
+      assert_equal(2, prompts.size)
+      assert_equal("prompt_1", prompts.first["name"])
+      assert_equal("First prompt", prompts.first["description"])
+      assert_equal("code_1", prompts.first["arguments"].first["name"])
+      assert_equal("The code_1 to review", prompts.first["arguments"].first["description"])
+      assert(prompts.first["arguments"].first["required"])
+
+      assert_equal("prompt_2", prompts.last["name"])
+      assert_equal("Second prompt", prompts.last["description"])
+      assert_equal("code_2", prompts.last["arguments"].first["name"])
+      assert_equal("The code_2 to review", prompts.last["arguments"].first["description"])
+      assert(prompts.last["arguments"].first["required"])
+    end
+
+    def test_prompts_returns_empty_array_when_no_prompts
+      transport = mock
+      mock_response = { "result" => { "prompts" => [] } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      prompts = client.prompts
+
+      assert_empty(prompts)
+    end
+
+    def test_get_prompt_sends_request_to_transport_and_returns_contents
+      transport = mock
+      name = "first_prompt"
+      mock_response = {
+        "result" => {
+          "description" => "First prompt",
+          "messages" => [
+            {
+              "role" => "user",
+              "content" => {
+                "text" => "First prompt content",
+                "type" => "text",
+              },
+            },
+          ],
+        },
+      }
+
+      # Only checking for the essential parts of the request
+      transport.expects(:send_request).with do |args|
+        args in {
+          request: {
+            method: "prompts/get",
+            jsonrpc: "2.0",
+            params: {
+              name: name,
+            },
+          },
+        }
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      contents = client.get_prompt(name: name)
+
+      assert_equal("First prompt", contents["description"])
+      assert_equal("user", contents["messages"].first["role"])
+      assert_equal("First prompt content", contents["messages"].first["content"]["text"])
+    end
+
+    def test_get_prompt_returns_empty_hash_when_no_contents
+      transport = mock
+      name = "nonexistent_prompt"
+      mock_response = { "result" => {} }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      contents = client.get_prompt(name: name)
+
+      assert_empty(contents)
+    end
+
+    def test_get_prompt_returns_empty_hash
+      transport = mock
+      name = "nonexistent_prompt"
+      mock_response = {}
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      contents = client.get_prompt(name: name)
+
+      assert_empty(contents)
+    end
   end
 end

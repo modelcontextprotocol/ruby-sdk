@@ -830,6 +830,8 @@ This class supports:
 - Tool invocation via the `tools/call` method (`MCP::Client#call_tools`)
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
 - Resource reading via the `resources/read` method (`MCP::Client#read_resources`)
+- Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
+- Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
 - Automatic JSON-RPC 2.0 message formatting
 - UUID request ID generation
 
