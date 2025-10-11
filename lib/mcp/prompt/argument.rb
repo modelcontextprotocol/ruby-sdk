@@ -3,17 +3,22 @@
 module MCP
   class Prompt
     class Argument
-      attr_reader :name, :description, :required, :arguments
+      attr_reader :name, :title, :description, :required
 
-      def initialize(name:, description: nil, required: false)
+      def initialize(name:, title: nil, description: nil, required: false)
         @name = name
+        @title = title
         @description = description
         @required = required
-        @arguments = arguments
       end
 
       def to_h
-        { name:, description:, required: }.compact
+        {
+          name: name,
+          title: title,
+          description: description,
+          required: required,
+        }.compact
       end
     end
   end
