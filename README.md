@@ -826,8 +826,10 @@ The `MCP::Client` class provides an interface for interacting with MCP servers.
 
 This class supports:
 
-- Tool listing via the `tools/list` method
-- Tool invocation via the `tools/call` method
+- Tool listing via the `tools/list` method (`MCP::Client#tools`)
+- Tool invocation via the `tools/call` method (`MCP::Client#call_tools`)
+- Resource listing via the `resources/list` method (`MCP::Client#resources`)
+- Resource reading via the `resources/read` method (`MCP::Client#read_resources`)
 - Automatic JSON-RPC 2.0 message formatting
 - UUID request ID generation
 
