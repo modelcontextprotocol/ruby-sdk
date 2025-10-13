@@ -29,12 +29,27 @@ module MCP
       assert_equal("tool2", tools.last.name)
     end
 
+    def test_tools_returns_empty_array_when_no_tools
+      transport = mock
+      mock_response = { "result" => { "tools" => [] } }
+
+      # Only checking for the essential parts of the request
+      transport.expects(:send_request).with do |args|
+        args in { request: { method: "tools/list", jsonrpc: "2.0" } }
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      tools = client.tools
+
+      assert_empty(tools)
+    end
+
     def test_call_tool_sends_request_to_transport_and_returns_content
       transport = mock
       tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
       arguments = { foo: "bar" }
       mock_response = {
-        "result" => { "content" => "result" },
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
       }
 
       # Only checking for the essential parts of the request
@@ -55,7 +70,7 @@ module MCP
       result = client.call_tool(tool: tool, arguments: arguments)
       content = result.dig("result", "content")
 
-      assert_equal("result", content)
+      assert_equal([{ type: "text", text: "Hello, world!" }], content)
     end
 
     def test_resources_sends_request_to_transport_and_returns_resources_array
