@@ -258,22 +258,32 @@ module MCP
 
     def call_tool(request)
       tool_name = request[:name]
+      arguments = request[:arguments] || {}
+
       tool = tools[tool_name]
       unless tool
-        add_instrumentation_data(error: :tool_not_found)
-        raise RequestHandlerError.new("Tool not found #{tool_name}", request, error_type: :tool_not_found)
+        add_instrumentation_data(tool_name:, error: :tool_not_found)
+        return Tool::Response.new(
+          [{
+            type: "text",
+            text: "Tool not found: #{tool_name}",
+          }],
+          error: true,
+        ).to_h
       end
 
-      arguments = request[:arguments] || {}
       add_instrumentation_data(tool_name:)
 
       if tool.input_schema&.missing_required_arguments?(arguments)
         add_instrumentation_data(error: :missing_required_arguments)
-        raise RequestHandlerError.new(
-          "Missing required arguments: #{tool.input_schema.missing_required_arguments(arguments).join(", ")}",
-          request,
-          error_type: :missing_required_arguments,
-        )
+        missing = tool.input_schema.missing_required_arguments(arguments).join(", ")
+        return Tool::Response.new(
+          [{
+            type: "text",
+            text: "Missing required arguments: #{missing}",
+          }],
+          error: true,
+        ).to_h
       end
 
       if configuration.validate_tool_call_arguments && tool.input_schema
@@ -281,7 +291,13 @@ module MCP
           tool.input_schema.validate_arguments(arguments)
         rescue Tool::InputSchema::ValidationError => e
           add_instrumentation_data(error: :invalid_schema)
-          raise RequestHandlerError.new(e.message, request, error_type: :invalid_schema)
+          return Tool::Response.new(
+            [{
+              type: "text",
+              text: e.message,
+            }],
+            error: true,
+          ).to_h
         end
       end
 
