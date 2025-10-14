@@ -113,8 +113,14 @@ module MCP
         title: "Mock Prompt",
         description: "a mock prompt for testing",
         arguments: [
-          Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
+          Prompt::Argument.new(
+            name: "test_argument",
+            title: "Test argument title",
+            description: "This is a test argument description",
+            required: true,
+          ),
         ],
+        meta: { foo: "bar" },
       ) do |args, server_context:|
         content = Content::Text.new(args["test_argument"] + " user: #{server_context[:user_id]}")
 
@@ -130,6 +136,10 @@ module MCP
       assert_equal "mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
       assert_equal "test_argument", prompt.arguments.first.name
+      assert_equal "Test argument title", prompt.arguments.first.title
+      assert_equal "This is a test argument description", prompt.arguments.first.description
+      assert prompt.arguments.first.required
+      assert_equal({ foo: "bar" }, prompt.meta_value)
 
       expected = {
         description: "Hello, world!",
@@ -141,6 +151,44 @@ module MCP
 
       result = prompt.template({ "test_argument" => "Hello, friend!" }, server_context: { user_id: 123 })
       assert_equal expected, result.to_h
+    end
+
+    test "#to_h returns a hash with name, title, description, arguments, and meta" do
+      class FullPrompt < Prompt
+        prompt_name "test_prompt"
+        description "Test prompt description"
+        title "Test Prompt title"
+        arguments [
+          Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
+        ]
+        meta({ test: "meta" })
+      end
+
+      expected = {
+        name: "test_prompt",
+        title: "Test Prompt title",
+        description: "Test prompt description",
+        arguments: [
+          { name: "test_argument", description: "Test argument", required: true },
+        ],
+        _meta: { test: "meta" },
+      }
+
+      assert_equal expected, FullPrompt.to_h
+    end
+
+    test "#to_h handles nil arguments value" do
+      class NoArgumentsPrompt < Prompt
+        description "No arguments prompt"
+      end
+      prompt = NoArgumentsPrompt
+
+      expected = {
+        name: "no_arguments_prompt",
+        description: "No arguments prompt",
+      }
+
+      assert_equal expected, prompt.to_h
     end
   end
 end
