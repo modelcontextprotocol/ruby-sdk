@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-10-15
+
+### Added
+
+- Client resources support with `resources/list` and `resources/read` methods (#160)
+- `_meta` field support for Tool schema (#124)
+- `_meta` field support for Prompt
+- `title` field support for prompt arguments
+- `call_tool_raw` method to client for accessing full tool responses (#149)
+- Structured content support in tool responses (#147)
+- AGENTS.md development guidance documentation (#134)
+- Dependabot configuration for automated dependency updates (#138)
+
+### Changed
+
+- Set default `content` to empty array instead of `nil` (#150)
+- Improved prompt spec compliance (#153)
+- Allow output schema to be array of objects (#144)
+- Return 202 response code for accepted JSON-RPC notifications (#114)
+- Added validation to `MCP::Configuration` setters (#145)
+- Updated metaschema URI format for cross-OS compatibility
+
+### Fixed
+
+- Client tools functionality and test coverage (#166)
+- Client resources test for empty responses (#162)
+- Documentation typos and incorrect examples (#157, #146)
+- Removed redundant transport requires (#154)
+- Cleaned up unused block parameters and magic comments
+
 ## [0.3.0] - 2025-09-14
 
 ### Added
