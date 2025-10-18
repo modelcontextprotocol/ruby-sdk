@@ -58,6 +58,20 @@ module MCP
       response.dig("result", "resources") || []
     end
 
+    # Returns the list of prompts available from the server.
+    # Each call will make a new request – the result is not cached.
+    #
+    # @return [Array<Hash>] An array of available prompts.
+    def prompts
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "prompts/list",
+      })
+
+      response.dig("result", "prompts") || []
+    end
+
     # Calls a tool via the transport layer and returns the full response from the server.
     #
     # @param tool [MCP::Client::Tool] The tool to be called.
@@ -94,6 +108,21 @@ module MCP
       })
 
       response.dig("result", "contents") || []
+    end
+
+    # Gets a prompt from the server by name and returns its details.
+    #
+    # @param name [String] The name of the prompt to get.
+    # @return [Hash] A hash containing the prompt details.
+    def get_prompt(name:)
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "prompts/get",
+        params: { name: name },
+      })
+
+      response.fetch("result", {})
     end
 
     private
