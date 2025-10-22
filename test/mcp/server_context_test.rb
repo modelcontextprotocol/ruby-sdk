@@ -152,9 +152,10 @@ module MCP
 
       response = server_no_context.handle(request)
 
-      assert response[:error]
-      # The error is wrapped as "Internal error calling tool..."
-      assert_equal "Internal error", response[:error][:message]
+      assert_nil response[:error], "Expected no JSON-RPC error"
+      assert response[:result][:isError]
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_match(/Internal error calling tool tool_with_required_context: /, response[:result][:content][0][:text])
     end
 
     test "call_tool_with_args correctly detects server_context parameter presence" do
