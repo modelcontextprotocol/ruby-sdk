@@ -551,7 +551,7 @@ Output schema may also describe an array of objects:
 class WeatherTool < MCP::Tool
   output_schema(
     type: "array",
-    item: {
+    items: {
       properties: {
         temperature: { type: "number" },
         condition: { type: "string" },
