@@ -414,5 +414,229 @@ module MCP
       assert_equal "FlexiblePrompt: Hello (context: present)",
         response[:result][:messages][0][:content][:text]
     end
+
+    # _meta extraction tests
+
+    test "tool receives _meta when provided in request params" do
+      class ToolWithMeta < Tool
+        tool_name "tool_with_meta"
+        description "A tool that uses _meta"
+        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+        class << self
+          def call(message:, server_context: nil)
+            meta_info = server_context&.dig(:_meta, :provider, :metadata) || "no metadata"
+            Tool::Response.new([
+              { type: "text", content: "Message: #{message}, Metadata: #{meta_info}" },
+            ])
+          end
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        tools: [ToolWithMeta],
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "tool_with_meta",
+          arguments: { message: "Hello" },
+          _meta: {
+            provider: {
+              metadata: "test_value",
+            },
+          },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "Message: Hello, Metadata: test_value",
+        response[:result][:content][0][:content]
+    end
+
+    test "_meta is nested within server_context" do
+      class ToolWithNestedMeta < Tool
+        tool_name "tool_with_nested_meta"
+        description "A tool that uses nested _meta"
+        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
+
+        class << self
+          def call(message:, server_context: nil)
+            user = server_context&.dig(:user) || "unknown"
+            session_id = server_context&.dig(:_meta, :session_id) || "unknown"
+            Tool::Response.new([
+              { type: "text", content: "User: #{user}, Session: #{session_id}, Message: #{message}" },
+            ])
+          end
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        tools: [ToolWithNestedMeta],
+        server_context: { user: "test_user", original_field: "value" },
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "tool_with_nested_meta",
+          arguments: { message: "Hello" },
+          _meta: {
+            session_id: "abc123",
+          },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "User: test_user, Session: abc123, Message: Hello",
+        response[:result][:content][0][:content]
+    end
+
+    test "_meta preserves original server_context" do
+      class ToolPreservesContext < Tool
+        tool_name "tool_preserves_context"
+        description "A tool that checks context preservation"
+
+        class << self
+          def call(server_context: nil)
+            priority = server_context&.dig(:priority) || "none"
+            meta_priority = server_context&.dig(:_meta, :priority) || "none"
+            Tool::Response.new([
+              { type: "text", content: "Context priority: #{priority}, Meta priority: #{meta_priority}" },
+            ])
+          end
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        tools: [ToolPreservesContext],
+        server_context: { priority: "low" },
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "tool_preserves_context",
+          arguments: {},
+          _meta: {
+            priority: "high",
+          },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "Context priority: low, Meta priority: high", response[:result][:content][0][:content]
+    end
+
+    test "prompt receives _meta when provided in request params" do
+      class PromptWithMeta < Prompt
+        prompt_name "prompt_with_meta"
+        description "A prompt that uses _meta"
+        arguments [Prompt::Argument.new(name: "message", required: true)]
+
+        class << self
+          def template(args, server_context: nil)
+            meta_info = server_context&.dig(:_meta, :request_id) || "no request id"
+            Prompt::Result.new(
+              messages: [
+                Prompt::Message.new(
+                  role: "user",
+                  content: Content::Text.new("Message: #{args[:message]}, Request ID: #{meta_info}"),
+                ),
+              ],
+            )
+          end
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        prompts: [PromptWithMeta],
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "prompts/get",
+        params: {
+          name: "prompt_with_meta",
+          arguments: { message: "Hello" },
+          _meta: {
+            request_id: "req_12345",
+          },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "Message: Hello, Request ID: req_12345",
+        response[:result][:messages][0][:content][:text]
+    end
+
+    test "_meta is nested within server_context for prompts" do
+      class PromptWithNestedContext < Prompt
+        prompt_name "prompt_with_nested_context"
+        description "A prompt that uses nested context"
+        arguments [Prompt::Argument.new(name: "message", required: true)]
+
+        class << self
+          def template(args, server_context: nil)
+            user = server_context&.dig(:user) || "unknown"
+            trace_id = server_context&.dig(:_meta, :trace_id) || "unknown"
+            Prompt::Result.new(
+              messages: [
+                Prompt::Message.new(
+                  role: "user",
+                  content: Content::Text.new("User: #{user}, Trace: #{trace_id}, Message: #{args[:message]}"),
+                ),
+              ],
+            )
+          end
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        prompts: [PromptWithNestedContext],
+        server_context: { user: "prompt_user" },
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "prompts/get",
+        params: {
+          name: "prompt_with_nested_context",
+          arguments: { message: "World" },
+          _meta: {
+            trace_id: "trace_xyz789",
+          },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "User: prompt_user, Trace: trace_xyz789, Message: World",
+        response[:result][:messages][0][:content][:text]
+    end
+
   end
 end
