@@ -11,7 +11,6 @@ gem "rubocop-rake", require: false
 gem "rubocop-shopify", require: false
 
 gem "puma", ">= 5.0.0"
-gem "rack", ">= 2.0.0"
 gem "rackup", ">= 2.1.0"
 
 gem "activesupport"

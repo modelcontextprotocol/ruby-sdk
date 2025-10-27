@@ -2,7 +2,6 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "mcp"
-require "rack"
 require "rackup"
 require "json"
 require "logger"
