@@ -228,7 +228,7 @@ module MCP
             end
           end
 
-          response = @server.handle_json(body_string)
+          response = @server.handle_json(body_string) || ""
 
           # Stream can be nil since stateless mode doesn't retain streams
           stream = get_session_stream(session_id) if session_id
