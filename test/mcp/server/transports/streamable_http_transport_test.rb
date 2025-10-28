@@ -689,7 +689,7 @@ module MCP
 
           response = stateless_transport.handle_request(request)
           assert_equal 202, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_empty(response[1])
 
           body = response[2][0]
           assert_nil(body)
