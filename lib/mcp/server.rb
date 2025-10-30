@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "json_rpc_handler"
+require_relative "../json_rpc_handler"
 require_relative "instrumentation"
 require_relative "methods"
 
