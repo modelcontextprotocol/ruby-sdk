@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'test_helper'
+require "test_helper"
 
 describe JsonRpcHandler do
   before do
@@ -9,7 +9,7 @@ describe JsonRpcHandler do
     @response_json = nil
   end
 
-  describe '#handle' do
+  describe "#handle" do
     # Comments verbatim from https://www.jsonrpc.org/specification
     #
     # JSON-RPC 2.0 Specification
@@ -41,7 +41,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "JSON-RPC version must be 2.0"
+        data: "JSON-RPC version must be 2.0",
       }
     end
 
@@ -229,7 +229,7 @@ describe JsonRpcHandler do
     #   method's expected parameters.
 
     it "with array params returns a result" do
-      register("sum") { |params| params.sum }
+      register("sum", &:sum)
 
       handle jsonrpc: "2.0", id: 1, method: "sum", params: [1, 2, 3]
 
@@ -346,7 +346,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32700,
         message: "Parse error",
-        data: "Invalid JSON"
+        data: "Invalid JSON",
       }
     end
 
@@ -360,14 +360,13 @@ describe JsonRpcHandler do
       }
     end
 
-
     it "returns an error with the code set to -32601 when the method does not exist" do
       handle jsonrpc: "2.0", id: 1, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_error expected_error: {
         code: -32601,
         message: "Method not found",
-        data: "add"
+        data: "add",
       }
     end
 
@@ -395,7 +394,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32603,
         message: "Internal error",
-        data: "Something bad happened"
+        data: "Something bad happened",
       }
     end
 
@@ -438,7 +437,7 @@ describe JsonRpcHandler do
         ]
 
         assert @response.is_a?(Array)
-        assert @response.all? { |result| result[:jsonrpc] == "2.0"}
+        assert @response.all? { |result| result[:jsonrpc] == "2.0" }
         assert_equal [100, 200], @response.map { |result| result[:id] }
         assert_equal [3, 12], @response.map { |result| result[:result] }
         assert @response.all? { |result| result[:error].nil? }
@@ -455,7 +454,7 @@ describe JsonRpcHandler do
         ]
 
         assert @response.is_a?(Array)
-        assert @response.all? { |result| result[:jsonrpc] == "2.0"}
+        assert @response.all? { |result| result[:jsonrpc] == "2.0" }
         assert_equal [100, 200], @response.map { |result| result[:id] }
         assert_equal [3, 5], @response.map { |result| result[:result] }
         assert @response.all? { |result| result[:error].nil? }
@@ -531,7 +530,7 @@ describe JsonRpcHandler do
 
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } },
-          id_validation_pattern: custom_pattern
+          id_validation_pattern: custom_pattern,
         ) { |method_name| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
@@ -543,7 +542,7 @@ describe JsonRpcHandler do
 
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "id<script>", method: "add", params: { a: 1, b: 2 } },
-          id_validation_pattern: custom_pattern
+          id_validation_pattern: custom_pattern,
         ) { |method_name| @registry[method_name] }
 
         assert_rpc_error expected_error: {
@@ -559,7 +558,7 @@ describe JsonRpcHandler do
 
         @response_json = JsonRpcHandler.handle_json(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } }.to_json,
-          id_validation_pattern: custom_pattern
+          id_validation_pattern: custom_pattern,
         ) { |method_name| @registry[method_name] }
         @response = JSON.parse(@response_json, symbolize_names: true)
 
@@ -577,7 +576,7 @@ describe JsonRpcHandler do
             { jsonrpc: "2.0", id: "req@1", method: "add", params: { a: 1, b: 2 } },
             { jsonrpc: "2.0", id: "req@2", method: "mul", params: { a: 3, b: 4 } },
           ],
-          id_validation_pattern: custom_pattern
+          id_validation_pattern: custom_pattern,
         ) { |method_name| @registry[method_name] }
 
         assert @response.is_a?(Array)
@@ -592,7 +591,7 @@ describe JsonRpcHandler do
 
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } },
-          id_validation_pattern: custom_pattern
+          id_validation_pattern: custom_pattern,
         ) { |method_name| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
@@ -604,7 +603,7 @@ describe JsonRpcHandler do
 
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "<script>alert('xss')</script>", method: "add", params: { a: 1, b: 2 } },
-          id_validation_pattern: nil
+          id_validation_pattern: nil,
         ) { |method_name| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
@@ -613,7 +612,7 @@ describe JsonRpcHandler do
     end
   end
 
-  describe '#handle_json' do
+  describe "#handle_json" do
     it "returns a Response object when the request is valid and not a notification" do
       register("add") { |params| params[:a] + params[:b] }
 
@@ -653,12 +652,12 @@ describe JsonRpcHandler do
   end
 
   def assert_rpc_success(expected_result:)
-    assert_equal expected_result, @response[:result]
-    assert_nil @response[:error]
+    assert_equal(expected_result, @response[:result])
+    assert_nil(@response[:error])
   end
 
   def assert_rpc_error(expected_error:)
-    assert_equal expected_error, @response[:error]
-    assert_nil @response[:result]
+    assert_equal(expected_error, @response[:error])
+    assert_nil(@response[:result])
   end
 end
