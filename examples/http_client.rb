@@ -1,81 +1,52 @@
 # frozen_string_literal: true
 
-require "net/http"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "mcp"
 require "json"
-require "uri"
 
-# Simple HTTP client example for interacting with the MCP HTTP server
-class MCPHTTPClient
+# Example MCP HTTP client using the improved MCP::Client library
+# This demonstrates how to use the streamable HTTP transport with session management
+class MCPHTTPClientExample
   def initialize(base_url = "http://localhost:9292")
-    @base_url = base_url
-    @session_id = nil
-  end
+    # Create the HTTP transport
+    transport = MCP::Client::HTTP.new(url: base_url)
 
-  def send_request(method, params = nil, id = nil)
-    uri = URI(@base_url)
-    http = Net::HTTP.new(uri.host, uri.port)
-
-    request = Net::HTTP::Post.new(uri.path.empty? ? "/" : uri.path)
-    request["Content-Type"] = "application/json"
-    request["Mcp-Session-Id"] = @session_id if @session_id
-
-    body = {
-      jsonrpc: "2.0",
-      method: method,
-      params: params,
-      id: id || rand(10000),
-    }.compact
-
-    request.body = body.to_json
-
-    response = http.request(request)
-
-    # Store session ID if provided
-    if response["Mcp-Session-Id"]
-      @session_id = response["Mcp-Session-Id"]
-      puts "Session ID: #{@session_id}"
-    end
-
-    JSON.parse(response.body)
+    # Create the MCP client with custom client info and protocol version
+    @client = MCP::Client.new(
+      transport: transport,
+      client_info: { name: "example_client", version: "1.0" },
+      protocol_version: "2024-11-05",
+    )
   end
 
   def initialize_session
     puts "=== Initializing session ==="
-    result = send_request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: {
-        name: "example_client",
-        version: "1.0",
-      },
-    })
+    result = @client.init
     puts "Response: #{JSON.pretty_generate(result)}"
-
-    result
-  end
-
-  def ping
-    puts "=== Sending ping ==="
-    result = send_request("ping")
-    puts "Response: #{JSON.pretty_generate(result)}"
+    puts "Session ID: #{@client.transport.session_id}" if @client.transport.session_id
 
     result
   end
 
   def list_tools
     puts "=== Listing tools ==="
-    result = send_request("tools/list")
+    tools = @client.tools
+    result = { tools: tools.map { |t| { name: t.name, description: t.description } } }
     puts "Response: #{JSON.pretty_generate(result)}"
 
-    result
+    tools
   end
 
   def call_tool(name, arguments)
     puts "=== Calling tool: #{name} ==="
-    result = send_request("tools/call", {
-      name: name,
-      arguments: arguments,
-    })
+    tool = @client.tools.find { |t| t.name == name }
+
+    unless tool
+      puts "Error: Tool '#{name}' not found"
+      return nil
+    end
+
+    result = @client.call_tool(tool: tool, arguments: arguments)
     puts "Response: #{JSON.pretty_generate(result)}"
 
     result
@@ -83,7 +54,7 @@ class MCPHTTPClient
 
   def list_prompts
     puts "=== Listing prompts ==="
-    result = send_request("prompts/list")
+    result = @client.prompts
     puts "Response: #{JSON.pretty_generate(result)}"
 
     result
@@ -91,10 +62,7 @@ class MCPHTTPClient
 
   def get_prompt(name, arguments)
     puts "=== Getting prompt: #{name} ==="
-    result = send_request("prompts/get", {
-      name: name,
-      arguments: arguments,
-    })
+    result = @client.get_prompt(name: name, arguments: arguments)
     puts "Response: #{JSON.pretty_generate(result)}"
 
     result
@@ -102,7 +70,7 @@ class MCPHTTPClient
 
   def list_resources
     puts "=== Listing resources ==="
-    result = send_request("resources/list")
+    result = @client.resources
     puts "Response: #{JSON.pretty_generate(result)}"
 
     result
@@ -110,29 +78,9 @@ class MCPHTTPClient
 
   def read_resource(uri)
     puts "=== Reading resource: #{uri} ==="
-    result = send_request("resources/read", {
-      uri: uri,
-    })
+    result = @client.read_resource(uri: uri)
     puts "Response: #{JSON.pretty_generate(result)}"
 
-    result
-  end
-
-  def close_session
-    return unless @session_id
-
-    puts "=== Closing session ==="
-    uri = URI(@base_url)
-    http = Net::HTTP.new(uri.host, uri.port)
-
-    request = Net::HTTP::Delete.new(uri.path.empty? ? "/" : uri.path)
-    request["Mcp-Session-Id"] = @session_id
-
-    response = http.request(request)
-    result = JSON.parse(response.body)
-    puts "Response: #{JSON.pretty_generate(result)}"
-
-    @session_id = nil
     result
   end
 end
@@ -140,19 +88,16 @@ end
 # Main script
 if __FILE__ == $PROGRAM_NAME
   puts <<~MESSAGE
-    MCP HTTP Client Example
+    MCP HTTP Client Example (Using MCP::Client Library)
     Make sure the HTTP server is running (ruby examples/http_server.rb)
     #{"=" * 50}
   MESSAGE
 
-  client = MCPHTTPClient.new
+  client = MCPHTTPClientExample.new
 
   begin
-    # Initialize session
+    # Initialize session (automatically called on first request if not explicit)
     client.initialize_session
-
-    # Test ping
-    client.ping
 
     # List available tools
     client.list_tools
@@ -177,8 +122,5 @@ if __FILE__ == $PROGRAM_NAME
   rescue => e
     puts "Error: #{e.message}"
     puts e.backtrace
-  ensure
-    # Clean up session
-    client.close_session
   end
 end
