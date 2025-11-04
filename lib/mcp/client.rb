@@ -151,6 +151,37 @@ module MCP
       response.dig("result", "contents") || []
     end
 
+    # Lists available prompts from the server.
+    #
+    # @return [Array<Hash>] An array of available prompts.
+    def prompts
+      init unless @initialized
+
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "prompts/list",
+      })
+
+      response.dig("result", "prompts") || []
+    end
+
+    # Gets a prompt with the specified name and arguments.
+    #
+    # @param name [String] The name of the prompt to get.
+    # @param arguments [Hash, nil] The arguments to pass to the prompt.
+    # @return [Hash] The prompt result.
+    def get_prompt(name:, arguments: nil)
+      init unless @initialized
+
+      transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "prompts/get",
+        params: { name: name, arguments: arguments }.compact,
+      })
+    end
+
     private
 
     def request_id
