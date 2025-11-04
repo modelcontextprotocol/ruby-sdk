@@ -22,9 +22,9 @@ module MCP
 
         # Update session header if we have one
         update_session_header!
-        
+
         response = client.post("", request)
-        
+
         # Store session ID from response headers if present
         if response.headers["Mcp-Session-Id"]
           @session_id = response.headers["Mcp-Session-Id"]
@@ -32,7 +32,7 @@ module MCP
 
         # Handle different response types based on content-type
         content_type = response.headers["content-type"]
-        
+
         parsed_body = if content_type&.include?("text/event-stream")
           # Parse SSE response
           parse_sse_response(response.body)
@@ -86,6 +86,20 @@ module MCP
         )
       end
 
+      # Sends a JSON-RPC notification (no response expected).
+      #
+      # @param notification [Hash] The JSON-RPC notification to send
+      # @return [nil]
+      def send_notification(notification:)
+        update_session_header!
+        client.post("", notification)
+        nil
+      rescue Faraday::Error
+        # Notifications don't expect a response, so we can silently fail
+        # or log if needed
+        nil
+      end
+
       private
 
       attr_reader :headers
@@ -103,11 +117,11 @@ module MCP
           headers.each do |key, value|
             faraday.headers[key] = value
           end
-          
+
           # Use a middleware that doesn't auto-parse to handle both content types
           faraday.response do |env|
             content_type = env.response_headers["content-type"]
-            
+
             # Only auto-parse JSON, leave SSE as raw text
             if content_type&.include?("application/json")
               require "json"
