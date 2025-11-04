@@ -11,6 +11,11 @@ module MCP
         @session_id = nil
       end
 
+      # Sends a JSON-RPC request and returns the parsed response.
+      # Supports both application/json and text/event-stream responses.
+      #
+      # @param request [Hash] The JSON-RPC request to send
+      # @return [Hash] The parsed JSON-RPC response
       def send_request(request:)
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
@@ -25,7 +30,18 @@ module MCP
           @session_id = response.headers["Mcp-Session-Id"]
         end
 
-        response.body
+        # Handle different response types based on content-type
+        content_type = response.headers["content-type"]
+        
+        parsed_body = if content_type&.include?("text/event-stream")
+          # Parse SSE response
+          parse_sse_response(response.body)
+        else
+          # Standard JSON response (Faraday already parsed it)
+          response.body
+        end
+
+        parsed_body
       rescue Faraday::BadRequestError => e
         raise RequestHandlerError.new(
           "The #{method} request is invalid",
@@ -78,11 +94,25 @@ module MCP
         require_faraday!
         @client ||= Faraday.new(url) do |faraday|
           faraday.request(:json)
-          faraday.response(:json)
+          # Don't automatically parse JSON responses - we need to handle SSE too
           faraday.response(:raise_error)
+
+          # Add Accept header to support both JSON and SSE
+          faraday.headers["Accept"] = "application/json, text/event-stream"
 
           headers.each do |key, value|
             faraday.headers[key] = value
+          end
+          
+          # Use a middleware that doesn't auto-parse to handle both content types
+          faraday.response do |env|
+            content_type = env.response_headers["content-type"]
+            
+            # Only auto-parse JSON, leave SSE as raw text
+            if content_type&.include?("application/json")
+              require "json"
+              env[:body] = JSON.parse(env[:body]) if env[:body].is_a?(String) && !env[:body].empty?
+            end
           end
         end
       end
@@ -104,6 +134,27 @@ module MCP
         raise LoadError, "The 'faraday' gem is required to use the MCP client HTTP transport. " \
           "Add it to your Gemfile: gem 'faraday', '>= 2.0'" \
           "See https://rubygems.org/gems/faraday for more details."
+      end
+
+      # Parses Server-Sent Events (SSE) response
+      # Looks for the message event and parses its data as JSON
+      def parse_sse_response(body)
+        require "json"
+        result = nil
+
+        body.split("\n").each do |line|
+          # SSE format: "event: message\ndata: {...}\n\n"
+          if line.start_with?("data: ")
+            data = line[6..-1] # Remove "data: " prefix
+            result = JSON.parse(data)
+          end
+        end
+
+        result || raise(RequestHandlerError.new(
+          "No data found in SSE response",
+          {},
+          error_type: :internal_error,
+        ))
       end
     end
   end
