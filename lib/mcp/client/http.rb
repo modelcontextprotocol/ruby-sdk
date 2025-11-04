@@ -3,18 +3,29 @@
 module MCP
   class Client
     class HTTP
-      attr_reader :url
+      attr_reader :url, :session_id
 
       def initialize(url:, headers: {})
         @url = url
         @headers = headers
+        @session_id = nil
       end
 
       def send_request(request:)
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
 
-        client.post("", request).body
+        # Update session header if we have one
+        update_session_header!
+        
+        response = client.post("", request)
+        
+        # Store session ID from response headers if present
+        if response.headers["Mcp-Session-Id"]
+          @session_id = response.headers["Mcp-Session-Id"]
+        end
+
+        response.body
       rescue Faraday::BadRequestError => e
         raise RequestHandlerError.new(
           "The #{method} request is invalid",
@@ -73,6 +84,17 @@ module MCP
           headers.each do |key, value|
             faraday.headers[key] = value
           end
+        end
+      end
+
+      # Updates the session header on the Faraday client
+      def update_session_header!
+        return unless @client
+
+        if @session_id
+          @client.headers["Mcp-Session-Id"] = @session_id
+        else
+          @client.headers.delete("Mcp-Session-Id")
         end
       end
 

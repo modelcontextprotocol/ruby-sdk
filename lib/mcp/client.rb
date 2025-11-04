@@ -27,6 +27,44 @@ module MCP
     # So keeping it public
     attr_reader :transport, :client_info, :protocol_version, :session_info
 
+    # Initializes the MCP session with the server.
+    # This method performs the MCP handshake: sends an initialize request,
+    # receives session information, and sends the initialized notification.
+    #
+    # @return [Hash] The session information including server_info
+    #
+    # @example
+    #   client.init
+    #   # => { server_info: { name: "my-server", version: "1.0.0" }, ... }
+    def init
+      return @session_info if @initialized
+
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "initialize",
+        params: {
+          protocolVersion: protocol_version,
+          capabilities: {},
+          clientInfo: {
+            name: client_info[:name] || client_info["name"],
+            version: client_info[:version] || client_info["version"],
+          },
+        },
+      })
+
+      @session_info = response.dig("result")
+      @initialized = true
+
+      # Send the initialized notification
+      transport.send_notification(notification: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        method: "notifications/initialized",
+      })
+
+      @session_info
+    end
+
     # Returns the list of tools available from the server.
     # Each call will make a new request – the result is not cached.
     #
@@ -38,6 +76,8 @@ module MCP
     #     puts tool.name
     #   end
     def tools
+      init unless @initialized
+
       response = transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
@@ -58,6 +98,8 @@ module MCP
     #
     # @return [Array<Hash>] An array of available resources.
     def resources
+      init unless @initialized
+
       response = transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
@@ -82,6 +124,8 @@ module MCP
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(tool:, arguments: nil)
+      init unless @initialized
+
       transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
@@ -95,6 +139,8 @@ module MCP
     # @param uri [String] The URI of the resource to read.
     # @return [Array<Hash>] An array of resource contents (text or blob).
     def read_resource(uri:)
+      init unless @initialized
+
       response = transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
