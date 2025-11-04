@@ -6,17 +6,26 @@ module MCP
     #
     # @param transport [Object] The transport object to use for communication with the server.
     #   The transport should be a duck type that responds to `send_request`. See the README for more details.
+    # @param client_info [Hash] Information about the client (name and version)
+    # @param protocol_version [String] The MCP protocol version to use
     #
     # @example
     #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
-    #   client = MCP::Client.new(transport: transport)
-    def initialize(transport:)
+    #   client = MCP::Client.new(
+    #     transport: transport,
+    #     client_info: { name: "my-client", version: "1.0.0" }
+    #   )
+    def initialize(transport:, client_info: nil, protocol_version: "2025-06-18")
       @transport = transport
+      @client_info = client_info || { name: "ruby-mcp-client", version: MCP::VERSION }
+      @protocol_version = protocol_version
+      @initialized = false
+      @session_info = nil
     end
 
     # The user may want to access additional transport-specific methods/attributes
     # So keeping it public
-    attr_reader :transport
+    attr_reader :transport, :client_info, :protocol_version, :session_info
 
     # Returns the list of tools available from the server.
     # Each call will make a new request – the result is not cached.
