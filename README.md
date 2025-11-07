@@ -126,12 +126,19 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 - **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
 - **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
+- **Stateless Streamable HTTP**: Notifications are not supported and all calls are request/response interactions; allows for easy multi-node deployment.
 
 #### Usage Example
 
 ```ruby
 server = MCP::Server.new(name: "my_server")
+
+# Default Streamable HTTP - session oriented
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+# OR Stateless Streamable HTTP - session-less
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+
 server.transport = transport
 
 # When tools change, notify clients
@@ -969,16 +976,3 @@ The client provides a wrapper class for tools returned by the server:
 - `MCP::Client::Tool` - Represents a single tool with its metadata
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
-
-## Releases
-
-This gem is published to [RubyGems.org](https://rubygems.org/gems/mcp)
-
-Releases are triggered by PRs to the `main` branch updating the version number in `lib/mcp/version.rb`.
-
-1. **Update the version number** in `lib/mcp/version.rb`, following [semver](https://semver.org/)
-1. **Update CHANGELOG.md**, backfilling the changes since the last release if necessary, and adding a new section for the new version, clearing out the Unreleased section
-1. **Create a PR and get approval from a maintainer**
-1. **Merge your PR to the main branch** - This will automatically trigger the release workflow via GitHub Actions
-
-When changes are merged to the `main` branch, the GitHub Actions workflow (`.github/workflows/release.yml`) is triggered and the gem is published to RubyGems.
