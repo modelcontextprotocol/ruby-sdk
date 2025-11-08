@@ -126,7 +126,6 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 
 - **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
 - **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
-- **Stateless Streamable HTTP**: Notifications are not supported and all calls are request/response interactions; allows for easy multi-node deployment.
 
 #### Usage Example
 
@@ -136,14 +135,20 @@ server = MCP::Server.new(name: "my_server")
 # Default Streamable HTTP - session oriented
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 
-# OR Stateless Streamable HTTP - session-less
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
-
 server.transport = transport
 
 # When tools change, notify clients
 server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
 server.notify_tools_list_changed
+```
+
+You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
+This mode allows for easy multi-node deployment.
+Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` (`stateless` defaults to `false`):
+
+```ruby
+# Stateless Streamable HTTP - session-less
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
 ```
 
 ### Unsupported Features ( to be implemented in future versions )
