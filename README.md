@@ -151,11 +151,12 @@ Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
 ```
 
-### Unsupported Features ( to be implemented in future versions )
+### Unsupported Features (to be implemented in future versions)
 
 - Log Level
 - Resource subscriptions
 - Completions
+- Elicitation
 
 ### Usage
 

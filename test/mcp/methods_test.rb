@@ -74,6 +74,8 @@ module MCP
 
     ensure_capability_raises_error_for Methods::SAMPLING_CREATE_MESSAGE, required_capability_name: "sampling"
 
+    ensure_capability_raises_error_for Methods::ELICITATION_CREATE, required_capability_name: "elicitation"
+
     # Methods and notifications of both server and client
     ensure_capability_does_not_raise_for Methods::PING
     ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_PROGRESS
