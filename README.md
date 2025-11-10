@@ -146,11 +146,12 @@ server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
 server.notify_tools_list_changed
 ```
 
-### Unsupported Features ( to be implemented in future versions )
+### Unsupported Features (to be implemented in future versions)
 
 - Log Level
 - Resource subscriptions
 - Completions
+- Elicitation
 
 ### Usage
 
