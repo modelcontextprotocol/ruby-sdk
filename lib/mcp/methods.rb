@@ -21,6 +21,7 @@ module MCP
 
     ROOTS_LIST = "roots/list"
     SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
+    ELICITATION_CREATE = "elicitation/create"
 
     # Notification methods
     NOTIFICATIONS_INITIALIZED = "notifications/initialized"
@@ -76,6 +77,8 @@ module MCP
           require_capability!(method, capabilities, :roots, :listChanged)
         when SAMPLING_CREATE_MESSAGE
           require_capability!(method, capabilities, :sampling)
+        when ELICITATION_CREATE
+          require_capability!(method, capabilities, :elicitation)
         when INITIALIZE, PING, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_PROGRESS, NOTIFICATIONS_CANCELLED
           # No specific capability required for initialize, ping, progress or cancelled
         end
