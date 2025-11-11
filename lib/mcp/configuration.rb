@@ -2,8 +2,10 @@
 
 module MCP
   class Configuration
-    DEFAULT_PROTOCOL_VERSION = "2025-06-18"
-    SUPPORTED_PROTOCOL_VERSIONS = [DEFAULT_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]
+    # DRAFT-2025-v3 is the latest draft protocol version:
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/blob/14ec41c/schema/draft/schema.ts#L15
+    DRAFT_PROTOCOL_VERSION = "DRAFT-2025-v3"
+    SUPPORTED_STABLE_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 
     attr_writer :exception_reporter, :instrumentation_callback
 
@@ -33,7 +35,7 @@ module MCP
     end
 
     def protocol_version
-      @protocol_version || DEFAULT_PROTOCOL_VERSION
+      @protocol_version || DRAFT_PROTOCOL_VERSION
     end
 
     def protocol_version?
@@ -93,8 +95,8 @@ module MCP
     private
 
     def validate_protocol_version!(protocol_version)
-      unless SUPPORTED_PROTOCOL_VERSIONS.include?(protocol_version)
-        message = "protocol_version must be #{SUPPORTED_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_PROTOCOL_VERSIONS[-1]}"
+      unless SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
+        message = "protocol_version must be #{SUPPORTED_STABLE_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_STABLE_PROTOCOL_VERSIONS[-1]}"
         raise ArgumentError, message
       end
     end
