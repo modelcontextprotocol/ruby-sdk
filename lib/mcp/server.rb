@@ -262,13 +262,8 @@ module MCP
       tool = tools[tool_name]
       unless tool
         add_instrumentation_data(tool_name:, error: :tool_not_found)
-        return Tool::Response.new(
-          [{
-            type: "text",
-            text: "Tool not found: #{tool_name}",
-          }],
-          error: true,
-        ).to_h
+
+        return error_tool_response("Tool not found: #{tool_name}")
       end
 
       arguments = request[:arguments] || {}
@@ -276,14 +271,9 @@ module MCP
 
       if tool.input_schema&.missing_required_arguments?(arguments)
         add_instrumentation_data(error: :missing_required_arguments)
+
         missing = tool.input_schema.missing_required_arguments(arguments).join(", ")
-        return Tool::Response.new(
-          [{
-            type: "text",
-            text: "Missing required arguments: #{missing}",
-          }],
-          error: true,
-        ).to_h
+        return error_tool_response("Missing required arguments: #{missing}")
       end
 
       if configuration.validate_tool_call_arguments && tool.input_schema
@@ -291,13 +281,8 @@ module MCP
           tool.input_schema.validate_arguments(arguments)
         rescue Tool::InputSchema::ValidationError => e
           add_instrumentation_data(error: :invalid_schema)
-          return Tool::Response.new(
-            [{
-              type: "text",
-              text: e.message,
-            }],
-            error: true,
-          ).to_h
+
+          return error_tool_response(e.message)
         end
       end
 
@@ -305,13 +290,8 @@ module MCP
         call_tool_with_args(tool, arguments)
       rescue => e
         report_exception(e, { request: request })
-        Tool::Response.new(
-          [{
-            type: "text",
-            text: "Internal error calling tool #{tool_name}: #{e.message}",
-          }],
-          error: true,
-        ).to_h
+
+        error_tool_response("Internal error calling tool #{tool_name}: #{e.message}")
       end
     end
 
@@ -357,6 +337,16 @@ module MCP
       resources.each_with_object({}) do |resource, hash|
         hash[resource.uri] = resource
       end
+    end
+
+    def error_tool_response(text)
+      Tool::Response.new(
+        [{
+          type: "text",
+          text: text,
+        }],
+        error: true,
+      ).to_h
     end
 
     def accepts_server_context?(method_object)
