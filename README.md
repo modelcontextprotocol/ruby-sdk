@@ -348,6 +348,8 @@ configuration = MCP::Configuration.new(protocol_version: "2024-11-05")
 MCP::Server.new(name: "test_server", configuration: configuration)
 ```
 
+If no protocol version is specified, the [Draft version](https://modelcontextprotocol.io/specification/draft) will be applied by default.
+
 This will make all new server instances use the specified protocol version instead of the default version. The protocol version can be reset to the default by setting it to `nil`:
 
 ```ruby
