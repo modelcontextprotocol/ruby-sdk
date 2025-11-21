@@ -80,6 +80,7 @@ module MCP
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) {},
         Methods::COMPLETION_COMPLETE => ->(_) {},
         Methods::LOGGING_SET_LEVEL => ->(_) {},
+        Methods::ELICITATION_CREATE => ->(_) {},
       }
       @transport = transport
     end
