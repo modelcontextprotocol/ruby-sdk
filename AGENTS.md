@@ -8,7 +8,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 - Ruby 3.2.0+ required
 - Run `bundle install` to install dependencies
-- Dependencies: `json_rpc_handler` ~> 0.1, `json-schema` >= 4.1
+- Dependencies: `json-schema` >= 4.1 - Schema validation
 
 ## Build and test commands
 
@@ -99,12 +99,6 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 - `server_context` hash passed through tool/prompt calls for request-specific data
 - Methods can accept `server_context:` keyword argument for accessing context
-
-### Dependencies
-
-- `json_rpc_handler` ~> 0.1 - JSON-RPC 2.0 message handling
-- `json-schema` >= 4.1 - Schema validation
-- Ruby 3.2.0+ required
 
 ### Integration patterns
 
