@@ -13,7 +13,7 @@ jobs:
           - { ruby: head, allowed-failure: true }
     name: Test Ruby ${{ matrix.entry.ruby }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.entry.ruby }}
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     name: RuboCop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: 3.2 # Specify the oldest supported Ruby version.
