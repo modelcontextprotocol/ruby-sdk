@@ -174,7 +174,7 @@ module MCP
     private
 
     def validate!
-      # NOTE: The draft protocol version is the next version after 2025-03-26.
+      # NOTE: The draft protocol version is the next version after 2025-11-25.
       if @configuration.protocol_version <= "2025-03-26"
         if server_info.key?(:title)
           message = "Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier"

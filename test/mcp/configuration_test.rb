@@ -53,7 +53,7 @@ module MCP
         Configuration.new(protocol_version: "DRAFT-2025-v3")
       end
 
-      assert_equal("protocol_version must be 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
+      assert_equal("protocol_version must be 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
     end
 
     test "raises ArgumentError when protocol_version is not a supported protocol version" do
@@ -62,7 +62,7 @@ module MCP
         custom_version = "2025-03-27"
         config.protocol_version = custom_version
       end
-      assert_equal("protocol_version must be 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
+      assert_equal("protocol_version must be 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
     end
 
     test "raises ArgumentError when protocol_version is not a boolean value" do
