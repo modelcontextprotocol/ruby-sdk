@@ -5,7 +5,7 @@ module MCP
     # DRAFT-2025-v3 is the latest draft protocol version:
     # https://github.com/modelcontextprotocol/modelcontextprotocol/blob/14ec41c/schema/draft/schema.ts#L15
     DRAFT_PROTOCOL_VERSION = "DRAFT-2025-v3"
-    SUPPORTED_STABLE_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
+    SUPPORTED_STABLE_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 
     attr_writer :exception_reporter, :instrumentation_callback
 
