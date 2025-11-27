@@ -31,3 +31,14 @@ jobs:
           ruby-version: 3.2 # Specify the oldest supported Ruby version.
           bundler-cache: true
       - run: bundle exec rake rubocop
+
+  yard:
+    runs-on: ubuntu-latest
+    name: YARD Documentation
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.2 # Specify the oldest supported Ruby version.
+          bundler-cache: true
+      - run: bundle exec yard --no-output

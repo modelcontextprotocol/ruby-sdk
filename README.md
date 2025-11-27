@@ -940,3 +940,8 @@ The client provides a wrapper class for tools returned by the server:
 - `MCP::Client::Tool` - Represents a single tool with its metadata
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
+
+## Documentation
+
+- [SDK API documentation](https://rubydoc.info/gems/mcp)
+- [Model Context Protocol documentation](https://modelcontextprotocol.io)
