@@ -133,7 +133,7 @@ module MCP
         jsonrpc: "2.0",
         id: 1,
         result: {
-          protocolVersion: Configuration::DRAFT_PROTOCOL_VERSION,
+          protocolVersion: Configuration::LATEST_STABLE_PROTOCOL_VERSION,
           capabilities: {
             prompts: { listChanged: true },
             resources: { listChanged: true },
@@ -776,7 +776,7 @@ module MCP
       }
 
       response = @server.handle(request)
-      assert_equal Configuration::DRAFT_PROTOCOL_VERSION, response[:result][:protocolVersion]
+      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
     test "server response does not include title when not configured" do

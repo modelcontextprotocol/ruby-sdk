@@ -38,18 +38,19 @@ module MCP
     # https://github.com/modelcontextprotocol/modelcontextprotocol/blob/14ec41c/schema/draft/schema.ts#L15
     test "initializes with default protocol version" do
       config = Configuration.new
-      assert_equal Configuration::DRAFT_PROTOCOL_VERSION, config.protocol_version
+      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, config.protocol_version
     end
 
     test "uses the draft protocol version when protocol_version is set to nil" do
       config = Configuration.new(protocol_version: nil)
-      assert_equal Configuration::DRAFT_PROTOCOL_VERSION, config.protocol_version
+      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, config.protocol_version
     end
 
     test "raises ArgumentError when setting the draft protocol version" do
       exception = assert_raises(ArgumentError) do
-        # To use the draft version externally, either omit `protocol_version` or set it to nil.
-        Configuration.new(protocol_version: Configuration::DRAFT_PROTOCOL_VERSION)
+        # DRAFT-2025-v3 is the latest draft protocol version:
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/blob/14ec41c/schema/draft/schema.ts#L15
+        Configuration.new(protocol_version: "DRAFT-2025-v3")
       end
 
       assert_equal("protocol_version must be 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
