@@ -12,8 +12,9 @@ module MCP
       exception = StandardError.new("test error")
       server_context = { test: "context" }
 
-      # Should not raise any errors
-      config.exception_reporter.call(exception, server_context)
+      assert_nothing_raised do
+        config.exception_reporter.call(exception, server_context)
+      end
     end
 
     test "allows setting a custom exception reporter" do
