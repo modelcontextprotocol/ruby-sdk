@@ -81,7 +81,7 @@ module MCP
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
-          assert_equal Configuration::DRAFT_PROTOCOL_VERSION, body["result"]["protocolVersion"]
+          assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
         end
 
         test "handles GET request with valid session ID" do
