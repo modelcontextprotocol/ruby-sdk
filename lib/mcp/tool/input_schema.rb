@@ -46,9 +46,10 @@ module MCP
       def validate_schema!
         check_for_refs!
         schema = to_h
+        gem_path = File.realpath(Gem.loaded_specs["json-schema"].full_gem_path)
         schema_reader = JSON::Schema::Reader.new(
           accept_uri: false,
-          accept_file: ->(path) { path.to_s.start_with?(Gem.loaded_specs["json-schema"].full_gem_path) },
+          accept_file: ->(path) { File.realpath(path.to_s).start_with?(gem_path) },
         )
         metaschema_path = Pathname.new(JSON::Validator.validator_for_name("draft4").metaschema)
         # Converts metaschema to a file URI for cross-platform compatibility
