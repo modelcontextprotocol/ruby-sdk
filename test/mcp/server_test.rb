@@ -431,6 +431,36 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
     end
 
+    test "#handle tools/call returns error response with isError true if input_schema raises an error during validation" do
+      tool = Tool.define(
+        name: "tool_with_faulty_schema",
+        title: "Tool with faulty schema",
+        description: "A tool with a faulty schema",
+        input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+      ) { Tool::Response.new("success") }
+
+      tool.input_schema.expects(:missing_required_arguments?).raises(RuntimeError, "Unexpected schema error")
+
+      server = Server.new(name: "test_server", tools: [tool])
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          name: "tool_with_faulty_schema",
+          arguments: { message: "test" },
+        },
+        id: 1,
+      }
+
+      response = server.handle(request)
+
+      assert_nil response[:error], "Expected no JSON-RPC error"
+      assert response[:result][:isError]
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:result][:content][0][:text])
+    end
+
     test "#handle tools/call returns error response with isError true for unknown tool" do
       request = {
         jsonrpc: "2.0",
