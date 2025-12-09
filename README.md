@@ -597,10 +597,10 @@ Tools can return structured data alongside text content using the `structured_co
 The structured content will be included in the JSON-RPC response as the `structuredContent` field.
 
 ```ruby
-class APITool < MCP::Tool
+class WeatherTool < MCP::Tool
   description "Get current weather and return structured data"
 
-  def self.call(endpoint:, server_context:)
+  def self.call(location:, units: "celsius", server_context:)
     # Call weather API and structure the response
     api_response = WeatherAPI.fetch(location, units)
     weather_data = {
@@ -617,6 +617,32 @@ class APITool < MCP::Tool
         text: weather_data.to_json
       }],
       structured_content: weather_data
+    )
+  end
+end
+```
+
+### Tool Responses with Errors
+
+Tools can return error information alongside text content using the `error` parameter.
+
+The error will be included in the JSON-RPC response as the `isError` field.
+
+```ruby
+class WeatherTool < MCP::Tool
+  description "Get current weather and return structured data"
+
+  def self.call(server_context:)
+    # Do something here
+    content = {}
+
+    MCP::Tool::Response.new(
+      [{
+        type: "text",
+        text: content.to_json
+      }],
+      structured_content: content,
+      error: true
     )
   end
 end
