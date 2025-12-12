@@ -89,7 +89,7 @@ module MCP
 
       tool = DefaultNameTool
 
-      assert_equal "default_name_tool", tool.tool_name
+      assert_equal "mcp/tool_test/default_name_tool", tool.tool_name
     end
 
     test "input schema defaults to an empty hash" do

@@ -102,7 +102,7 @@ module MCP
 
       prompt = DefaultNamePrompt
 
-      assert_equal "default_name_prompt", prompt.name_value
+      assert_equal "mcp/prompt_test/default_name_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
       assert_equal "test_argument", prompt.arguments.first.name
     end
@@ -184,7 +184,7 @@ module MCP
       prompt = NoArgumentsPrompt
 
       expected = {
-        name: "no_arguments_prompt",
+        name: "mcp/prompt_test/no_arguments_prompt",
         description: "No arguments prompt",
       }
 
