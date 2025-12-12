@@ -372,6 +372,22 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
     end
 
+    test "registers tools with the same class name in different namespaces" do
+      module Foo
+        class Example < Tool
+        end
+      end
+
+      class Bar
+        class Example < Tool
+        end
+      end
+
+      server = Server.new(tools: [Foo::Example, Bar::Example])
+
+      assert_equal(2, server.tools.count)
+    end
+
     test "#handle_json returns error response with isError true if the tool raises an error" do
       request = JSON.generate({
         jsonrpc: "2.0",

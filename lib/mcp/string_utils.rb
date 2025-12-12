@@ -4,15 +4,15 @@ module MCP
   module StringUtils
     extend self
 
+    NAMESPACE_SEPARATOR = "/"
+
     def handle_from_class_name(class_name)
-      underscore(demodulize(class_name))
+      class_name.to_s.split("::").map do |name|
+        underscore(name)
+      end.join(NAMESPACE_SEPARATOR)
     end
 
     private
-
-    def demodulize(path)
-      path.to_s.split("::").last || path.to_s
-    end
 
     def underscore(camel_cased_word)
       camel_cased_word.dup
