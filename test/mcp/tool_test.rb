@@ -74,13 +74,13 @@ module MCP
       class MockTool < Tool
         tool_name "my_mock_tool"
         description "a mock tool for testing"
-        input_schema({ properties: { message: { type: "string" } }, required: [:message] })
+        input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
       end
 
       tool = MockTool
       assert_equal "my_mock_tool",  tool.name_value
       assert_equal "a mock tool for testing", tool.description
-      assert_equal({ type: "object", properties: { message: { type: "string" } }, required: [:message] }, tool.input_schema.to_h)
+      assert_equal({ type: "object", properties: { message: { type: "string" } }, required: ["message"] }, tool.input_schema.to_h)
     end
 
     test "defaults to class name as tool name" do
@@ -103,12 +103,12 @@ module MCP
 
     test "accepts input schema as an InputSchema object" do
       class InputSchemaTool < Tool
-        input_schema InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+        input_schema InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
       end
 
       tool = InputSchemaTool
 
-      expected = { type: "object", properties: { message: { type: "string" } }, required: [:message] }
+      expected = { type: "object", properties: { message: { type: "string" } }, required: ["message"] }
       assert_equal expected, tool.input_schema.to_h
     end
 
@@ -119,7 +119,7 @@ module MCP
             properties: {
               count: { type: "integer", minimum: "not a number" },
             },
-            required: [:count],
+            required: ["count"],
           )
         end
       end
@@ -340,7 +340,7 @@ module MCP
 
     test "accepts output_schema as a hash" do
       class HashOutputSchemaTool < Tool
-        output_schema({ properties: { result: { type: "string" } }, required: [:result] })
+        output_schema({ properties: { result: { type: "string" } }, required: ["result"] })
       end
 
       tool = HashOutputSchemaTool
@@ -350,7 +350,7 @@ module MCP
 
     test "accepts output_schema as an OutputSchema object" do
       class OutputSchemaObjectTool < Tool
-        output_schema Tool::OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+        output_schema Tool::OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
       end
 
       tool = OutputSchemaObjectTool
@@ -365,7 +365,7 @@ module MCP
             properties: {
               count: { type: "integer", minimum: "not a number" },
             },
-            required: [:count],
+            required: ["count"],
           )
         end
       end
@@ -428,7 +428,7 @@ module MCP
       assert_equal "test_tool_with_output", tool.name_value
       assert_equal "a test tool with output schema", tool.description
 
-      expected_input = { type: "object", properties: { message: { type: "string" } }, required: [:message] }
+      expected_input = { type: "object", properties: { message: { type: "string" } }, required: ["message"] }
       assert_equal expected_input, tool.input_schema.to_h
 
       expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: ["result", "success"] }
