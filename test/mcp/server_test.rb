@@ -1096,6 +1096,62 @@ module MCP
       assert_equal "OK", response[:result][:content][0][:content]
     end
 
+    test "tools/call allows additional properties by default" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "test_tool",
+            arguments: {
+              message: "Hello, world!",
+              other_property: "I am allowed",
+            },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert response[:result], "Expected result key in response"
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_equal "OK", response[:result][:content][0][:content]
+    end
+
+    test "tools/call disallows additional properties when additionalProperties set to false" do
+      server = Server.new(
+        tools: [TestToolWithAdditionalPropertiesSetToFalse],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "test_tool_with_additional_properties_set_to_false",
+            arguments: {
+              message: "Hello, world!",
+              extra: 123,
+            },
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_nil response[:error], "Expected no JSON-RPC error"
+      assert response[:result][:isError]
+      assert_includes response[:result][:content][0][:text], "Invalid arguments"
+    end
+
     test "tools/call with no args" do
       server = Server.new(tools: [@tool_with_no_args])
 
@@ -1123,7 +1179,19 @@ module MCP
       input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
 
       class << self
-        def call(message:, server_context: nil)
+        def call(server_context: nil, **kwargs)
+          Tool::Response.new([{ type: "text", content: "OK" }])
+        end
+      end
+    end
+
+    class TestToolWithAdditionalPropertiesSetToFalse < Tool
+      tool_name "test_tool_with_additional_properties_set_to_false"
+      description "a test tool with additionalProperties set to false for testing"
+      input_schema({ properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false })
+
+      class << self
+        def call(server_context: nil, **kwargs)
           Tool::Response.new([{ type: "text", content: "OK" }])
         end
       end

@@ -5,37 +5,45 @@ require "test_helper"
 module MCP
   class Tool
     class InputSchemaTest < ActiveSupport::TestCase
-      test "required arguments are converted to symbols" do
-        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
-        assert_equal [:message], input_schema.required
+      test "required arguments are converted to strings" do
+        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+        assert_equal ["message"], input_schema.schema[:required]
       end
 
       test "to_h returns a hash representation of the input schema" do
-        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
         assert_equal(
-          { type: "object", properties: { message: { type: "string" } }, required: [:message] },
+          { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+          input_schema.to_h,
+        )
+      end
+
+      test "to_h returns a hash representation of the input schema with additionalProperties set to false" do
+        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false)
+        assert_equal(
+          { type: "object", properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false },
           input_schema.to_h,
         )
       end
 
       test "missing_required_arguments returns an array of missing required arguments" do
-        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
-        assert_equal [:message], input_schema.missing_required_arguments({})
+        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
+        assert_equal ["message"], input_schema.missing_required_arguments({})
       end
 
       test "missing_required_arguments returns an empty array if no required arguments are missing" do
-        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
+        input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
         assert_empty input_schema.missing_required_arguments({ message: "Hello, world!" })
       end
 
       test "valid schema initialization" do
-        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
-        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: [:foo] }, schema.to_h)
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: ["foo"] }, schema.to_h)
       end
 
       test "invalid schema raises argument error" do
         assert_raises(ArgumentError) do
-          InputSchema.new(properties: { foo: { type: "invalid_type" } }, required: [:foo])
+          InputSchema.new(properties: { foo: { type: "invalid_type" } }, required: ["foo"])
         end
       end
 
@@ -46,19 +54,36 @@ module MCP
       end
 
       test "validate arguments with valid data" do
-        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
         assert_nil(schema.validate_arguments({ foo: "bar" }))
       end
 
       test "validate arguments with invalid data" do
-        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
         assert_raises(InputSchema::ValidationError) do
           schema.validate_arguments({ foo: 123 })
         end
       end
 
+      test "validate arguments with valid data when additionalProperties set to nil (default)" do
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        assert_nil(schema.validate_arguments({ foo: "bar", extra: 123 }))
+      end
+
+      test "validate arguments with valid data when additionalProperties set to true (default)" do
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"], additionalProperties: true)
+        assert_nil(schema.validate_arguments({ foo: "bar", extra: 123 }))
+      end
+
+      test "validate arguments with invalid data when additionalProperties set to false" do
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"], additionalProperties: false)
+        assert_raises(InputSchema::ValidationError) do
+          schema.validate_arguments({ foo: "bar", extra: 123 })
+        end
+      end
+
       test "unexpected errors bubble up from validate_arguments" do
-        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
         JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
           assert_raises(RuntimeError) do
@@ -69,29 +94,32 @@ module MCP
 
       test "rejects schemas with $ref references" do
         assert_raises(ArgumentError) do
-          InputSchema.new(properties: { foo: { "$ref" => "#/definitions/bar" } }, required: [:foo])
+          InputSchema.new(properties: { foo: { "$ref" => "#/definitions/bar" } }, required: ["foo"])
         end
       end
 
       test "rejects schemas with symbol $ref references" do
         assert_raises(ArgumentError) do
-          InputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: [:foo])
+          InputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: ["foo"])
         end
       end
 
-      test "== compares two input schemas with the same properties and required fields" do
-        schema1 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
-        schema2 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+      test "== compares two input schemas with the same properties, required fields" do
+        schema1 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        schema2 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
         assert_equal schema1, schema2
 
-        schema3 = InputSchema.new(properties: { bar: { type: "string" } }, required: [:bar])
+        schema3 = InputSchema.new(properties: { bar: { type: "string" } }, required: ["bar"])
         refute_equal schema1, schema3
 
-        schema4 = InputSchema.new(properties: { foo: { type: "string" } }, required: [:bar])
+        schema4 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["bar"])
         refute_equal schema1, schema4
 
-        schema5 = InputSchema.new(properties: { bar: { type: "string" } }, required: [:foo])
+        schema5 = InputSchema.new(properties: { bar: { type: "string" } }, required: ["foo"])
         refute_equal schema1, schema5
+
+        schema6 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"], additionalProperties: false)
+        refute_equal schema1, schema6
       end
     end
   end

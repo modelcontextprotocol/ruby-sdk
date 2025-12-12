@@ -6,7 +6,7 @@ module MCP
   class Tool
     class OutputSchemaTest < ActiveSupport::TestCase
       test "to_h returns a hash representation of the output schema" do
-        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
         assert_equal(
           { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
           output_schema.to_h,
@@ -14,34 +14,55 @@ module MCP
       end
 
       test "validate_result validates result against the schema" do
-        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
         assert_nothing_raised do
           output_schema.validate_result({ result: "success" })
         end
       end
 
+      test "validate_result validates result with additional properties against the schema when additionalProperties set to nil (default)" do
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
+        assert_nothing_raised do
+          output_schema.validate_result({ result: "success", extra: 123 })
+        end
+      end
+
+      test "validate_result validates result with additional properties against the schema when additionalProperties set to true" do
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"], additionalProperties: true)
+        assert_nothing_raised do
+          output_schema.validate_result({ result: "success", extra: 123 })
+        end
+      end
+
+      test "validate_result raises error with additional properties when additionalProperties set to false)" do
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"], additionalProperties: false)
+        assert_raises(OutputSchema::ValidationError) do
+          output_schema.validate_result({ result: "success", extra: 123 })
+        end
+      end
+
       test "validate_result raises error for invalid result" do
-        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
         assert_raises(OutputSchema::ValidationError) do
           output_schema.validate_result({ result: 123 })
         end
       end
 
       test "validate_result raises error for missing required field" do
-        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: [:result])
+        output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
         assert_raises(OutputSchema::ValidationError) do
           output_schema.validate_result({})
         end
       end
 
       test "valid schema initialization" do
-        schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
         assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: ["foo"] }, schema.to_h)
       end
 
       test "invalid schema raises argument error" do
         assert_raises(ArgumentError) do
-          OutputSchema.new(properties: { foo: { type: "invalid_type" } }, required: [:foo])
+          OutputSchema.new(properties: { foo: { type: "invalid_type" } }, required: ["foo"])
         end
       end
 
@@ -52,7 +73,7 @@ module MCP
       end
 
       test "unexpected errors bubble up from validate_result" do
-        schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
         JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
           assert_raises(RuntimeError) do
@@ -63,28 +84,28 @@ module MCP
 
       test "rejects schemas with $ref references" do
         assert_raises(ArgumentError) do
-          OutputSchema.new(properties: { foo: { "$ref" => "#/definitions/bar" } }, required: [:foo])
+          OutputSchema.new(properties: { foo: { "$ref" => "#/definitions/bar" } }, required: ["foo"])
         end
       end
 
       test "rejects schemas with symbol $ref references" do
         assert_raises(ArgumentError) do
-          OutputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: [:foo])
+          OutputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: ["foo"])
         end
       end
 
       test "== compares two output schemas with the same properties and required fields" do
-        schema1 = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
-        schema2 = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:foo])
+        schema1 = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        schema2 = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
         assert_equal schema1, schema2
 
-        schema3 = OutputSchema.new(properties: { bar: { type: "string" } }, required: [:bar])
+        schema3 = OutputSchema.new(properties: { bar: { type: "string" } }, required: ["bar"])
         refute_equal schema1, schema3
 
-        schema4 = OutputSchema.new(properties: { foo: { type: "string" } }, required: [:bar])
+        schema4 = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["bar"])
         refute_equal schema1, schema4
 
-        schema5 = OutputSchema.new(properties: { bar: { type: "string" } }, required: [:foo])
+        schema5 = OutputSchema.new(properties: { bar: { type: "string" } }, required: ["foo"])
         refute_equal schema1, schema5
       end
 
@@ -105,7 +126,7 @@ module MCP
               required: ["items"],
             },
           },
-          required: [:data],
+          required: ["data"],
         )
 
         valid_result = {
@@ -136,7 +157,7 @@ module MCP
           type: "array",
           items: {
             properties: { foo: { type: "string" } },
-            required: [:foo],
+            required: ["foo"],
           },
         })
         assert_equal(
