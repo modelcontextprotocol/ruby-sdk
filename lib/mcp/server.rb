@@ -5,6 +5,15 @@ require_relative "instrumentation"
 require_relative "methods"
 
 module MCP
+  class ToolNotUnique < StandardError
+    def initialize(duplicated_tool_names)
+      super(<<~MESSAGE)
+        Tool names should be unique. Use `tool_name` to assign unique names to:
+        #{duplicated_tool_names.join(", ")}
+      MESSAGE
+    end
+  end
+
   class Server
     DEFAULT_VERSION = "0.1.0"
 
@@ -53,6 +62,7 @@ module MCP
       @title = title
       @version = version
       @instructions = instructions
+      @tool_names = tools.map(&:name_value)
       @tools = tools.to_h { |t| [t.name_value, t] }
       @prompts = prompts.to_h { |p| [p.name_value, p] }
       @resources = resources
@@ -101,7 +111,10 @@ module MCP
 
     def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, meta: nil, &block)
       tool = Tool.define(name:, title:, description:, input_schema:, annotations:, meta:, &block)
-      @tools[tool.name_value] = tool
+      tool_name = tool.name_value
+
+      @tool_names << tool_name
+      @tools[tool_name] = tool
 
       validate!
     end
@@ -176,6 +189,8 @@ module MCP
     private
 
     def validate!
+      validate_tool_name!
+
       # NOTE: The draft protocol version is the next version after 2025-11-25.
       if @configuration.protocol_version <= "2025-06-18"
         if server_info.key?(:description)
@@ -214,6 +229,12 @@ module MCP
           raise ArgumentError, message
         end
       end
+    end
+
+    def validate_tool_name!
+      duplicated_tool_names = @tool_names.tally.filter_map { |name, count| name if count >= 2 }
+
+      raise ToolNotUnique, duplicated_tool_names unless duplicated_tool_names.empty?
     end
 
     def handle_request(request, method)

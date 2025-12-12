@@ -374,6 +374,44 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
     end
 
+    test "registers tools with the same class name in different namespaces" do
+      module Foo
+        class Example < Tool
+        end
+      end
+
+      module Bar
+        class Example < Tool
+        end
+      end
+
+      error = assert_raises(MCP::ToolNotUnique) { Server.new(tools: [Foo::Example, Bar::Example]) }
+      assert_equal(<<~MESSAGE, error.message)
+        Tool names should be unique. Use `tool_name` to assign unique names to:
+        example
+      MESSAGE
+    end
+
+    test "registers tools with the same tool name" do
+      module Baz
+        class Example < Tool
+          tool_name "foo"
+        end
+      end
+
+      module Qux
+        class Example < Tool
+          tool_name "foo"
+        end
+      end
+
+      error = assert_raises(MCP::ToolNotUnique) { Server.new(tools: [Baz::Example, Qux::Example]) }
+      assert_equal(<<~MESSAGE, error.message)
+        Tool names should be unique. Use `tool_name` to assign unique names to:
+        foo
+      MESSAGE
+    end
+
     test "#handle_json returns error response with isError true if the tool raises an error" do
       request = JSON.generate({
         jsonrpc: "2.0",
@@ -948,6 +986,20 @@ module MCP
       })
 
       assert_equal({ content: "success", isError: false }, response[:result])
+    end
+
+    test "#define_tool adds a tool with duplicated tool name to the server" do
+      error = assert_raises(MCP::ToolNotUnique) do
+        @server.define_tool(
+          name: "test_tool", # NOTE: Already registered tool name
+          description: "Defined tool",
+          input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+          meta: { foo: "bar" },
+        ) do |message:|
+          Tool::Response.new(message)
+        end
+      end
+      assert_match(/\ATool names should be unique. Use `tool_name` to assign unique names to/, error.message)
     end
 
     test "#define_tool call definition allows tool arguments and server context" do
