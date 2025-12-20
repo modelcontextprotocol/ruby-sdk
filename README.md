@@ -173,7 +173,7 @@ class ApplicationController < ActionController::Base
   def index
     server = MCP::Server.new(
       name: "my_server",
-      title: "Example Server Display Name", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+      title: "Example Server Display Name",
       version: "1.0.0",
       instructions: "Use the tools of this server as a last resort",
       tools: [SomeTool, AnotherTool],
@@ -392,7 +392,7 @@ This gem provides a `MCP::Tool` class that can be used to create tools in three 
 
 ```ruby
 class MyTool < MCP::Tool
-  title "My Tool" # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title "My Tool"
   description "This tool performs specific functionality..."
   input_schema(
     properties: {
@@ -429,7 +429,7 @@ tool = MyTool
 ```ruby
 tool = MCP::Tool.define(
   name: "my_tool",
-  title: "My Tool", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title: "My Tool",
   description: "This tool performs specific functionality...",
   annotations: {
     read_only_hint: true,
@@ -660,7 +660,7 @@ The `MCP::Prompt` class provides three ways to create prompts:
 ```ruby
 class MyPrompt < MCP::Prompt
   prompt_name "my_prompt"  # Optional - defaults to underscored class name
-  title "My Prompt" # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title "My Prompt"
   description "This prompt performs specific functionality..."
   arguments [
     MCP::Prompt::Argument.new(
@@ -699,7 +699,7 @@ prompt = MyPrompt
 ```ruby
 prompt = MCP::Prompt.define(
   name: "my_prompt",
-  title: "My Prompt", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title: "My Prompt",
   description: "This prompt performs specific functionality...",
   arguments: [
     MCP::Prompt::Argument.new(
@@ -824,7 +824,7 @@ The `MCP::Resource` class provides a way to register resources with the server.
 resource = MCP::Resource.new(
   uri: "https://example.com/my_resource",
   name: "my-resource",
-  title: "My Resource", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title: "My Resource",
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
 )
@@ -857,7 +857,7 @@ The `MCP::ResourceTemplate` class provides a way to register resource templates 
 resource_template = MCP::ResourceTemplate.new(
   uri_template: "https://example.com/my_resource_template",
   name: "my-resource-template",
-  title: "My Resource Template", # WARNING: This is a `Draft` and is not supported in the `Version 2025-06-18 (latest)` specification.
+  title: "My Resource Template",
   description: "Lorem ipsum dolor sit amet",
   mime_type: "text/html",
 )
