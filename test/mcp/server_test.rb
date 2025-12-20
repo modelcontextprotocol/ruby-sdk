@@ -68,6 +68,7 @@ module MCP
       configuration.instrumentation_callback = instrumentation_helper.callback
 
       @server = Server.new(
+        description: "Test server",
         name: @server_name,
         title: "Example Server Display Name",
         version: "1.2.3",
@@ -140,6 +141,7 @@ module MCP
             tools: { listChanged: true },
           },
           serverInfo: {
+            description: "Test server",
             name: @server_name,
             title: "Example Server Display Name",
             version: "1.2.3",
@@ -813,6 +815,21 @@ module MCP
 
       response = server.handle(request)
       refute response[:result].key?(:instructions)
+    end
+
+    test "server uses description when configured with protocol version 2025-11-25" do
+      configuration = Configuration.new(protocol_version: "2025-11-25")
+      server = Server.new(description: "This is the MCP server used during tests.", name: "test_server", configuration: configuration)
+      assert_equal("This is the MCP server used during tests.", server.description)
+    end
+
+    test "raises error if description is used with protocol version 2025-06-18" do
+      configuration = Configuration.new(protocol_version: "2025-06-18")
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(description: "This is the MCP server used during tests.", name: "test_server", configuration: configuration)
+      end
+      assert_equal("Error occurred in server_info. `description` is not supported in protocol version 2025-06-18 or earlier", exception.message)
     end
 
     test "server uses instructions when configured with protocol version 2025-03-26" do

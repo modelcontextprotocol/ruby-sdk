@@ -31,9 +31,10 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :name, :title, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :name, :title, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
+      description: nil,
       name: "model_context_protocol",
       title: nil,
       version: DEFAULT_VERSION,
@@ -47,6 +48,7 @@ module MCP
       capabilities: nil,
       transport: nil
     )
+      @description = description
       @name = name
       @title = title
       @version = version
@@ -175,6 +177,13 @@ module MCP
 
     def validate!
       # NOTE: The draft protocol version is the next version after 2025-11-25.
+      if @configuration.protocol_version <= "2025-06-18"
+        if server_info.key?(:description)
+          message = "Error occurred in server_info. `description` is not supported in protocol version 2025-06-18 or earlier"
+          raise ArgumentError, message
+        end
+      end
+
       if @configuration.protocol_version <= "2025-03-26"
         if server_info.key?(:title)
           message = "Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier"
@@ -255,6 +264,7 @@ module MCP
 
     def server_info
       @server_info ||= {
+        description:,
         name:,
         title:,
         version:,
