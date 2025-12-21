@@ -435,7 +435,7 @@ tool = MCP::Tool.define(
     read_only_hint: true,
     title: "My Tool"
   }
-) do |args, server_context|
+) do |args, server_context:|
   MCP::Tool::Response.new([{ type: "text", text: "OK" }])
 end
 ```
@@ -451,7 +451,7 @@ server.define_tool(
     title: "My Tool",
     read_only_hint: true
   }
-) do |args, server_context|
+) do |args, server_context:|
   Tool::Response.new([{ type: "text", text: "OK" }])
 end
 ```
@@ -541,7 +541,7 @@ tool = MCP::Tool.define(
     },
     required: ["mean", "median", "count"]
   }
-) do |args, server_context|
+) do |args, server_context:|
   # Calculate statistics and validate against schema
   MCP::Tool::Response.new([{ type: "text", text: "Statistics calculated" }])
 end
