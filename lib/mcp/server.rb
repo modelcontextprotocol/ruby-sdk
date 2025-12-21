@@ -114,7 +114,7 @@ module MCP
     end
 
     def define_tool(name: nil, title: nil, description: nil, input_schema: nil, annotations: nil, meta: nil, &block)
-      tool = Tool.define(name:, title:, description:, input_schema:, annotations:, meta:, &block)
+      tool = Tool.define(name: name, title: title, description: description, input_schema: input_schema, annotations: annotations, meta: meta, &block)
       tool_name = tool.name_value
 
       @tool_names << tool_name
@@ -124,7 +124,7 @@ module MCP
     end
 
     def define_prompt(name: nil, title: nil, description: nil, arguments: [], &block)
-      prompt = Prompt.define(name:, title:, description:, arguments:, &block)
+      prompt = Prompt.define(name: name, title: title, description: description, arguments: arguments, &block)
       @prompts[prompt.name_value] = prompt
 
       validate!
@@ -289,11 +289,11 @@ module MCP
 
     def server_info
       @server_info ||= {
-        description:,
-        icons:,
-        name:,
-        title:,
-        version:,
+        description: description,
+        icons: icons,
+        name: name,
+        title: title,
+        version: version,
         websiteUrl: website_url,
       }.compact
     end
@@ -316,13 +316,13 @@ module MCP
 
       tool = tools[tool_name]
       unless tool
-        add_instrumentation_data(tool_name:, error: :tool_not_found)
+        add_instrumentation_data(tool_name: tool_name, error: :tool_not_found)
 
         return error_tool_response("Tool not found: #{tool_name}")
       end
 
       arguments = request[:arguments] || {}
-      add_instrumentation_data(tool_name:)
+      add_instrumentation_data(tool_name: tool_name)
 
       if tool.input_schema&.missing_required_arguments?(arguments)
         add_instrumentation_data(error: :missing_required_arguments)
@@ -360,7 +360,7 @@ module MCP
         raise RequestHandlerError.new("Prompt not found #{prompt_name}", request, error_type: :prompt_not_found)
       end
 
-      add_instrumentation_data(prompt_name:)
+      add_instrumentation_data(prompt_name: prompt_name)
 
       prompt_args = request[:arguments]
       prompt.validate_arguments!(prompt_args)

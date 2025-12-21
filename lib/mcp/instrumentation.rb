@@ -6,7 +6,7 @@ module MCP
       start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       begin
         @instrumentation_data = {}
-        add_instrumentation_data(method:)
+        add_instrumentation_data(method: method)
 
         result = yield block
 

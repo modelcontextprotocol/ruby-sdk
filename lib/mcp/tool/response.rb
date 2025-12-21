@@ -23,7 +23,7 @@ module MCP
       end
 
       def to_h
-        { content:, isError: error?, structuredContent: @structured_content }.compact
+        { content: content, isError: error?, structuredContent: @structured_content }.compact
       end
     end
   end

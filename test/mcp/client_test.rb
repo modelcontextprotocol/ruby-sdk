@@ -18,7 +18,7 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in { request: { method: "tools/list", jsonrpc: "2.0" } }
+        args.dig(:request, :method) == "tools/list" && args.dig(:request, :jsonrpc) == "2.0"
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -35,7 +35,7 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in { request: { method: "tools/list", jsonrpc: "2.0" } }
+        args.dig(:request, :method) == "tools/list" && args.dig(:request, :jsonrpc) == "2.0"
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -54,16 +54,10 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in {
-          request: {
-            method: "tools/call",
-            jsonrpc: "2.0",
-            params: {
-              name: "tool1",
-              arguments: arguments,
-            },
-          },
-        }
+        args.dig(:request, :method) == "tools/call" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :params, :name) == "tool1" &&
+          args.dig(:request, :params, :arguments) == arguments
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -86,7 +80,7 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in { request: { method: "resources/list", jsonrpc: "2.0" } }
+        args.dig(:request, :method) == "resources/list" && args.dig(:request, :jsonrpc) == "2.0"
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -124,15 +118,9 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in {
-          request: {
-            method: "resources/read",
-            jsonrpc: "2.0",
-            params: {
-              uri: uri,
-            },
-          },
-        }
+        args.dig(:request, :method) == "resources/read" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :params, :uri) == uri
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -190,7 +178,7 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in { request: { method: "prompts/list", jsonrpc: "2.0" } }
+        args.dig(:request, :method) == "prompts/list" && args.dig(:request, :jsonrpc) == "2.0"
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)
@@ -242,15 +230,9 @@ module MCP
 
       # Only checking for the essential parts of the request
       transport.expects(:send_request).with do |args|
-        args in {
-          request: {
-            method: "prompts/get",
-            jsonrpc: "2.0",
-            params: {
-              name: name,
-            },
-          },
-        }
+        args.dig(:request, :method) == "prompts/get" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :params, :name) == name
       end.returns(mock_response).once
 
       client = Client.new(transport: transport)

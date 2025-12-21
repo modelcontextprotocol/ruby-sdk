@@ -7,6 +7,9 @@ jobs:
     strategy:
       matrix:
         entry:
+          - { ruby: '2.7', allowed-failure: false }
+          - { ruby: '3.0', allowed-failure: false }
+          - { ruby: '3.1', allowed-failure: false }
           - { ruby: '3.2', allowed-failure: false }
           - { ruby: '3.3', allowed-failure: false }
           - { ruby: '3.4', allowed-failure: false }
@@ -29,7 +32,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 3.2 # Specify the oldest supported Ruby version.
+          ruby-version: 4.0 # Specify the latest supported Ruby version.
           bundler-cache: true
       - run: bundle exec rake rubocop
 
@@ -40,6 +43,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 3.2 # Specify the oldest supported Ruby version.
+          ruby-version: 4.0 # Specify the latest supported Ruby version.
           bundler-cache: true
       - run: bundle exec yard --no-output

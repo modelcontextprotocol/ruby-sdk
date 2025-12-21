@@ -243,6 +243,8 @@ module MCP
     end
 
     test "#call with Sorbet typed tools invokes the tool block and returns the response" do
+      skip "sorbet-static-and-runtime requires Ruby 3.0+." if RUBY_VERSION < "3.0"
+
       class TypedTestTool < Tool
         tool_name "test_tool"
         description "a test tool for testing"

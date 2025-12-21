@@ -42,7 +42,7 @@ module MCP
 
           notification = {
             jsonrpc: "2.0",
-            method:,
+            method: method,
           }
           notification[:params] = params if params
 
