@@ -819,7 +819,22 @@ module MCP
       assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
-    test "server response does not include title when not configured" do
+    test "server response does not include optional parameters when configured" do
+      server = Server.new(title: "Example Server Display Name", name: "test_server", website_url: "https://example.com")
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+
+      response = server.handle(request)
+      server_info = response[:result][:serverInfo]
+
+      assert_equal("Example Server Display Name", server_info[:title])
+      assert_equal("https://example.com", server_info[:websiteUrl])
+    end
+
+    test "server response does not include optional parameters when not configured" do
       server = Server.new(name: "test_server")
       request = {
         jsonrpc: "2.0",
@@ -829,6 +844,7 @@ module MCP
 
       response = server.handle(request)
       refute response[:result][:serverInfo].key?(:title)
+      refute response[:result][:serverInfo].key?(:website_url)
     end
 
     test "server uses default version when not configured" do
@@ -913,7 +929,16 @@ module MCP
       exception = assert_raises(ArgumentError) do
         Server.new(name: "test_server", title: "Example Server Display Name", configuration: configuration)
       end
-      assert_equal("Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+      assert_equal("Error occurred in server_info. `title` or `website_url` are not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `website_url` of `server_info` is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", website_url: "https://example.com", configuration: configuration)
+      end
+      assert_equal("Error occurred in server_info. `title` or `website_url` are not supported in protocol version 2025-03-26 or earlier", exception.message)
     end
 
     test "raises error if `title` of tool is used with protocol version 2025-03-26" do

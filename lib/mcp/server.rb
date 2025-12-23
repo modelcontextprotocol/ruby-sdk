@@ -40,13 +40,14 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :description, :name, :title, :version, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
       description: nil,
       name: "model_context_protocol",
       title: nil,
       version: DEFAULT_VERSION,
+      website_url: nil,
       instructions: nil,
       tools: [],
       prompts: [],
@@ -61,6 +62,7 @@ module MCP
       @name = name
       @title = title
       @version = version
+      @website_url = website_url
       @instructions = instructions
       @tool_names = tools.map(&:name_value)
       @tools = tools.to_h { |t| [t.name_value, t] }
@@ -200,8 +202,8 @@ module MCP
       end
 
       if @configuration.protocol_version <= "2025-03-26"
-        if server_info.key?(:title)
-          message = "Error occurred in server_info. `title` is not supported in protocol version 2025-03-26 or earlier"
+        if server_info.key?(:title) || server_info.key?(:websiteUrl)
+          message = "Error occurred in server_info. `title` or `website_url` are not supported in protocol version 2025-03-26 or earlier"
           raise ArgumentError, message
         end
 
@@ -289,6 +291,7 @@ module MCP
         name:,
         title:,
         version:,
+        websiteUrl: website_url,
       }.compact
     end
 
