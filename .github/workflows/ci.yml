@@ -7,10 +7,11 @@ jobs:
     strategy:
       matrix:
         entry:
-          - { ruby: 3.2, allowed-failure: false }
-          - { ruby: 3.3, allowed-failure: false }
-          - { ruby: 3.4, allowed-failure: false }
-          - { ruby: head, allowed-failure: true }
+          - { ruby: '3.2', allowed-failure: false }
+          - { ruby: '3.3', allowed-failure: false }
+          - { ruby: '3.4', allowed-failure: false }
+          - { ruby: '4.0', allowed-failure: false }
+          - { ruby: 'head', allowed-failure: true }
     name: Test Ruby ${{ matrix.entry.ruby }}
     steps:
       - uses: actions/checkout@v6
