@@ -7,6 +7,7 @@ module MCP
 
       attr_reader :title_value
       attr_reader :description_value
+      attr_reader :icons_value
       attr_reader :annotations_value
       attr_reader :meta_value
 
@@ -19,6 +20,7 @@ module MCP
           name: name_value,
           title: title_value,
           description: description_value,
+          icons: icons&.map(&:to_h),
           inputSchema: input_schema_value.to_h,
           outputSchema: @output_schema_value&.to_h,
           annotations: annotations_value&.to_h,
@@ -31,6 +33,7 @@ module MCP
         subclass.instance_variable_set(:@name_value, nil)
         subclass.instance_variable_set(:@title_value, nil)
         subclass.instance_variable_set(:@description_value, nil)
+        subclass.instance_variable_set(:@icons_value, nil)
         subclass.instance_variable_set(:@input_schema_value, nil)
         subclass.instance_variable_set(:@output_schema_value, nil)
         subclass.instance_variable_set(:@annotations_value, nil)
@@ -71,6 +74,14 @@ module MCP
         end
       end
 
+      def icons(value = NOT_SET)
+        if value == NOT_SET
+          @icons_value
+        else
+          @icons_value = value
+        end
+      end
+
       def input_schema(value = NOT_SET)
         if value == NOT_SET
           input_schema_value
@@ -107,11 +118,12 @@ module MCP
         end
       end
 
-      def define(name: nil, title: nil, description: nil, input_schema: nil, output_schema: nil, meta: nil, annotations: nil, &block)
+      def define(name: nil, title: nil, description: nil, icons: [], input_schema: nil, output_schema: nil, meta: nil, annotations: nil, &block)
         Class.new(self) do
           tool_name name
           title title
           description description
+          icons icons
           input_schema input_schema
           meta meta
           output_schema output_schema

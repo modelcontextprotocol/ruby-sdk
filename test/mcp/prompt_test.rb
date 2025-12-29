@@ -6,6 +6,7 @@ module MCP
   class PromptTest < ActiveSupport::TestCase
     class TestPrompt < Prompt
       description "Test prompt"
+      icons [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }]
       arguments [
         Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
       ]
@@ -43,6 +44,7 @@ module MCP
       class MockPrompt < Prompt
         prompt_name "my_mock_prompt"
         description "a mock prompt for testing"
+        icons [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }]
         arguments [
           Prompt::Argument.new(name: "test_argument", description: "Test argument", required: true),
         ]
@@ -64,6 +66,7 @@ module MCP
 
       assert_equal "my_mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
+      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons)
       assert_equal "test_argument", prompt.arguments.first.name
       assert_equal "Test argument", prompt.arguments.first.description
       assert prompt.arguments.first.required
@@ -112,6 +115,7 @@ module MCP
         name: "mock_prompt",
         title: "Mock Prompt",
         description: "a mock prompt for testing",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
         arguments: [
           Prompt::Argument.new(
             name: "test_argument",
@@ -135,6 +139,7 @@ module MCP
 
       assert_equal "mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
+      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons)
       assert_equal "test_argument", prompt.arguments.first.name
       assert_equal "Test argument title", prompt.arguments.first.title
       assert_equal "This is a test argument description", prompt.arguments.first.description

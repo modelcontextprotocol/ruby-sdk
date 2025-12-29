@@ -7,6 +7,7 @@ module MCP
 
       attr_reader :title_value
       attr_reader :description_value
+      attr_reader :icons_value
       attr_reader :arguments_value
       attr_reader :meta_value
 
@@ -19,6 +20,7 @@ module MCP
           name: name_value,
           title: title_value,
           description: description_value,
+          icons: icons&.map(&:to_h),
           arguments: arguments_value&.map(&:to_h),
           _meta: meta_value,
         }.compact
@@ -29,6 +31,7 @@ module MCP
         subclass.instance_variable_set(:@name_value, nil)
         subclass.instance_variable_set(:@title_value, nil)
         subclass.instance_variable_set(:@description_value, nil)
+        subclass.instance_variable_set(:@icons_value, nil)
         subclass.instance_variable_set(:@arguments_value, nil)
         subclass.instance_variable_set(:@meta_value, nil)
       end
@@ -61,6 +64,14 @@ module MCP
         end
       end
 
+      def icons(value = NOT_SET)
+        if value == NOT_SET
+          @icons_value
+        else
+          @icons_value = value
+        end
+      end
+
       def arguments(value = NOT_SET)
         if value == NOT_SET
           @arguments_value
@@ -77,11 +88,12 @@ module MCP
         end
       end
 
-      def define(name: nil, title: nil, description: nil, arguments: [], meta: nil, &block)
+      def define(name: nil, title: nil, description: nil, icons: [], arguments: [], meta: nil, &block)
         Class.new(self) do
           prompt_name name
           title title
           description description
+          icons icons
           arguments arguments
           define_singleton_method(:template) do |args, server_context: nil|
             instance_exec(args, server_context:, &block)
