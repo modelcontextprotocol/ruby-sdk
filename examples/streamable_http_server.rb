@@ -2,7 +2,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "mcp"
-require "rackup"
+require "rack"
 require "json"
 require "logger"
 
@@ -168,4 +168,4 @@ puts <<~MESSAGE
 MESSAGE
 
 # Start the server
-Rackup::Handler.get("puma").run(rack_app, Port: 9393, Host: "localhost")
+Rack::Handler.get("puma").run(rack_app, Port: 9393, Host: "localhost")
