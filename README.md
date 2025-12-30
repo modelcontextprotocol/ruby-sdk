@@ -163,7 +163,7 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, statele
 #### Rails Controller
 
 When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) transport
+[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
 requests.
 
 You can use the `Server#handle_json` method to handle requests.
@@ -384,7 +384,7 @@ If no exception reporter is configured, a default no-op reporter is used that si
 
 ### Tools
 
-MCP spec includes [Tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) which provide functionality to LLM apps.
+MCP spec includes [Tools](https://modelcontextprotocol.io/specification/latest/server/tools) which provide functionality to LLM apps.
 
 This gem provides a `MCP::Tool` class that can be used to create tools in three ways:
 
@@ -582,7 +582,7 @@ end
 Please note: in this case, you must provide `type: "array"`. The default type
 for output schemas is `object`.
 
-MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#output-schema) specifies that:
+MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/latest/server/tools#output-schema) specifies that:
 
 - **Server Validation**: Servers MUST provide structured results that conform to the output schema
 - **Client Validation**: Clients SHOULD validate structured results against the output schema
@@ -651,7 +651,7 @@ end
 
 ### Prompts
 
-MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/2025-06-18/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
+MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/latest/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
 
 The `MCP::Prompt` class provides three ways to create prompts:
 
@@ -814,7 +814,7 @@ This is to avoid potential issues with metric cardinality
 
 ### Resources
 
-MCP spec includes [Resources](https://modelcontextprotocol.io/specification/2025-06-18/server/resources).
+MCP spec includes [Resources](https://modelcontextprotocol.io/specification/latest/server/resources).
 
 ### Reading Resources
 
