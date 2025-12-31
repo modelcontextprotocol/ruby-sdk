@@ -338,13 +338,11 @@ module MCP
         end
       end
 
-      begin
-        call_tool_with_args(tool, arguments)
-      rescue => e
-        report_exception(e, { request: request })
+      call_tool_with_args(tool, arguments)
+    rescue => e
+      report_exception(e, request: request)
 
-        error_tool_response("Internal error calling tool #{tool_name}: #{e.message}")
-      end
+      error_tool_response("Internal error calling tool #{tool_name}: #{e.message}")
     end
 
     def list_prompts(request)
