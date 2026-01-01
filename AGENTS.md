@@ -105,9 +105,3 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - **Rails controllers**: Use `server.handle_json(request.body.read)` for HTTP endpoints
 - **Command-line tools**: Use `StdioTransport.new(server).open` for CLI applications
 - **HTTP services**: Use `StreamableHttpTransport` for web-based servers
-
-### Component definition patterns
-
-1. **Class inheritance**: `class MyTool < MCP::Tool`
-2. **Define methods**: `MCP::Tool.define(name: "my_tool") { ... }`
-3. **Server registration**: `server.define_tool(name: "my_tool") { ... }`
