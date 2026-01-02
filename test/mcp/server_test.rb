@@ -52,6 +52,7 @@ module MCP
         name: "test-resource",
         title: "Test Resource",
         description: "Test resource",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
         mime_type: "text/plain",
       )
 
@@ -60,6 +61,7 @@ module MCP
         name: "test-resource",
         title: "Test Resource",
         description: "Test resource",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
         mime_type: "text/plain",
       )
 
@@ -69,6 +71,7 @@ module MCP
 
       @server = Server.new(
         description: "Test server",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
         name: @server_name,
         title: "Example Server Display Name",
         version: "1.2.3",
@@ -142,6 +145,7 @@ module MCP
           },
           serverInfo: {
             description: "Test server",
+            icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
             name: @server_name,
             title: "Example Server Display Name",
             version: "1.2.3",

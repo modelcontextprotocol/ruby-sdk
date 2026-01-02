@@ -3,6 +3,7 @@
 require_relative "json_rpc_handler"
 require_relative "mcp/configuration"
 require_relative "mcp/content"
+require_relative "mcp/icon"
 require_relative "mcp/instrumentation"
 require_relative "mcp/methods"
 require_relative "mcp/prompt"

@@ -7,6 +7,7 @@ module MCP
     class TestTool < Tool
       tool_name "test_tool"
       description "a test tool for testing"
+      icons [Icon.new(mime_type: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light")]
       input_schema({ properties: { message: { type: "string" } }, required: ["message"] })
       annotations(
         destructive_hint: false,
@@ -26,13 +27,22 @@ module MCP
       end
     end
 
-    test "#to_h returns a hash with name, description, and inputSchema" do
+    test "#to_h returns a hash including name, description, icons, and inputSchema" do
+      expected = {
+        name: "mock_tool",
+        title: "Mock Tool",
+        description: "a mock tool for testing",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
+        inputSchema: { type: "object" },
+      }
       tool = Tool.define(
         name: "mock_tool",
         title: "Mock Tool",
         description: "a mock tool for testing",
+        icons: [Icon.new(mime_type: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light")],
       )
-      assert_equal({ name: "mock_tool", title: "Mock Tool", description: "a mock tool for testing", inputSchema: { type: "object" } }, tool.to_h)
+
+      assert_equal(expected, tool.to_h)
     end
 
     test "#to_h does not have `:title` key when title is omitted" do
@@ -308,19 +318,22 @@ module MCP
     end
 
     test "#to_h includes outputSchema when present" do
-      tool = Tool.define(
-        name: "mock_tool",
-        title: "Mock Tool",
-        description: "a mock tool for testing",
-        output_schema: { properties: { result: { type: "string" } }, required: ["result"] },
-      )
       expected = {
         name: "mock_tool",
         title: "Mock Tool",
         description: "a mock tool for testing",
+        icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
         inputSchema: { type: "object" },
         outputSchema: { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
       }
+      tool = Tool.define(
+        name: "mock_tool",
+        title: "Mock Tool",
+        description: "a mock tool for testing",
+        icons: [Icon.new(mime_type: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light")],
+        output_schema: { properties: { result: { type: "string" } }, required: ["result"] },
+      )
+
       assert_equal expected, tool.to_h
     end
 

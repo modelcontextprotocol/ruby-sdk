@@ -40,10 +40,11 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
       description: nil,
+      icons: [],
       name: "model_context_protocol",
       title: nil,
       version: DEFAULT_VERSION,
@@ -59,6 +60,7 @@ module MCP
       transport: nil
     )
       @description = description
+      @icons = icons
       @name = name
       @title = title
       @version = version
@@ -288,6 +290,7 @@ module MCP
     def server_info
       @server_info ||= {
         description:,
+        icons:,
         name:,
         title:,
         version:,
