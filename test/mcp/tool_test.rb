@@ -447,5 +447,46 @@ module MCP
       expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: ["result", "success"] }
       assert_equal expected_output, tool.output_schema.to_h
     end
+
+    test "accepts valid tool names" do
+      assert Tool.define(name: "getUser")
+      assert Tool.define(name: "DATA_EXPORT_v2")
+      assert Tool.define(name: "admin.tools.list")
+      assert Tool.define(name: "a" * 128)
+    end
+
+    test "raises an error when tool name is empty in class definition" do
+      error = assert_raises(ArgumentError) do
+        class EmptyTitleNameTool < Tool
+          tool_name ""
+        end
+      end
+      assert_equal("Tool names should be between 1 and 128 characters in length (inclusive).", error.message)
+    end
+
+    test "allows nil tool name in class definition" do
+      assert_nothing_raised do
+        class EmptyTitleNameTool < Tool
+          tool_name nil
+        end
+      end
+    end
+
+    test "raises an error when tool name is empty" do
+      error = assert_raises(ArgumentError) { Tool.define(name: "") }
+      assert_equal("Tool names should be between 1 and 128 characters in length (inclusive).", error.message)
+    end
+
+    test "raises an error when tool name exceeds 128 characters" do
+      error = assert_raises(ArgumentError) { Tool.define(name: "a" * 129) }
+      assert_equal("Tool names should be between 1 and 128 characters in length (inclusive).", error.message)
+    end
+
+    test "raises an error when tool name includes invalid characters (e.g., spaces)" do
+      error = assert_raises(ArgumentError) { Tool.define(name: "foo bar") }
+      assert_equal(<<~MESSAGE, error.message)
+        Tool names only allowed characters: uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.).
+      MESSAGE
+    end
   end
 end

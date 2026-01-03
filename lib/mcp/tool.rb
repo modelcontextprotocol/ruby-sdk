@@ -4,6 +4,7 @@ module MCP
   class Tool
     class << self
       NOT_SET = Object.new
+      MAX_LENGTH_OF_NAME = 128
 
       attr_reader :title_value
       attr_reader :description_value
@@ -45,11 +46,13 @@ module MCP
           name_value
         else
           @name_value = value
+
+          validate!
         end
       end
 
       def name_value
-        @name_value || StringUtils.handle_from_class_name(name)
+        @name_value || (name.nil? ? nil : StringUtils.handle_from_class_name(name))
       end
 
       def input_schema_value
@@ -129,6 +132,22 @@ module MCP
           output_schema output_schema
           self.annotations(annotations) if annotations
           define_singleton_method(:call, &block) if block
+        end.tap(&:validate!)
+      end
+
+      # It complies with the following tool name specification:
+      # https://modelcontextprotocol.io/specification/latest/server/tools#tool-names
+      def validate!
+        return true unless tool_name
+
+        if tool_name.empty? || tool_name.length > MAX_LENGTH_OF_NAME
+          raise ArgumentError, "Tool names should be between 1 and 128 characters in length (inclusive)."
+        end
+
+        unless tool_name.match?(/\A[A-Za-z\d_\-\.]+\z/)
+          raise ArgumentError, <<~MESSAGE
+            Tool names only allowed characters: uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.).
+          MESSAGE
         end
       end
     end
