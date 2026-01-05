@@ -232,11 +232,20 @@ module MCP
         private
 
         def create_rack_request(method, path, headers, body = nil)
+          default_accept = case method
+          when "POST"
+            { "HTTP_ACCEPT" => "application/json, text/event-stream" }
+          when "GET"
+            { "HTTP_ACCEPT" => "text/event-stream" }
+          else
+            {}
+          end
+
           env = {
             "REQUEST_METHOD" => method,
             "PATH_INFO" => path,
             "rack.input" => StringIO.new(body.to_s),
-          }.merge(headers)
+          }.merge(default_accept, headers)
 
           Rack::Request.new(env)
         end

@@ -573,6 +573,164 @@ module MCP
           assert_equal "Method not allowed", body["error"]
         end
 
+        test "POST request without Accept header returns 406" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 406, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
+            body["error"]
+        end
+
+        test "POST request with Accept header missing text/event-stream returns 406" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "application/json",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 406, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
+            body["error"]
+        end
+
+        test "POST request with Accept header missing application/json returns 406" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "text/event-stream",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 406, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
+            body["error"]
+        end
+
+        test "POST request with valid Accept header succeeds" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "application/json, text/event-stream",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
+        test "POST request with Accept header containing quality values succeeds" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "application/json;q=0.9, text/event-stream;q=0.8",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
+        test "GET request without Accept header returns 406" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request_without_accept(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 406, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]
+        end
+
+        test "GET request with Accept header missing text/event-stream returns 406" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request_without_accept(
+            "GET",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ACCEPT" => "application/json",
+            },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 406, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]
+        end
+
+        test "GET request with valid Accept header succeeds" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "GET",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ACCEPT" => "text/event-stream",
+            },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["Content-Type"]
+        end
+
         test "stateless mode allows requests without session IDs, responding with no session ID" do
           stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
 
@@ -771,6 +929,25 @@ module MCP
         private
 
         def create_rack_request(method, path, headers, body = nil)
+          default_accept = case method
+          when "POST"
+            { "HTTP_ACCEPT" => "application/json, text/event-stream" }
+          when "GET"
+            { "HTTP_ACCEPT" => "text/event-stream" }
+          else
+            {}
+          end
+
+          env = {
+            "REQUEST_METHOD" => method,
+            "PATH_INFO" => path,
+            "rack.input" => StringIO.new(body.to_s),
+          }.merge(default_accept).merge(headers)
+
+          Rack::Request.new(env)
+        end
+
+        def create_rack_request_without_accept(method, path, headers, body = nil)
           env = {
             "REQUEST_METHOD" => method,
             "PATH_INFO" => path,
