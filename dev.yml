@@ -27,5 +27,4 @@ commands:
   style:
     desc: Run rubocop
     aliases: [rubocop, lint]
-    run: bin/rubocop
-
+    run: bin/rake rubocop
