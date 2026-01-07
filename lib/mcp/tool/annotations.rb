@@ -19,7 +19,7 @@ module MCP
           idempotentHint: idempotent_hint,
           openWorldHint: open_world_hint,
           readOnlyHint: read_only_hint,
-          title:,
+          title: title,
         }.compact
       end
     end

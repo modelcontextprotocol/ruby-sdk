@@ -22,14 +22,14 @@ module JsonRpcHandler
 
   def handle(request, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, &method_finder)
     if request.is_a?(Array)
-      return error_response(id: :unknown_id, id_validation_pattern:, error: {
+      return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INVALID_REQUEST,
         message: "Invalid Request",
         data: "Request is an empty array",
       }) if request.empty?
 
       # Handle batch requests
-      responses = request.map { |req| process_request(req, id_validation_pattern:, &method_finder) }.compact
+      responses = request.map { |req| process_request(req, id_validation_pattern: id_validation_pattern, &method_finder) }.compact
 
       # A single item is hoisted out of the array
       return responses.first if responses.one?
@@ -38,9 +38,9 @@ module JsonRpcHandler
       responses if responses.any?
     elsif request.is_a?(Hash)
       # Handle single request
-      process_request(request, id_validation_pattern:, &method_finder)
+      process_request(request, id_validation_pattern: id_validation_pattern, &method_finder)
     else
-      error_response(id: :unknown_id, id_validation_pattern:, error: {
+      error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INVALID_REQUEST,
         message: "Invalid Request",
         data: "Request must be an array or a hash",
@@ -51,9 +51,9 @@ module JsonRpcHandler
   def handle_json(request_json, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, &method_finder)
     begin
       request = JSON.parse(request_json, symbolize_names: true)
-      response = handle(request, id_validation_pattern:, &method_finder)
+      response = handle(request, id_validation_pattern: id_validation_pattern, &method_finder)
     rescue JSON::ParserError
-      response = error_response(id: :unknown_id, id_validation_pattern:, error: {
+      response = error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::PARSE_ERROR,
         message: "Parse error",
         data: "Invalid JSON",
@@ -74,7 +74,7 @@ module JsonRpcHandler
       'Method name must be a string and not start with "rpc."'
     end
 
-    return error_response(id: :unknown_id, id_validation_pattern:, error: {
+    return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
       code: ErrorCode::INVALID_REQUEST,
       message: "Invalid Request",
       data: error,
@@ -84,7 +84,7 @@ module JsonRpcHandler
     params = request[:params]
 
     unless valid_params?(params)
-      return error_response(id:, id_validation_pattern:, error: {
+      return error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INVALID_PARAMS,
         message: "Invalid params",
         data: "Method parameters must be an array or an object or null",
@@ -95,7 +95,7 @@ module JsonRpcHandler
       method = method_finder.call(method_name)
 
       if method.nil?
-        return error_response(id:, id_validation_pattern:, error: {
+        return error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
           code: ErrorCode::METHOD_NOT_FOUND,
           message: "Method not found",
           data: method_name,
@@ -104,9 +104,9 @@ module JsonRpcHandler
 
       result = method.call(params)
 
-      success_response(id:, result:)
+      success_response(id: id, result: result)
     rescue StandardError => e
-      error_response(id:, id_validation_pattern:, error: {
+      error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INTERNAL_ERROR,
         message: "Internal error",
         data: e.message,
@@ -136,8 +136,8 @@ module JsonRpcHandler
   def success_response(id:, result:)
     {
       jsonrpc: Version::V2_0,
-      id:,
-      result:,
+      id: id,
+      result: result,
     } unless id.nil?
   end
 

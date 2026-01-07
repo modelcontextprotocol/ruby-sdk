@@ -94,7 +94,7 @@ describe JsonRpcHandler do
       register("add") { |params| params[:a] + params[:b] }
       id = "request-123_abc"
 
-      handle jsonrpc: "2.0", id:, method: "add", params: { a: 1, b: 2 }
+      handle jsonrpc: "2.0", id: id, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_success expected_result: 3
       assert_equal id, @response[:id]
@@ -104,7 +104,7 @@ describe JsonRpcHandler do
       register("add") { |params| params[:a] + params[:b] }
       id = 42
 
-      handle jsonrpc: "2.0", id:, method: "add", params: { a: 1, b: 2 }
+      handle jsonrpc: "2.0", id: id, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_success expected_result: 3
       assert_equal id, @response[:id]
@@ -124,7 +124,7 @@ describe JsonRpcHandler do
       register("add") { |params| params[:a] + params[:b] }
       id = "request-123_ABC"
 
-      handle jsonrpc: "2.0", id:, method: "add", params: { a: 1, b: 2 }
+      handle jsonrpc: "2.0", id: id, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_success expected_result: 3
       assert_equal id, @response[:id]
@@ -134,7 +134,7 @@ describe JsonRpcHandler do
       register("add") { |params| params[:a] + params[:b] }
       id = "550e8400-e29b-41d4-a716-446655440000"
 
-      handle jsonrpc: "2.0", id:, method: "add", params: { a: 1, b: 2 }
+      handle jsonrpc: "2.0", id: id, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_success expected_result: 3
       assert_equal id, @response[:id]

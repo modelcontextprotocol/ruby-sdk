@@ -96,7 +96,7 @@ module MCP
           icons icons
           arguments arguments
           define_singleton_method(:template) do |args, server_context: nil|
-            instance_exec(args, server_context:, &block)
+            instance_exec(args, server_context: server_context, &block)
           end
           meta meta
         end

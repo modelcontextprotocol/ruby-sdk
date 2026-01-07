@@ -10,7 +10,7 @@ module MCP
       end
 
       def to_h
-        { resource: resource.to_h, annotations: }.compact
+        { resource: resource.to_h, annotations: annotations }.compact
       end
     end
   end

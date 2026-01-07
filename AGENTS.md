@@ -6,7 +6,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 ## Dev environment setup
 
-- Ruby 3.2.0+ required
+- Ruby 3.2.0+ required to run the full test suite, including all Sorbet-related features
 - Run `bundle install` to install dependencies
 - Dependencies: `json-schema` >= 4.1 - Schema validation
 

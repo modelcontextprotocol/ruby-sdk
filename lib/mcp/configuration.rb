@@ -85,10 +85,10 @@ module MCP
       validate_tool_call_arguments = other.validate_tool_call_arguments
 
       Configuration.new(
-        exception_reporter:,
-        instrumentation_callback:,
-        protocol_version:,
-        validate_tool_call_arguments:,
+        exception_reporter: exception_reporter,
+        instrumentation_callback: instrumentation_callback,
+        protocol_version: protocol_version,
+        validate_tool_call_arguments: validate_tool_call_arguments,
       )
     end
 

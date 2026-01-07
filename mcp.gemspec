@@ -13,7 +13,8 @@ Gem::Specification.new do |spec|
   spec.homepage      = "https://github.com/modelcontextprotocol/ruby-sdk"
   spec.license       = "MIT"
 
-  spec.required_ruby_version = ">= 3.2.0"
+  # Since this library is used by a broad range of users, it does not align its support policy with Ruby's EOL.
+  spec.required_ruby_version = ">= 2.7.0"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["changelog_uri"] = "https://github.com/modelcontextprotocol/ruby-sdk/releases/tag/v#{spec.version}"

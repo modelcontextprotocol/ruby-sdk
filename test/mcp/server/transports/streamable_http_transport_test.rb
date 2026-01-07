@@ -388,7 +388,7 @@ module MCP
           @server.define_singleton_method(:handle_json) do |request|
             result = original_handle_json.call(request)
             # Send notification while still in request context - broadcast to all sessions
-            transport.send_notification("test_notification", { session: "current" })
+            transport.send_notification("test_notification", { session: "current" }, **{})
             result
           end
 
@@ -500,7 +500,7 @@ module MCP
           sleep(0.1)
 
           # Broadcast notification to all sessions
-          sent_count = @transport.send_notification("broadcast", { message: "Hello everyone" })
+          sent_count = @transport.send_notification("broadcast", { message: "Hello everyone" }, **{})
 
           assert_equal 2, sent_count
 
@@ -517,7 +517,7 @@ module MCP
         end
 
         test "send_notification returns false for non-existent session" do
-          result = @transport.send_notification({ message: "test" }, session_id: "non_existent")
+          result = @transport.send_notification("test", { message: "test" }, session_id: "non_existent")
           refute result
         end
 
@@ -549,7 +549,7 @@ module MCP
           io.close
 
           # Try to send notification
-          result = @transport.send_notification({ message: "test" }, session_id: session_id)
+          result = @transport.send_notification("test", { message: "test" }, session_id: session_id)
 
           # Should return false and clean up the session
           refute result
