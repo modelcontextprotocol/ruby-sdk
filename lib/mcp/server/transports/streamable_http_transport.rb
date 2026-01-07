@@ -17,6 +17,9 @@ module MCP
           @stateless = stateless
         end
 
+        REQUIRED_POST_ACCEPT_TYPES = ["application/json", "text/event-stream"].freeze
+        REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
+
         def handle_request(request)
           case request.env["REQUEST_METHOD"]
           when "POST"
@@ -105,6 +108,9 @@ module MCP
         end
 
         def handle_post(request)
+          accept_error = validate_accept_header(request, REQUIRED_POST_ACCEPT_TYPES)
+          return accept_error if accept_error
+
           body_string = request.body.read
           session_id = extract_session_id(request)
 
@@ -127,6 +133,9 @@ module MCP
           if @stateless
             return method_not_allowed_response
           end
+
+          accept_error = validate_accept_header(request, REQUIRED_GET_ACCEPT_TYPES)
+          return accept_error if accept_error
 
           session_id = extract_session_id(request)
 
@@ -176,6 +185,31 @@ module MCP
 
         def extract_session_id(request)
           request.env["HTTP_MCP_SESSION_ID"]
+        end
+
+        def validate_accept_header(request, required_types)
+          accept_header = request.env["HTTP_ACCEPT"]
+          return not_acceptable_response(required_types) unless accept_header
+
+          accepted_types = parse_accept_header(accept_header)
+          missing_types = required_types - accepted_types
+          return not_acceptable_response(required_types) unless missing_types.empty?
+
+          nil
+        end
+
+        def parse_accept_header(header)
+          header.split(",").map do |part|
+            part.split(";").first.strip
+          end
+        end
+
+        def not_acceptable_response(required_types)
+          [
+            406,
+            { "Content-Type" => "application/json" },
+            [{ error: "Not Acceptable: Accept header must include #{required_types.join(" and ")}" }.to_json],
+          ]
         end
 
         def parse_request_body(body_string)

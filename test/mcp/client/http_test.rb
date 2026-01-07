@@ -40,6 +40,7 @@ module MCP
             headers: {
               "Authorization" => "Bearer token",
               "Content-Type" => "application/json",
+              "Accept" => "application/json, text/event-stream",
             },
             body: request.to_json,
           )
@@ -52,6 +53,53 @@ module MCP
         # The test passes if the request is made with the correct headers
         # If headers are wrong, the stub_request won't match and will raise
         client.send_request(request: request)
+      end
+
+      def test_accept_header_is_included_in_requests
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url)
+          .with(
+            headers: {
+              "Accept" => "application/json, text/event-stream",
+            },
+          )
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
+          )
+
+        client.send_request(request: request)
+      end
+
+      def test_custom_accept_header_overrides_default
+        custom_accept = "application/json"
+        custom_client = HTTP.new(url: url, headers: { "Accept" => custom_accept })
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url)
+          .with(
+            headers: {
+              "Accept" => custom_accept,
+            },
+          )
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
+          )
+
+        custom_client.send_request(request: request)
       end
 
       def test_send_request_returns_faraday_response
@@ -191,6 +239,33 @@ module MCP
 
         assert_equal("Internal error handling tools/list request", error.message)
         assert_equal(:internal_error, error.error_type)
+        assert_equal({ method: "tools/list", params: nil }, error.request)
+      end
+
+      def test_send_request_raises_error_for_non_json_response
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: "data: {}\n\n",
+          )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_equal(
+          'Unsupported Content-Type: "text/event-stream". This client only supports JSON responses.',
+          error.message,
+        )
+        assert_equal(:unsupported_media_type, error.error_type)
         assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
