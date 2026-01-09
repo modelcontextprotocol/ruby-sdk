@@ -1,49 +1,27 @@
 # frozen_string_literal: true
 
+require "mcp"
+require "mcp/client"
+require "mcp/client/http"
+require "mcp/client/tool"
 require "net/http"
 require "uri"
 require "json"
 require "logger"
 
+SERVER_URL = "http://localhost:9393"
+
 # Logger for client operations
-logger = Logger.new($stdout)
-logger.formatter = proc do |severity, datetime, _progname, msg|
-  "[CLIENT] #{severity} #{datetime.strftime("%H:%M:%S.%L")} - #{msg}\n"
+def create_logger
+  logger = Logger.new($stdout)
+  logger.formatter = proc do |severity, datetime, _progname, msg|
+    "[CLIENT] #{severity} #{datetime.strftime("%H:%M:%S.%L")} - #{msg}\n"
+  end
+  logger
 end
 
-# Server configuration
-SERVER_URL = "http://localhost:9393/mcp"
-PROTOCOL_VERSION = "2024-11-05"
-
-# Helper method to make JSON-RPC requests
-def make_request(session_id, method, params = {}, id = nil)
-  uri = URI(SERVER_URL)
-  http = Net::HTTP.new(uri.host, uri.port)
-
-  request = Net::HTTP::Post.new(uri)
-  request["Content-Type"] = "application/json"
-  request["Mcp-Session-Id"] = session_id if session_id
-
-  body = {
-    jsonrpc: "2.0",
-    method: method,
-    params: params,
-    id: id || SecureRandom.uuid,
-  }
-
-  request.body = body.to_json
-  response = http.request(request)
-
-  {
-    status: response.code,
-    headers: response.to_hash,
-    body: JSON.parse(response.body),
-  }
-rescue => e
-  { error: e.message }
-end
-
-# Connect to SSE stream
+# Connect to SSE stream for real-time notifications
+# Note: The SDK doesn't support SSE streaming yet, so we use raw Net::HTTP
 def connect_sse(session_id, logger)
   uri = URI(SERVER_URL)
 
@@ -51,7 +29,7 @@ def connect_sse(session_id, logger)
 
   Net::HTTP.start(uri.host, uri.port) do |http|
     request = Net::HTTP::Get.new(uri)
-    request["Mcp-Session-Id"] = session_id
+    request["MCP-Session-Id"] = session_id
     request["Accept"] = "text/event-stream"
     request["Cache-Control"] = "no-cache"
 
@@ -62,14 +40,10 @@ def connect_sse(session_id, logger)
         response.read_body do |chunk|
           chunk.split("\n").each do |line|
             if line.start_with?("data: ")
-              data = line[6..-1]
-              begin
-                logger.info("SSE data: #{data}")
-              rescue JSON::ParserError
-                logger.debug("Non-JSON SSE data: #{data}")
-              end
+              data = line[6..]
+              logger.info("SSE event: #{data}")
             elsif line.start_with?(": ")
-              logger.debug("SSE keepalive received: #{line}")
+              logger.debug("SSE keepalive: #{line}")
             end
           end
         end
@@ -79,125 +53,126 @@ def connect_sse(session_id, logger)
     end
   end
 rescue Interrupt
-  logger.info("SSE connection interrupted by user")
+  logger.info("SSE connection interrupted")
 rescue => e
   logger.error("SSE connection error: #{e.message}")
 end
 
-# Main client flow
 def main
-  logger = Logger.new($stdout)
-  logger.formatter = proc do |severity, datetime, _progname, msg|
-    "[CLIENT] #{severity} #{datetime.strftime("%H:%M:%S.%L")} - #{msg}\n"
-  end
+  logger = create_logger
 
-  puts "=== MCP SSE Test Client ==="
+  puts <<~MESSAGE
+    MCP Streamable HTTP Client (SDK + SSE)
+    Make sure the server is running (ruby examples/streamable_http_server.rb)
+    #{"=" * 60}
+  MESSAGE
 
-  # Step 1: Initialize session
-  logger.info("Initializing session...")
+  # Initialize SDK client
+  transport = MCP::Client::HTTP.new(url: SERVER_URL)
+  client = MCP::Client.new(transport: transport)
 
-  init_response = make_request(
-    nil,
-    "initialize",
-    {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: {
-        name: "sse-test-client",
-        version: "1.0",
-      },
-    },
-    "init-1",
-  )
+  begin
+    # Initialize session using SDK
+    puts "=== Initializing session ==="
+    init_response = client.connect(
+      client_info: { name: "streamable-http-client", version: "1.0" },
+    )
+    puts "Session ID: #{client.session_id}"
+    puts "Protocol Version: #{client.protocol_version}"
+    puts "Server Info: #{init_response.dig("result", "serverInfo")}"
 
-  if init_response[:error]
-    logger.error("Failed to initialize: #{init_response[:error]}")
-    exit(1)
-  end
+    # Get available tools BEFORE establishing SSE connection
+    # (Once SSE is active, server sends responses via SSE stream, not POST response)
+    puts "=== Listing tools ==="
+    tools = client.tools
+    tools.each { |t| puts "  - #{t.name}: #{t.description}" }
 
-  session_id = init_response[:headers]["mcp-session-id"]&.first
+    echo_tool = tools.find { |t| t.name == "echo" }
+    notification_tool = tools.find { |t| t.name == "notification_tool" }
 
-  if session_id.nil?
-    logger.error("No session ID received")
-    exit(1)
-  end
+    # Start SSE connection in a separate thread (uses raw HTTP)
+    # Note: After this, server responses will be sent via SSE, not POST
+    sse_thread = Thread.new { connect_sse(client.session_id, logger) }
 
-  logger.info("Session initialized: #{session_id}")
-  logger.info("Server info: #{init_response[:body]["result"]["serverInfo"]}")
+    # Give SSE time to connect
+    sleep(1)
 
-  # Step 2: Start SSE connection in a separate thread
-  sse_thread = Thread.new { connect_sse(session_id, logger) }
+    # Interactive menu
+    loop do
+      puts <<~MENU.chomp
 
-  # Give SSE time to connect
-  sleep(1)
+        === Available Actions ===
+        1. Send notification (triggers SSE event)
+        2. Echo message
+        3. List tools
+        0. Exit
 
-  # Step 3: Interactive menu
-  loop do
-    puts <<~MESSAGE.chomp
+        Choose an action:#{" "}
+      MENU
 
-      === Available Actions ===
-      1. Send custom notification
-      2. Test echo
-      3. List tools
-      0. Exit
+      choice = gets&.chomp
 
-      Choose an action:#{" "}
-    MESSAGE
+      case choice
+      when "1"
+        if notification_tool
+          print("Enter notification message: ")
+          message = gets&.chomp || "Test"
+          print("Enter delay in seconds (0 for immediate): ")
+          delay = (gets&.chomp || "0").to_f
 
-    choice = gets.chomp
+          puts "=== Calling tool: notification_tool ==="
+          response = client.call_tool(
+            tool: notification_tool,
+            arguments: { message: message, delay: delay },
+          )
+          puts "Response: #{JSON.pretty_generate(response)}"
+        else
+          puts "notification_tool not available"
+        end
+      when "2"
+        if echo_tool
+          print("Enter message to echo: ")
+          message = gets&.chomp || "Hello"
 
-    case choice
-    when "1"
-      print("Enter notification message: ")
-      message = gets.chomp
-      print("Enter delay in seconds (0 for immediate): ")
-      delay = gets.chomp.to_f
-
-      response = make_request(
-        session_id,
-        "tools/call",
-        {
-          name: "notification_tool",
-          arguments: {
-            message: message,
-            delay: delay,
-          },
-        },
-      )
-      if response[:body]["accepted"]
-        logger.info("Notification sent successfully")
+          puts "=== Calling tool: echo ==="
+          response = client.call_tool(tool: echo_tool, arguments: { message: message })
+          puts "Response: #{JSON.pretty_generate(response)}"
+        else
+          puts "echo tool not available"
+        end
+      when "3"
+        puts "=== Listing tools ==="
+        puts "(Note: Response will appear in SSE stream when active)"
+        client.tools.each do |tool|
+          puts "  - #{tool.name}: #{tool.description}"
+        end
+      when "0", nil
+        logger.info("Exiting...")
+        break
       else
-        logger.error("Error: #{response[:body]["error"]}")
+        puts "Invalid choice"
       end
-    when "2"
-      print("Enter message to echo: ")
-      message = gets.chomp
-      make_request(session_id, "tools/call", { name: "echo", arguments: { message: message } })
-    when "3"
-      make_request(session_id, "tools/list")
-    when "0"
-      logger.info("Exiting...")
-      break
-    else
-      puts "Invalid choice"
     end
+  rescue MCP::Client::SessionExpiredError => e
+    logger.error("Session expired: #{e.message}")
+  rescue MCP::Client::RequestHandlerError => e
+    logger.error("Request error: #{e.message}")
+  rescue Interrupt
+    logger.info("Client interrupted")
+  rescue => e
+    logger.error("Error: #{e.message}")
+    logger.error(e.backtrace.first(5).join("\n"))
+  ensure
+    # Clean up SSE thread
+    sse_thread&.kill if sse_thread&.alive?
+
+    # Close session using SDK
+    puts "=== Closing session ==="
+    client.close
+    puts "Session closed"
   end
-
-  # Clean up
-  sse_thread.kill if sse_thread.alive?
-
-  # Close session
-  logger.info("Closing session...")
-  make_request(session_id, "close")
-  logger.info("Session closed")
-rescue Interrupt
-  logger.info("Client interrupted by user")
-rescue => e
-  logger.error("Client error: #{e.message}")
-  logger.error(e.backtrace.join("\n"))
 end
 
-# Run the client
 if __FILE__ == $PROGRAM_NAME
   main
 end
