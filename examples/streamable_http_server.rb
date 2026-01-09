@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+# Usage: bundle exec ruby examples/streamable_http_server.rb
 require "mcp"
 require "rackup"
 require "json"
