@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-01-11
+
+### Added
+
+- Protocol specification version "2025-11-25" support (#184)
+- `icons` parameter support (#205)
+- `websiteUrl` parameter in `serverInfo` (#188)
+- `description` parameter in `serverInfo` (#201)
+- `additionalProperties` support for schema validation (#198)
+- "Draft" protocol version to supported versions (#179)
+- `stateless` mode for high availability (#101)
+- Exception messages for tool call errors (#194)
+- Elicitation skeleton (#178)
+- `prompts/list` and `prompts/get` support to client (#163)
+- Accept header validation for HTTP client transport (#207)
+- Ruby 2.7 - Ruby 3.1 support (#206)
+
+### Changed
+
+- Make tool names stricter (#204)
+
+### Fixed
+
+- Symlink path comparison in schema validation (#193)
+- Duplicate tool names across namespaces now raise an error (#199)
+- Tool error handling to follow MCP spec (#165)
+- XSS vulnerability in json_rpc_handler (#175)
+
 ## [0.4.0] - 2025-10-15
 
 ### Added
