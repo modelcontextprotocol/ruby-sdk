@@ -1,0 +1,6 @@
+# Use package name as site title
+title: "MCP Ruby SDK"
+
+# Include generated files and directories which may start with underscores
+include:
+  - "_*"
