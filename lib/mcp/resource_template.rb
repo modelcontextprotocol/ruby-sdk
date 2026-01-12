@@ -19,7 +19,7 @@ module MCP
         name: name,
         title: title,
         description: description,
-        icons: icons.map(&:to_h),
+        icons: icons&.then { |icons| icons.empty? ? nil : icons.map(&:to_h) },
         mimeType: mime_type,
       }.compact
     end
