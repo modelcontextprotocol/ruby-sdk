@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
   spec.summary       = "The official Ruby SDK for Model Context Protocol servers and clients"
   spec.description   = spec.summary
   spec.homepage      = "https://github.com/modelcontextprotocol/ruby-sdk"
-  spec.license       = "MIT"
+  spec.license       = "Apache-2.0"
 
   # Since this library is used by a broad range of users, it does not align its support policy with Ruby's EOL.
   spec.required_ruby_version = ">= 2.7.0"
