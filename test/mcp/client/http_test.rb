@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "event_stream_parser"
 require "faraday"
 require "webmock/minitest"
 require "mcp/client/http"

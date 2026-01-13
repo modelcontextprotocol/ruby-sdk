@@ -8,6 +8,7 @@ require "net/http"
 require "uri"
 require "json"
 require "logger"
+require "event_stream_parser"
 
 SERVER_URL = "http://localhost:9393"
 
@@ -37,13 +38,13 @@ def connect_sse(session_id, logger)
       if response.code == "200"
         logger.info("SSE stream connected successfully")
 
+        parser = EventStreamParser::Parser.new
         response.read_body do |chunk|
-          chunk.split("\n").each do |line|
-            if line.start_with?("data: ")
-              data = line[6..]
+          parser.feed(chunk) do |type, data, _id|
+            if type.empty?
               logger.info("SSE event: #{data}")
-            elsif line.start_with?(": ")
-              logger.debug("SSE keepalive: #{line}")
+            else
+              logger.info("SSE event (#{type}): #{data}")
             end
           end
         end

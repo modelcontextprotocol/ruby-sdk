@@ -145,14 +145,8 @@ module MCP
 
       def parse_sse_response(body, method, params)
         json_rpc_response = nil
-
-        body.to_s.each_line do |line|
-          line = line.strip
-          next if line.empty?
-          next if line.start_with?(":")
-          next unless line.start_with?("data:")
-
-          data = line.sub(/^data:\s*/, "")
+        parser = EventStreamParser::Parser.new
+        parser.feed(body.to_s) do |_type, data, _id|
           next if data.empty?
 
           begin
