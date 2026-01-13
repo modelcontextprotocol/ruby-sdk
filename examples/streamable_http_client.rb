@@ -22,7 +22,8 @@ def create_logger
 end
 
 # Connect to SSE stream for real-time notifications
-# Note: The SDK doesn't support SSE streaming yet, so we use raw Net::HTTP
+# The SDK doesn't support HTTP GET for SSE streaming yet, so we use raw Net::HTTP
+# See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
 def connect_sse(session_id, logger)
   uri = URI(SERVER_URL)
 

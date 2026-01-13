@@ -2,7 +2,7 @@
 
 module MCP
   class Client
-    # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http (GET for SSE)
+    # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
     # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
 
     class HTTP
