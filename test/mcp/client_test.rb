@@ -401,47 +401,6 @@ module MCP
       assert_nil(client.session_id)
     end
 
-    def test_close_skips_delete_when_transport_lacks_method
-      transport = mock
-
-      init_response = mock_response(
-        body: { "result" => { "protocolVersion" => "2024-11-05" } },
-        headers: { "mcp-session-id" => "session-123" },
-      )
-      transport.expects(:post).returns(init_response).once
-      transport.stubs(:respond_to?).with(:delete).returns(false)
-
-      client = Client.new(transport: transport)
-      client.connect(client_info: { name: "test", version: "1.0" })
-
-      # Should not raise, just clear state
-      client.close
-
-      assert_nil(client.session_id)
-    end
-
-    def test_close_rescues_errors_from_non_conforming_transports
-      transport = mock
-
-      init_response = mock_response(
-        body: { "result" => { "protocolVersion" => "2024-11-05" } },
-        headers: { "mcp-session-id" => "session-123" },
-      )
-      transport.expects(:post).returns(init_response).once
-
-      client = Client.new(transport: transport)
-      client.connect(client_info: { name: "test", version: "1.0" })
-
-      # Server returns 405 Method Not Allowed (doesn't support session termination)
-      transport.expects(:delete).raises(Faraday::ClientError.new(nil, { status: 405 }))
-
-      # Should not raise, just clear state
-      client.close
-
-      assert_nil(client.session_id)
-      assert_nil(client.protocol_version)
-    end
-
     def test_session_id_not_overwritten_by_subsequent_responses
       transport = mock
 

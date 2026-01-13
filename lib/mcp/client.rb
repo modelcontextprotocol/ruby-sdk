@@ -147,15 +147,11 @@ module MCP
     # Closes the connection with the MCP server.
     # For HTTP transport, this sends a DELETE request to terminate the session.
     # Session state is cleared regardless of whether the DELETE succeeds.
+    # See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-termination
     def close
       return unless @session_id
 
-      begin
-        transport.delete(headers: session_headers) if transport.respond_to?(:delete)
-      rescue StandardError
-        # Server may return 405 if it doesn't support session termination
-      end
-
+      transport.delete(headers: session_headers)
       @session_id = nil
       @protocol_version = nil
     end
