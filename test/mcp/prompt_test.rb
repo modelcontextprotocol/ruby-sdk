@@ -195,5 +195,24 @@ module MCP
 
       assert_equal expected, prompt.to_h
     end
+
+    test "#to_h does not have `:icons` key when icons is empty" do
+      prompt = Prompt.define(
+        name: "prompt_without_icons",
+        description: "a prompt without icons",
+      )
+
+      refute prompt.to_h.key?(:icons)
+    end
+
+    test "#to_h does not have `:icons` key when icons is nil" do
+      prompt = Prompt.define(
+        name: "prompt_without_icons",
+        description: "a prompt without icons",
+        icons: nil,
+      )
+
+      refute prompt.to_h.key?(:icons)
+    end
   end
 end

@@ -53,6 +53,25 @@ module MCP
       refute tool.to_h.key?(:title)
     end
 
+    test "#to_h does not have `:icons` key when icons is empty" do
+      tool = Tool.define(
+        name: "tool_without_icons",
+        description: "a tool without icons",
+      )
+
+      refute tool.to_h.key?(:icons)
+    end
+
+    test "#to_h does not have `:icons` key when icons is nil" do
+      tool = Tool.define(
+        name: "tool_without_icons",
+        description: "a tool without icons",
+        icons: nil,
+      )
+
+      refute tool.to_h.key?(:icons)
+    end
+
     test "#to_h includes annotations when present" do
       tool = TestTool
       expected_annotations = {

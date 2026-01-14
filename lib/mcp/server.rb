@@ -290,7 +290,7 @@ module MCP
     def server_info
       @server_info ||= {
         description: description,
-        icons: icons,
+        icons: icons&.then { |icons| icons.empty? ? nil : icons.map(&:to_h) },
         name: name,
         title: title,
         version: version,

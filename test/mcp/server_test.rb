@@ -895,6 +895,46 @@ module MCP
       refute response[:result][:serverInfo].key?(:website_url)
     end
 
+    test "server response does not include icons when icons is empty" do
+      server = Server.new(name: "test_server")
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+      response = server.handle(request)
+
+      refute response[:result][:serverInfo].key?(:icons)
+    end
+
+    test "server response does not include icons when icons is nil" do
+      server = Server.new(name: "test_server", icons: nil)
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+      response = server.handle(request)
+
+      refute response[:result][:serverInfo].key?(:icons)
+    end
+
+    test "server response includes icons when icons is present" do
+      server = Server.new(
+        name: "test_server",
+        icons: [Icon.new(mime_type: "image/png", sizes: ["48x48"], src: "https://example.com", theme: "light")],
+      )
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+      }
+      response = server.handle(request)
+      expected_icons = [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com", theme: "light" }]
+
+      assert_equal expected_icons, response[:result][:serverInfo][:icons]
+    end
+
     test "server uses default version when not configured" do
       server = Server.new(name: "test_server")
       request = {

@@ -21,7 +21,7 @@ module MCP
           name: name_value,
           title: title_value,
           description: description_value,
-          icons: icons&.map(&:to_h),
+          icons: icons_value&.then { |icons| icons.empty? ? nil : icons.map(&:to_h) },
           inputSchema: input_schema_value.to_h,
           outputSchema: @output_schema_value&.to_h,
           annotations: annotations_value&.to_h,
