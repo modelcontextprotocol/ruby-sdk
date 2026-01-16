@@ -4,6 +4,8 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         entry:
@@ -27,6 +29,8 @@ jobs:
 
   rubocop:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     name: RuboCop
     steps:
       - uses: actions/checkout@v6
@@ -38,6 +42,8 @@ jobs:
 
   yard:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     name: YARD Documentation
     steps:
       - uses: actions/checkout@v6
