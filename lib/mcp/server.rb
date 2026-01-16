@@ -341,7 +341,15 @@ module MCP
         end
       end
 
-      call_tool_with_args(tool, arguments)
+      # Include _meta from request params as nested field in server_context
+      meta = request[:_meta]
+      context_with_meta = if @server_context || meta
+                            context = @server_context ? @server_context.dup : {}
+                            context[:_meta] = meta if meta
+                            context
+                          end
+
+      call_tool_with_args(tool, arguments, context_with_meta)
     rescue => e
       report_exception(e, request: request)
 
@@ -365,7 +373,15 @@ module MCP
       prompt_args = request[:arguments]
       prompt.validate_arguments!(prompt_args)
 
-      call_prompt_template_with_args(prompt, prompt_args)
+      # Include _meta from request params as nested field in server_context
+      meta = request[:_meta]
+      context_with_meta = if @server_context || meta
+                            context = @server_context ? @server_context.dup : {}
+                            context[:_meta] = meta if meta
+                            context
+                          end
+
+      call_prompt_template_with_args(prompt, prompt_args, context_with_meta)
     end
 
     def list_resources(request)
@@ -408,19 +424,23 @@ module MCP
       parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
-    def call_tool_with_args(tool, arguments)
+    def call_tool_with_args(tool, arguments, context = nil)
       args = arguments&.transform_keys(&:to_sym) || {}
+      effective_context = context || server_context
 
       if accepts_server_context?(tool.method(:call))
-        tool.call(**args, server_context: server_context).to_h
+        tool.call(**args, server_context: effective_context).to_h
       else
         tool.call(**args).to_h
       end
     end
 
-    def call_prompt_template_with_args(prompt, args)
+
+    def call_prompt_template_with_args(prompt, args, context = nil)
+      effective_context = context || server_context
+
       if accepts_server_context?(prompt.method(:template))
-        prompt.template(args, server_context: server_context).to_h
+        prompt.template(args, server_context: effective_context).to_h
       else
         prompt.template(args).to_h
       end
