@@ -7,6 +7,8 @@ require "securerandom"
 module MCP
   class Server
     module Transports
+      # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
+
       class StreamableHTTPTransport < Transport
         def initialize(server, stateless: false)
           super(server)
@@ -21,6 +23,8 @@ module MCP
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
 
         def handle_request(request)
+          # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#security-warning
+
           case request.env["REQUEST_METHOD"]
           when "POST"
             handle_post(request)
