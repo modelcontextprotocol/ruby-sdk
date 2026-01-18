@@ -849,6 +849,33 @@ end
 
 otherwise `resources/read` requests will be a no-op.
 
+Alternatively, you can define resources as classes, which allows them to be self-contained:
+
+```ruby
+class MyResource < MCP::Resource
+  uri "https://example.com/my_resource"
+  resource_name "my-resource"
+  title "My Resource"
+  description "Lorem ipsum dolor sit amet"
+  mime_type "text/html"
+
+  def self.contents
+    [
+      MCP::Resource::TextContents.new(
+        uri: uri,
+        mime_type: mime_type,
+        text: "Hello from example resource!"
+      )
+    ]
+  end
+end
+
+server = MCP::Server.new(
+  name: "my_server",
+  resources: [MyResource]
+)
+```
+
 ### Resource Templates
 
 The `MCP::ResourceTemplate` class provides a way to register resource templates with the server.
@@ -865,6 +892,34 @@ resource_template = MCP::ResourceTemplate.new(
 server = MCP::Server.new(
   name: "my_server",
   resource_templates: [resource_template],
+)
+```
+
+Like Resources, you can also define Resource Templates as classes:
+
+```ruby
+class MyResourceTemplate < MCP::ResourceTemplate
+  uri_template "https://example.com/items/{item_id}"
+  name "item-resource-template"
+  title "Item Resource Template"
+  description "Template for retrieving item details"
+  mime_type "application/json"
+
+  def self.contents(params:)
+    item_id = params[:item_id]
+    [
+      MCP::Resource::TextContents.new(
+        uri: "https://example.com/items/#{item_id}",
+        mime_type: "application/json",
+        text: { id: item_id, name: "Item #{item_id}" }.to_json
+      )
+    ]
+  end
+end
+
+server = MCP::Server.new(
+  name: "my_server",
+  resource_templates: [MyResourceTemplate]
 )
 ```
 
