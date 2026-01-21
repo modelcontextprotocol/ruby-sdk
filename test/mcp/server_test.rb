@@ -264,7 +264,7 @@ module MCP
 
       response = @server.handle(request)
       assert_equal tool_response.to_h, response[:result]
-      assert_instrumentation_data({ method: "tools/call", tool_name: tool_name })
+      assert_instrumentation_data({ method: "tools/call", tool_name: tool_name, tool_arguments: tool_args })
     end
 
     test "#handle tools/call returns error response with isError true if required tool arguments are missing" do
@@ -320,7 +320,7 @@ module MCP
       raw_response = @server.handle_json(request)
       response = JSON.parse(raw_response, symbolize_names: true) if raw_response
       assert_equal tool_response.to_h, response[:result] if response
-      assert_instrumentation_data({ method: "tools/call", tool_name: tool_name })
+      assert_instrumentation_data({ method: "tools/call", tool_name: tool_name, tool_arguments: { arg: "value" } })
     end
 
     test "#handle_json tools/call executes tool and returns result, when the tool is typed with Sorbet" do
@@ -389,7 +389,7 @@ module MCP
       assert response[:result][:isError]
       assert_equal "text", response[:result][:content][0][:type]
       assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
     end
 
     test "registers tools with the same class name in different namespaces" do
@@ -446,7 +446,7 @@ module MCP
       assert response[:result][:isError]
       assert_equal "text", response[:result][:content][0][:type]
       assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises" })
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
     end
 
     test "#handle tools/call returns error response with isError true if input_schema raises an error during validation" do
