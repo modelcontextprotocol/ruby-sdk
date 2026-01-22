@@ -322,7 +322,7 @@ module MCP
       end
 
       arguments = request[:arguments] || {}
-      add_instrumentation_data(tool_name: tool_name)
+      add_instrumentation_data(tool_name: tool_name, tool_arguments: arguments)
 
       if tool.input_schema&.missing_required_arguments?(arguments)
         add_instrumentation_data(error: :missing_required_arguments)
