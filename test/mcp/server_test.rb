@@ -1035,6 +1035,7 @@ module MCP
 
       exception = assert_raises(ArgumentError) do
         server.define_tool(
+          name: "test_tool",
           title: "Test tool",
         )
       end

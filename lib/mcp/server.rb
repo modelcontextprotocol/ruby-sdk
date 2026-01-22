@@ -40,7 +40,7 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :resource_templates, :server_context, :configuration, :capabilities, :transport
 
     def initialize(
       description: nil,
@@ -81,7 +81,7 @@ module MCP
 
       @handlers = {
         Methods::RESOURCES_LIST => method(:list_resources),
-        Methods::RESOURCES_READ => method(:read_resource_no_content),
+        Methods::RESOURCES_READ => method(:read_resource),
         Methods::RESOURCES_TEMPLATES_LIST => method(:list_resource_templates),
         Methods::TOOLS_LIST => method(:list_tools),
         Methods::TOOLS_CALL => method(:call_tool),
@@ -372,10 +372,38 @@ module MCP
       @resources.map(&:to_h)
     end
 
-    # Server implementation should set `resources_read_handler` to override no-op default
-    def read_resource_no_content(request)
-      add_instrumentation_data(resource_uri: request[:uri])
-      []
+    def read_resource(request)
+      uri = request[:uri]
+      resource = @resource_index[uri]
+
+      if resource&.is_a?(Class)
+        add_instrumentation_data(resource_uri: uri)
+
+        return resource.contents.map(&:to_h)
+      end
+
+      # Try dynamic lookup via templates
+      @resource_templates.each do |template_class|
+        next unless template_class.is_a?(Class)
+
+        template = template_class.uri_template
+        next unless template
+
+        # Convert simple URI template {param} to regex capture (?<param>[^/]+)
+        # Regexp.escape escapes { and } to \{ and \}
+        regex_pattern = Regexp.escape(template).gsub(/\\\{([^}]+)\\\}/, '(?<\1>[^/]+)')
+        match = Regexp.new("\\A#{regex_pattern}\\z").match(uri)
+
+        next unless match
+
+        params = match.named_captures.transform_keys(&:to_sym)
+        add_instrumentation_data(resource_uri: uri, resource_template: template_class.name)
+        return template_class.contents(params: params).map(&:to_h)
+      end
+
+      add_instrumentation_data(resource_uri: uri)
+
+      [] # Is should be -32602 Invalid Params JSON-RPC error
     end
 
     def list_resource_templates(request)
