@@ -113,6 +113,7 @@ The server provides three notification methods:
 - `notify_tools_list_changed` - Send a notification when the tools list changes
 - `notify_prompts_list_changed` - Send a notification when the prompts list changes
 - `notify_resources_list_changed` - Send a notification when the resources list changes
+- `notify_log_message` - Send a structured logging notification message
 
 #### Notification Format
 
@@ -121,6 +122,82 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 - `notifications/tools/list_changed`
 - `notifications/prompts/list_changed`
 - `notifications/resources/list_changed`
+- `notifications/message`
+
+### Logging
+
+The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+The `notifications/message` notification is used for structured logging between client and server.
+
+#### Log Levels
+
+The SDK supports 8 log levels with increasing severity:
+
+- `debug` - Detailed debugging information
+- `info` - General informational messages
+- `notice` - Normal but significant events
+- `warning` - Warning conditions
+- `error` - Error conditions
+- `critical` - Critical conditions
+- `alert` - Action must be taken immediately
+- `emergency` - System is unusable
+
+#### How Logging Works
+
+1. **Client Configuration**: The client sends a `logging/setLevel` request to configure the minimum log level
+2. **Server Filtering**: The server only sends log messages at the configured level or higher severity
+3. **Notification Delivery**: Log messages are sent as `notifications/message` to the client
+
+For example, if the client sets the level to `"error"` (severity 4), the server will send messages with levels: `error`, `critical`, `alert`, and `emergency`.
+
+For more details, see the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+**Usage Example:**
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Server::Transports::StdioTransport.new(server)
+server.transport = transport
+
+# The client first configures the logging level (on the client side):
+transport.send_request(
+  request: {
+    jsonrpc: "2.0",
+    method: "logging/setLevel",
+    params: { level: "info" },
+    id: session_id # Unique request ID within the session
+  }
+)
+
+# Send log messages at different severity levels
+server.notify_log_message(
+  data: { message: "Application started successfully" },
+  level: "info"
+)
+
+server.notify_log_message(
+  data: { message: "Configuration file not found, using defaults" },
+  level: "warning"
+)
+
+server.notify_log_message(
+  data: {
+    error: "Database connection failed",
+    details: { host: "localhost", port: 5432 }
+  },
+  level: "error",
+  logger: "DatabaseLogger" # Optional logger name
+)
+```
+
+**Key Features:**
+
+- Supports 8 log levels (debug, info, notice, warning, error, critical, alert, emergency) based on https://modelcontextprotocol.io/specification/2025-06-18/server/utilities/logging#log-levels
+- Server has capability `logging` to send log messages
+- Messages are only sent if a transport is configured
+- Messages are filtered based on the client's configured log level
+- If the log level hasn't been set by the client, no messages will be sent
 
 #### Transport Support
 
@@ -153,7 +230,6 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, statele
 
 ### Unsupported Features (to be implemented in future versions)
 
-- Log Level
 - Resource subscriptions
 - Completions
 - Elicitation

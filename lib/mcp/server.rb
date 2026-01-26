@@ -3,6 +3,7 @@
 require_relative "../json_rpc_handler"
 require_relative "instrumentation"
 require_relative "methods"
+require_relative "logging_message_notification"
 
 module MCP
   class ToolNotUnique < StandardError
@@ -40,7 +41,7 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
 
     def initialize(
       description: nil,
@@ -78,6 +79,7 @@ module MCP
       validate!
 
       @capabilities = capabilities || default_capabilities
+      @logging_message_notification = nil
 
       @handlers = {
         Methods::RESOURCES_LIST => method(:list_resources),
@@ -90,12 +92,12 @@ module MCP
         Methods::INITIALIZE => method(:init),
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
+        Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
 
         # No op handlers for currently unsupported methods
         Methods::RESOURCES_SUBSCRIBE => ->(_) {},
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) {},
         Methods::COMPLETION_COMPLETE => ->(_) {},
-        Methods::LOGGING_SET_LEVEL => ->(_) {},
         Methods::ELICITATION_CREATE => ->(_) {},
       }
       @transport = transport
@@ -160,6 +162,18 @@ module MCP
       @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
     rescue => e
       report_exception(e, { notification: "resources_list_changed" })
+    end
+
+    def notify_log_message(data:, level:, logger: nil)
+      return unless @transport
+      return unless logging_message_notification&.should_notify?(level)
+
+      params = { "data" => data, "level" => level }
+      params["logger"] = logger if logger
+
+      @transport.send_notification(Methods::NOTIFICATIONS_MESSAGE, params)
+    rescue => e
+      report_exception(e, { notification: "log_message" })
     end
 
     def resources_list_handler(&block)
@@ -284,6 +298,7 @@ module MCP
         tools: { listChanged: true },
         prompts: { listChanged: true },
         resources: { listChanged: true },
+        logging: {},
       }
     end
 
@@ -305,6 +320,19 @@ module MCP
         serverInfo: server_info,
         instructions: instructions,
       }.compact
+    end
+
+    def configure_logging_level(request)
+      if capabilities[:logging].nil?
+        raise RequestHandlerError.new("Server does not support logging", request, error_type: :internal_error)
+      end
+
+      logging_message_notification = LoggingMessageNotification.new(level: request[:level])
+      unless logging_message_notification.valid_level?
+        raise RequestHandlerError.new("Invalid log level #{request[:level]}", request, error_type: :invalid_params)
+      end
+
+      @logging_message_notification = logging_message_notification
     end
 
     def list_tools(request)

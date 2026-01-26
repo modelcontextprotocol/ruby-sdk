@@ -398,6 +398,96 @@ describe JsonRpcHandler do
       }
     end
 
+    it "returns an error with the code set to -32600 when error_type of RequestHandlerError is :invalid_request" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Invalid request data",
+          {},
+          error_type: :invalid_request,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "Invalid request data",
+      }
+    end
+
+    it "returns an error with the code set to -32602 when error_type of RequestHandlerError is :invalid_params" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Parameter validation failed",
+          {},
+          error_type: :invalid_params,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32602,
+        message: "Invalid params",
+        data: "Parameter validation failed",
+      }
+    end
+
+    it "returns an error with the code set to -32700 when error_type of RequestHandlerError is :parse_error" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Failed to parse input",
+          {},
+          error_type: :parse_error,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32700,
+        message: "Parse error",
+        data: "Failed to parse input",
+      }
+    end
+
+    it "returns an error with the code set to -32603 when error_type of RequestHandlerError is :internal_error" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Internal processing error",
+          {},
+          error_type: :internal_error,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32603,
+        message: "Internal error",
+        data: "Internal processing error",
+      }
+    end
+
+    it "returns an error with the code set to -32603 when error_type of RequestHandlerError is unknown" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Unknown error occurred",
+          {},
+          error_type: :unknown,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32603,
+        message: "Internal error",
+        data: "Unknown error occurred",
+      }
+    end
+
     # 6 Batch
     #
     # To send several Request objects at the same time, the Client MAY send an Array filled with Request objects.

@@ -105,6 +105,8 @@ module JsonRpcHandler
       result = method.call(params)
 
       success_response(id: id, result: result)
+    rescue MCP::Server::RequestHandlerError => e
+      handle_request_error(e, id, id_validation_pattern)
     rescue StandardError => e
       error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INTERNAL_ERROR,
@@ -112,6 +114,24 @@ module JsonRpcHandler
         data: e.message,
       })
     end
+  end
+
+  def handle_request_error(error, id, id_validation_pattern)
+    error_type = error.respond_to?(:error_type) ? error.error_type : nil
+
+    code, message = case error_type
+    when :invalid_request then [ErrorCode::INVALID_REQUEST, "Invalid Request"]
+    when :invalid_params then [ErrorCode::INVALID_PARAMS, "Invalid params"]
+    when :parse_error then [ErrorCode::PARSE_ERROR, "Parse error"]
+    when :internal_error then [ErrorCode::INTERNAL_ERROR, "Internal error"]
+    else [ErrorCode::INTERNAL_ERROR, "Internal error"]
+    end
+
+    error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
+      code: code,
+      message: message,
+      data: error.message,
+    })
   end
 
   def valid_version?(version)
