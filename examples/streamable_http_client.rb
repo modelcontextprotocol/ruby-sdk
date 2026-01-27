@@ -64,7 +64,7 @@ def main
   logger = create_logger
 
   puts <<~MESSAGE
-    MCP Streamable HTTP Client (SDK + SSE)
+    MCP Streamable HTTP Client
     Make sure the server is running (ruby examples/streamable_http_server.rb)
     #{"=" * 60}
   MESSAGE
@@ -79,9 +79,11 @@ def main
     init_response = client.connect(
       client_info: { name: "streamable-http-client", version: "1.0" },
     )
-    puts "Session ID: #{client.session_id}"
-    puts "Protocol Version: #{client.protocol_version}"
-    puts "Server Info: #{init_response.dig("result", "serverInfo")}"
+    puts <<~MESSAGE
+      ID: #{client.session_id}
+      Version: #{client.protocol_version}
+      Server: #{init_response.dig("result", "serverInfo")}
+    MESSAGE
 
     # Get available tools BEFORE establishing SSE connection
     # (Once SSE is active, server sends responses via SSE stream, not POST response)
