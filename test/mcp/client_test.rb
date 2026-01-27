@@ -5,9 +5,14 @@ require "securerandom"
 
 module MCP
   class ClientTest < Minitest::Test
+    # Helper to create a mock response struct like HTTP::Response
+    def mock_response(body:, headers: {})
+      Struct.new(:body, :headers, keyword_init: true).new(body: body, headers: headers)
+    end
+
     def test_tools_sends_request_to_transport_and_returns_tools_array
       transport = mock
-      mock_response = {
+      response_body = {
         "result" => {
           "tools" => [
             { "name" => "tool1", "description" => "tool1", "inputSchema" => {} },
@@ -16,10 +21,9 @@ module MCP
         },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "tools/list" && args.dig(:request, :jsonrpc) == "2.0"
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "tools/list" && args.dig(:body, :jsonrpc) == "2.0"
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       tools = client.tools
@@ -31,12 +35,11 @@ module MCP
 
     def test_tools_returns_empty_array_when_no_tools
       transport = mock
-      mock_response = { "result" => { "tools" => [] } }
+      response_body = { "result" => { "tools" => [] } }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "tools/list" && args.dig(:request, :jsonrpc) == "2.0"
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "tools/list" && args.dig(:body, :jsonrpc) == "2.0"
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       tools = client.tools
@@ -48,17 +51,16 @@ module MCP
       transport = mock
       tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
       arguments = { foo: "bar" }
-      mock_response = {
+      response_body = {
         "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "tools/call" &&
-          args.dig(:request, :jsonrpc) == "2.0" &&
-          args.dig(:request, :params, :name) == "tool1" &&
-          args.dig(:request, :params, :arguments) == arguments
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "tools/call" &&
+          args.dig(:body, :jsonrpc) == "2.0" &&
+          args.dig(:body, :params, :name) == "tool1" &&
+          args.dig(:body, :params, :arguments) == arguments
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       result = client.call_tool(tool: tool, arguments: arguments)
@@ -69,7 +71,7 @@ module MCP
 
     def test_resources_sends_request_to_transport_and_returns_resources_array
       transport = mock
-      mock_response = {
+      response_body = {
         "result" => {
           "resources" => [
             { "name" => "resource1", "uri" => "file:///path/to/resource1", "description" => "First resource" },
@@ -78,10 +80,9 @@ module MCP
         },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "resources/list" && args.dig(:request, :jsonrpc) == "2.0"
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "resources/list" && args.dig(:body, :jsonrpc) == "2.0"
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       resources = client.resources
@@ -95,9 +96,9 @@ module MCP
 
     def test_resources_returns_empty_array_when_no_resources
       transport = mock
-      mock_response = { "result" => { "resources" => [] } }
+      response_body = { "result" => { "resources" => [] } }
 
-      transport.expects(:send_request).returns(mock_response).once
+      transport.expects(:post).returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       resources = client.resources
@@ -108,7 +109,7 @@ module MCP
     def test_read_resource_sends_request_to_transport_and_returns_contents
       transport = mock
       uri = "file:///path/to/resource.txt"
-      mock_response = {
+      response_body = {
         "result" => {
           "contents" => [
             { "uri" => uri, "mimeType" => "text/plain", "text" => "Hello, world!" },
@@ -116,12 +117,11 @@ module MCP
         },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "resources/read" &&
-          args.dig(:request, :jsonrpc) == "2.0" &&
-          args.dig(:request, :params, :uri) == uri
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "resources/read" &&
+          args.dig(:body, :jsonrpc) == "2.0" &&
+          args.dig(:body, :params, :uri) == uri
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       contents = client.read_resource(uri: uri)
@@ -135,9 +135,9 @@ module MCP
     def test_read_resource_returns_empty_array_when_no_contents
       transport = mock
       uri = "file:///path/to/nonexistent.txt"
-      mock_response = { "result" => {} }
+      response_body = { "result" => {} }
 
-      transport.expects(:send_request).returns(mock_response).once
+      transport.expects(:post).returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       contents = client.read_resource(uri: uri)
@@ -147,7 +147,7 @@ module MCP
 
     def test_prompts_sends_request_to_transport_and_returns_prompts_array
       transport = mock
-      mock_response = {
+      response_body = {
         "result" => {
           "prompts" => [
             {
@@ -176,10 +176,9 @@ module MCP
         },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "prompts/list" && args.dig(:request, :jsonrpc) == "2.0"
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "prompts/list" && args.dig(:body, :jsonrpc) == "2.0"
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       prompts = client.prompts
@@ -200,9 +199,9 @@ module MCP
 
     def test_prompts_returns_empty_array_when_no_prompts
       transport = mock
-      mock_response = { "result" => { "prompts" => [] } }
+      response_body = { "result" => { "prompts" => [] } }
 
-      transport.expects(:send_request).returns(mock_response).once
+      transport.expects(:post).returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       prompts = client.prompts
@@ -213,7 +212,7 @@ module MCP
     def test_get_prompt_sends_request_to_transport_and_returns_contents
       transport = mock
       name = "first_prompt"
-      mock_response = {
+      response_body = {
         "result" => {
           "description" => "First prompt",
           "messages" => [
@@ -228,12 +227,11 @@ module MCP
         },
       }
 
-      # Only checking for the essential parts of the request
-      transport.expects(:send_request).with do |args|
-        args.dig(:request, :method) == "prompts/get" &&
-          args.dig(:request, :jsonrpc) == "2.0" &&
-          args.dig(:request, :params, :name) == name
-      end.returns(mock_response).once
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "prompts/get" &&
+          args.dig(:body, :jsonrpc) == "2.0" &&
+          args.dig(:body, :params, :name) == name
+      end.returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       contents = client.get_prompt(name: name)
@@ -246,9 +244,9 @@ module MCP
     def test_get_prompt_returns_empty_hash_when_no_contents
       transport = mock
       name = "nonexistent_prompt"
-      mock_response = { "result" => {} }
+      response_body = { "result" => {} }
 
-      transport.expects(:send_request).returns(mock_response).once
+      transport.expects(:post).returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       contents = client.get_prompt(name: name)
@@ -259,14 +257,219 @@ module MCP
     def test_get_prompt_returns_empty_hash
       transport = mock
       name = "nonexistent_prompt"
-      mock_response = {}
+      response_body = {}
 
-      transport.expects(:send_request).returns(mock_response).once
+      transport.expects(:post).returns(mock_response(body: response_body)).once
 
       client = Client.new(transport: transport)
       contents = client.get_prompt(name: name)
 
       assert_empty(contents)
+    end
+
+    def test_connected_returns_false_before_connect
+      transport = mock
+      client = Client.new(transport: transport)
+
+      refute(client.connected?)
+      assert_nil(client.session_id)
+      assert_nil(client.protocol_version)
+    end
+
+    def test_connect_extracts_session_id_and_protocol_version
+      transport = mock
+      response_body = {
+        "result" => {
+          "protocolVersion" => "2024-11-05",
+          "serverInfo" => { "name" => "test-server", "version" => "1.0" },
+          "capabilities" => {},
+        },
+      }
+
+      transport.expects(:post).with do |args|
+        args.dig(:body, :method) == "initialize" &&
+          args.dig(:body, :params, :clientInfo, :name) == "test-client"
+      end.returns(mock_response(body: response_body, headers: { "mcp-session-id" => "session-123" })).once
+
+      client = Client.new(transport: transport)
+      result = client.connect(client_info: { name: "test-client", version: "1.0" })
+
+      assert(client.connected?)
+      assert_equal("session-123", client.session_id)
+      assert_equal("2024-11-05", client.protocol_version)
+      assert_equal("test-server", result.dig("result", "serverInfo", "name"))
+    end
+
+    def test_connect_uses_server_protocol_version
+      transport = mock
+      response_body = {
+        "result" => {
+          "protocolVersion" => "2025-03-26",
+          "serverInfo" => {},
+          "capabilities" => {},
+        },
+      }
+
+      transport.expects(:post).returns(mock_response(body: response_body, headers: {})).once
+
+      client = Client.new(transport: transport)
+      client.connect(
+        client_info: { name: "test-client", version: "1.0" },
+        protocol_version: "2024-11-05",
+      )
+
+      assert_equal("2025-03-26", client.protocol_version)
+    end
+
+    def test_send_request_includes_session_headers_after_initialization
+      transport = mock
+
+      init_response = mock_response(
+        body: { "result" => { "protocolVersion" => "2024-11-05" } },
+        headers: { "mcp-session-id" => "session-abc" },
+      )
+      transport.expects(:post).returns(init_response).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      tools_response = mock_response(body: { "result" => { "tools" => [] } })
+      transport.expects(:post).with do |args|
+        args[:headers][Client::SESSION_ID_HEADER] == "session-abc" &&
+          args[:headers][Client::PROTOCOL_VERSION_HEADER] == "2024-11-05"
+      end.returns(tools_response).once
+
+      client.tools
+    end
+
+    def test_session_expired_clears_session_state
+      transport = mock
+
+      init_response = mock_response(
+        body: { "result" => { "protocolVersion" => "2024-11-05" } },
+        headers: { "mcp-session-id" => "session-xyz" },
+      )
+      transport.expects(:post).returns(init_response).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      assert_equal("session-xyz", client.session_id)
+
+      transport.expects(:post).raises(Client::SessionExpiredError.new("Session expired", {}))
+
+      assert_raises(Client::SessionExpiredError) do
+        client.tools
+      end
+
+      assert_nil(client.session_id)
+      assert_nil(client.protocol_version)
+    end
+
+    def test_close_sends_delete_request_with_session_headers
+      transport = mock
+
+      init_response = mock_response(
+        body: { "result" => { "protocolVersion" => "2024-11-05" } },
+        headers: { "mcp-session-id" => "session-to-close" },
+      )
+      transport.expects(:post).returns(init_response).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      transport.expects(:delete).with do |args|
+        args[:headers][Client::SESSION_ID_HEADER] == "session-to-close" &&
+          args[:headers][Client::PROTOCOL_VERSION_HEADER] == "2024-11-05"
+      end.once
+
+      client.close
+
+      assert_nil(client.session_id)
+      assert_nil(client.protocol_version)
+    end
+
+    def test_close_does_nothing_without_session
+      transport = mock
+      client = Client.new(transport: transport)
+
+      # delete should not be called
+      transport.expects(:delete).never
+
+      client.close
+
+      assert_nil(client.session_id)
+    end
+
+    def test_session_id_not_overwritten_by_subsequent_responses
+      transport = mock
+
+      init_response = mock_response(
+        body: { "result" => { "protocolVersion" => "2024-11-05" } },
+        headers: { "mcp-session-id" => "original-session" },
+      )
+      transport.expects(:post).returns(init_response).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      assert_equal("original-session", client.session_id)
+
+      # Subsequent response has different session ID (shouldn't happen per spec)
+      tools_response = mock_response(
+        body: { "result" => { "tools" => [] } },
+        headers: { "mcp-session-id" => "different-session" },
+      )
+      transport.expects(:post).returns(tools_response).once
+
+      client.tools
+
+      # Original session ID should be preserved
+      assert_equal("original-session", client.session_id)
+    end
+
+    def test_connect_works_without_session_id_for_stateless_servers
+      transport = mock
+      response_body = {
+        "result" => {
+          "protocolVersion" => "2024-11-05",
+          "serverInfo" => { "name" => "stateless-server", "version" => "1.0" },
+          "capabilities" => {},
+        },
+      }
+
+      # Stateless server doesn't return session ID
+      transport.expects(:post).returns(mock_response(body: response_body, headers: {})).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      # Client is still connected even without session ID
+      assert(client.connected?)
+      assert_nil(client.session_id)
+      assert_equal("2024-11-05", client.protocol_version)
+    end
+
+    def test_send_request_works_without_session_id_for_stateless_servers
+      transport = mock
+
+      init_response = mock_response(
+        body: { "result" => { "protocolVersion" => "2024-11-05" } },
+        headers: {},
+      )
+      transport.expects(:post).returns(init_response).once
+
+      client = Client.new(transport: transport)
+      client.connect(client_info: { name: "test", version: "1.0" })
+
+      tools_response = mock_response(body: { "result" => { "tools" => [] } })
+      transport.expects(:post).with do |args|
+        # Session ID header should not be present for stateless servers
+        !args[:headers].key?(Client::SESSION_ID_HEADER) &&
+          args[:headers][Client::PROTOCOL_VERSION_HEADER] == "2024-11-05"
+      end.returns(tools_response).once
+
+      client.tools
     end
   end
 end

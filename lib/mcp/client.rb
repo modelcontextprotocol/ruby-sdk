@@ -2,21 +2,62 @@
 
 module MCP
   class Client
+    # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
+    LATEST_PROTOCOL_VERSION = "2025-11-25"
+    SESSION_ID_HEADER = "Mcp-Session-Id"
+    PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
-    #   The transport should be a duck type that responds to `send_request`. See the README for more details.
+    #   The transport should be a duck type that responds to `post`. See the README for more details.
     #
     # @example
     #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
     #   client = MCP::Client.new(transport: transport)
     def initialize(transport:)
       @transport = transport
+      @session_id = nil
+      @protocol_version = nil
     end
 
-    # The user may want to access additional transport-specific methods/attributes
-    # So keeping it public
-    attr_reader :transport
+    attr_reader :transport, :session_id, :protocol_version
+
+    def connected?
+      !@protocol_version.nil?
+    end
+
+    # Opens a connection to the MCP server by performing the initialization handshake.
+    #
+    # @param client_info [Hash] Information about the client (name, version)
+    # @param protocol_version [String] The protocol version to request
+    # @param capabilities [Hash] Client capabilities to advertise
+    # @return [Hash] The server's initialization response
+    #
+    # @example
+    #   client.connect(
+    #     client_info: { name: "my-client", version: "1.0.0" },
+    #   )
+    def connect(client_info:, protocol_version: LATEST_PROTOCOL_VERSION, capabilities: {})
+      request = {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "initialize",
+        params: {
+          protocolVersion: protocol_version,
+          capabilities: capabilities,
+          clientInfo: client_info,
+        },
+      }
+
+      response = transport.post(body: request)
+
+      # Faraday normalizes headers to lowercase
+      @session_id = response.headers["mcp-session-id"]
+      @protocol_version = response.body.dig("result", "protocolVersion") || protocol_version
+
+      response.body
+    end
 
     # Returns the list of tools available from the server.
     # Each call will make a new request – the result is not cached.
@@ -29,11 +70,7 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "tools/list",
-      })
+      response = send_request(method: "tools/list")
 
       response.dig("result", "tools")&.map do |tool|
         Tool.new(
@@ -49,11 +86,7 @@ module MCP
     #
     # @return [Array<Hash>] An array of available resources.
     def resources
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "resources/list",
-      })
+      response = send_request(method: "resources/list")
 
       response.dig("result", "resources") || []
     end
@@ -63,11 +96,7 @@ module MCP
     #
     # @return [Array<Hash>] An array of available prompts.
     def prompts
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "prompts/list",
-      })
+      response = send_request(method: "prompts/list")
 
       response.dig("result", "prompts") || []
     end
@@ -82,17 +111,11 @@ module MCP
     #   tool = client.tools.first
     #   response = client.call_tool(tool: tool, arguments: { foo: "bar" })
     #   structured_content = response.dig("result", "structuredContent")
-    #
-    # @note
-    #   The exact requirements for `arguments` are determined by the transport layer in use.
-    #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(tool:, arguments: nil)
-      transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
+      send_request(
         method: "tools/call",
         params: { name: tool.name, arguments: arguments },
-      })
+      )
     end
 
     # Reads a resource from the server by URI and returns the contents.
@@ -100,12 +123,10 @@ module MCP
     # @param uri [String] The URI of the resource to read.
     # @return [Array<Hash>] An array of resource contents (text or blob).
     def read_resource(uri:)
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
+      response = send_request(
         method: "resources/read",
         params: { uri: uri },
-      })
+      )
 
       response.dig("result", "contents") || []
     end
@@ -115,17 +136,51 @@ module MCP
     # @param name [String] The name of the prompt to get.
     # @return [Hash] A hash containing the prompt details.
     def get_prompt(name:)
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
+      response = send_request(
         method: "prompts/get",
         params: { name: name },
-      })
+      )
 
       response.fetch("result", {})
     end
 
+    # Closes the connection with the MCP server.
+    # For HTTP transport, this sends a DELETE request to terminate the session.
+    # Session state is cleared regardless of whether the DELETE succeeds.
+    # See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-termination
+    def close
+      return unless @session_id
+
+      transport.delete(headers: session_headers)
+      @session_id = nil
+      @protocol_version = nil
+    end
+
     private
+
+    def send_request(method:, params: nil)
+      request = {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: method,
+      }
+      request[:params] = params if params
+
+      response = transport.post(body: request, headers: session_headers)
+
+      response.body
+    rescue SessionExpiredError
+      @session_id = nil
+      @protocol_version = nil
+      raise
+    end
+
+    def session_headers
+      headers = {}
+      headers[SESSION_ID_HEADER] = @session_id if @session_id
+      headers[PROTOCOL_VERSION_HEADER] = @protocol_version if @protocol_version
+      headers
+    end
 
     def request_id
       SecureRandom.uuid
@@ -139,6 +194,15 @@ module MCP
         @request = request
         @error_type = error_type
         @original_error = original_error
+      end
+    end
+
+    class SessionExpiredError < StandardError
+      attr_reader :request
+
+      def initialize(message, request)
+        super(message)
+        @request = request
       end
     end
   end

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+# Usage: bundle exec ruby examples/streamable_http_server.rb
 require "mcp"
 require "rackup"
 require "json"
@@ -30,7 +30,7 @@ class NotificationTool < MCP::Tool
     def call(message:, delay: 0)
       sleep(delay) if delay > 0
 
-      logger&.info("Returning notification message: #{message}")
+      logger.info("Returning notification message: #{message}")
 
       MCP::Tool::Response.new([{
         type: "text",
