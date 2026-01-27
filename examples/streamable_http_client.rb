@@ -114,15 +114,15 @@ def main
         Choose an action:#{" "}
       MENU
 
-      choice = gets&.chomp
+      choice = gets.chomp
 
       case choice
       when "1"
         if notification_tool
           print("Enter notification message: ")
-          message = gets&.chomp || "Test"
+          message = gets.chomp
           print("Enter delay in seconds (0 for immediate): ")
-          delay = (gets&.chomp || "0").to_f
+          delay = gets.chomp.to_f
 
           puts "=== Calling tool: notification_tool ==="
           response = client.call_tool(
@@ -136,7 +136,7 @@ def main
       when "2"
         if echo_tool
           print("Enter message to echo: ")
-          message = gets&.chomp || "Hello"
+          message = gets.chomp
 
           puts "=== Calling tool: echo ==="
           response = client.call_tool(tool: echo_tool, arguments: { message: message })
@@ -150,7 +150,7 @@ def main
         client.tools.each do |tool|
           puts "  - #{tool.name}: #{tool.description}"
         end
-      when "0", nil
+      when "0"
         logger.info("Exiting...")
         break
       else
@@ -168,7 +168,7 @@ def main
     logger.error(e.backtrace.first(5).join("\n"))
   ensure
     # Clean up SSE thread
-    sse_thread&.kill if sse_thread&.alive?
+    sse_thread.kill if sse_thread&.alive?
 
     # Close session using SDK
     puts "=== Closing session ==="
