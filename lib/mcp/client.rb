@@ -4,7 +4,7 @@ module MCP
   class Client
     # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
     LATEST_PROTOCOL_VERSION = "2025-11-25"
-    SESSION_ID_HEADER = "MCP-Session-Id"
+    SESSION_ID_HEADER = "Mcp-Session-Id"
     PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
 
     # Initializes a new MCP::Client instance.

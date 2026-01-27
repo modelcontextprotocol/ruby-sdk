@@ -31,7 +31,7 @@ def connect_sse(session_id, logger)
 
   Net::HTTP.start(uri.host, uri.port) do |http|
     request = Net::HTTP::Get.new(uri)
-    request["MCP-Session-Id"] = session_id
+    request["Mcp-Session-Id"] = session_id
     request["Accept"] = "text/event-stream"
     request["Cache-Control"] = "no-cache"
 
