@@ -40,7 +40,7 @@ module MCP
 
     include Instrumentation
 
-    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport
+    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :client
 
     def initialize(
       description: nil,
@@ -74,6 +74,7 @@ module MCP
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
       @configuration = MCP.configuration.merge(configuration)
+      @client = nil
 
       validate!
 
@@ -299,6 +300,7 @@ module MCP
     end
 
     def init(request)
+      @client = request[:clientInfo] || request["clientInfo"] if request
       {
         protocolVersion: configuration.protocol_version,
         capabilities: capabilities,
