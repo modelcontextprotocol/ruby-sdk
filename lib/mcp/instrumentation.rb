@@ -8,6 +8,10 @@ module MCP
         @instrumentation_data = {}
         add_instrumentation_data(method: method)
 
+        if respond_to?(:client) && client
+          add_instrumentation_data(client: client)
+        end
+
         result = yield block
 
         result
