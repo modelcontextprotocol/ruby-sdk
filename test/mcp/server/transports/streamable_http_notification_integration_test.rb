@@ -51,6 +51,12 @@ module MCP
           # Test resources notification
           @server.notify_resources_list_changed
 
+          # Set log level to error for log notification
+          @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
+
+          # Test log notification
+          @server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
+
           # Check the notifications were received
           io.rewind
           output = io.read
@@ -58,6 +64,7 @@ module MCP
           assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED}\"}"
           assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED}\"}"
           assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED}\"}"
+          assert_includes output, "data: {\"jsonrpc\":\"2.0\",\"method\":\"#{Methods::NOTIFICATIONS_MESSAGE}\",\"params\":{\"data\":{\"error\":\"Connection Failed\"},\"level\":\"error\"}}\n\n"
         end
 
         test "notifications are broadcast to all connected sessions" do
@@ -147,6 +154,7 @@ module MCP
             @server.notify_tools_list_changed
             @server.notify_prompts_list_changed
             @server.notify_resources_list_changed
+            @server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
           end
         end
 

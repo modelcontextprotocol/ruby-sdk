@@ -142,6 +142,7 @@ module MCP
             prompts: { listChanged: true },
             resources: { listChanged: true },
             tools: { listChanged: true },
+            logging: {},
           },
           serverInfo: {
             description: "Test server",
@@ -760,6 +761,57 @@ module MCP
         response[:result],
       )
       assert_instrumentation_data({ method: "resources/templates/list" })
+    end
+
+    test "#configure_logging_level returns an error object when invalid log level is provided" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "logging/setLevel",
+          params: {
+            level: "invalid_level",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32602, response[:error][:code])
+      assert_includes response[:error][:data], "Invalid log level invalid_level"
+    end
+
+    test "#configure_logging_level returns an error object when server has not logging capability" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+        capabilities: {
+          tools: { listChanged: true },
+          prompts: { listChanged: true },
+          resources: { listChanged: true },
+        },
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "logging/setLevel",
+          params: {
+            level: "debug",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_equal(-32603, response[:error][:code])
+      assert_includes response[:error][:data], "Server does not support logging"
     end
 
     test "#handle method with missing required top-level capability returns an error" do
