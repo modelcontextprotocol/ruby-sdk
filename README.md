@@ -375,6 +375,50 @@ server = MCP::Server.new(
 
 This hash is then passed as the `server_context` argument to tool and prompt calls, and is included in exception and instrumentation callbacks.
 
+#### Request-specific `_meta` Parameter
+
+The MCP protocol supports a special [`_meta` parameter](https://modelcontextprotocol.io/specification/2025-06-18/basic#general-fields) in requests that allows clients to pass request-specific metadata. The server automatically extracts this parameter and makes it available to tools and prompts as a nested field within the `server_context`.
+
+**Access Pattern:**
+
+When a client includes `_meta` in the request params, it becomes available as `server_context[:_meta]`:
+
+```ruby
+class MyTool < MCP::Tool
+  def self.call(message:, server_context: nil)
+    # Access provider-specific metadata
+    session_id = server_context&.dig(:_meta, :session_id)
+    request_id = server_context&.dig(:_meta, :request_id)
+
+    # Access server's original context
+    user_id = server_context&.dig(:user_id)
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: "Processing for user #{user_id} in session #{session_id}"
+    }])
+  end
+end
+```
+
+**Client Request Example:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "my_tool",
+    "arguments": { "message": "Hello" },
+    "_meta": {
+      "session_id": "abc123",
+      "request_id": "req_456"
+    }
+  }
+}
+```
+
 #### Configuration Block Data
 
 ##### Exception Reporter
