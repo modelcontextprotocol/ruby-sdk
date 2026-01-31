@@ -320,10 +320,15 @@ The instrumentation callback receives a hash with the following possible keys:
 
 - `method`: (String) The protocol method called (e.g., "ping", "tools/list")
 - `tool_name`: (String, optional) The name of the tool called
+- `tool_arguments`: (Hash, optional) The arguments passed to the tool
 - `prompt_name`: (String, optional) The name of the prompt called
 - `resource_uri`: (String, optional) The URI of the resource called
 - `error`: (String, optional) Error code if a lookup failed
 - `duration`: (Float) Duration of the call in seconds
+
+> [!NOTE]
+> `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
+> This is to avoid potential issues with metric cardinality.
 
 **Type:**
 
@@ -335,9 +340,11 @@ instrumentation_callback = ->(data) { ... }
 **Example:**
 
 ```ruby
-config.instrumentation_callback = ->(data) {
-  puts "Instrumentation: #{data.inspect}"
-}
+MCP.configure do |config|
+  config.instrumentation_callback = ->(data) {
+    puts "Instrumentation: #{data.inspect}"
+  }
+end
 ```
 
 ### Server Protocol Version
@@ -786,31 +793,6 @@ The server will handle prompt listing and execution through the MCP protocol met
 
 - `prompts/list` - Lists all registered prompts and their schemas
 - `prompts/get` - Retrieves and executes a specific prompt with arguments
-
-### Instrumentation
-
-The server allows registering a callback to receive information about instrumentation.
-To register a handler pass a proc/lambda to as `instrumentation_callback` into the server constructor.
-
-```ruby
-MCP.configure do |config|
-  config.instrumentation_callback = ->(data) {
-    puts "Got instrumentation data #{data.inspect}"
-  }
-end
-```
-
-The data contains the following keys:
-
-- `method`: the method called, e.g. `ping`, `tools/list`, `tools/call` etc
-- `tool_name`: the name of the tool called
-- `prompt_name`: the name of the prompt called
-- `resource_uri`: the uri of the resource called
-- `error`: if looking up tools/prompts etc failed, e.g. `tool_not_found`
-- `duration`: the duration of the call in seconds
-
-`tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
-This is to avoid potential issues with metric cardinality
 
 ### Resources
 
