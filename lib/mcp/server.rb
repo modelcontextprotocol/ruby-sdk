@@ -18,6 +18,9 @@ module MCP
   class Server
     DEFAULT_VERSION = "0.1.0"
 
+    UNSUPPORTED_PROPERTIES_UNTIL_2025_06_18 = [:description, :icons].freeze
+    UNSUPPORTED_PROPERTIES_UNTIL_2025_03_26 = [:title, :websiteUrl].freeze
+
     class RequestHandlerError < StandardError
       attr_reader :error_type
       attr_reader :original_error
@@ -319,13 +322,32 @@ module MCP
       }.compact
     end
 
-    def init(request)
-      @client = request[:clientInfo] if request
+    def init(params)
+      @client = params[:clientInfo] if params
+
+      protocol_version = params[:protocolVersion] if params
+      negotiated_version = if Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
+        protocol_version
+      else
+        configuration.protocol_version
+      end
+
+      info = server_info.reject do |property|
+        negotiated_version <= "2025-06-18" && UNSUPPORTED_PROPERTIES_UNTIL_2025_06_18.include?(property) ||
+          negotiated_version <= "2025-03-26" && UNSUPPORTED_PROPERTIES_UNTIL_2025_03_26.include?(property)
+      end
+
+      response_instructions = instructions
+
+      if negotiated_version == "2024-11-05"
+        response_instructions = nil
+      end
+
       {
-        protocolVersion: configuration.protocol_version,
+        protocolVersion: negotiated_version,
         capabilities: capabilities,
-        serverInfo: server_info,
-        instructions: instructions,
+        serverInfo: info,
+        instructions: response_instructions,
       }.compact
     end
 
