@@ -58,6 +58,20 @@ module MCP
       response.dig("result", "resources") || []
     end
 
+    # Returns the list of resource templates available from the server.
+    # Each call will make a new request – the result is not cached.
+    #
+    # @return [Array<Hash>] An array of available resource templates.
+    def resource_templates
+      response = transport.send_request(request: {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "resources/templates/list",
+      })
+
+      response.dig("result", "resourceTemplates") || []
+    end
+
     # Returns the list of prompts available from the server.
     # Each call will make a new request – the result is not cached.
     #
