@@ -75,6 +75,7 @@ module MCP
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
       @configuration = MCP.configuration.merge(configuration)
+      @client = nil
 
       validate!
 
@@ -258,7 +259,9 @@ module MCP
     def handle_request(request, method)
       handler = @handlers[method]
       unless handler
-        instrument_call("unsupported_method") {}
+        instrument_call("unsupported_method") do
+          add_instrumentation_data(client: @client) if @client
+        end
         return
       end
 
@@ -266,7 +269,7 @@ module MCP
 
       ->(params) {
         instrument_call(method) do
-          case method
+          result = case method
           when Methods::TOOLS_LIST
             { tools: @handlers[Methods::TOOLS_LIST].call(params) }
           when Methods::PROMPTS_LIST
@@ -280,6 +283,9 @@ module MCP
           else
             @handlers[method].call(params)
           end
+          add_instrumentation_data(client: @client) if @client
+
+          result
         rescue => e
           report_exception(e, { request: request })
           if e.is_a?(RequestHandlerError)
@@ -314,6 +320,7 @@ module MCP
     end
 
     def init(request)
+      @client = request[:clientInfo] if request
       {
         protocolVersion: configuration.protocol_version,
         capabilities: capabilities,
