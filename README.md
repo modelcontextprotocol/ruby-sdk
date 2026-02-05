@@ -400,6 +400,7 @@ The instrumentation callback receives a hash with the following possible keys:
 - `resource_uri`: (String, optional) The URI of the resource called
 - `error`: (String, optional) Error code if a lookup failed
 - `duration`: (Float) Duration of the call in seconds
+- `client`: (Hash, optional) Client information with `name` and `version` keys, from the initialize request
 
 **Type:**
 

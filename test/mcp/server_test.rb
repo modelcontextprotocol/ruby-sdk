@@ -159,6 +159,53 @@ module MCP
       assert_instrumentation_data({ method: "initialize" })
     end
 
+    test "#handle initialize request with clientInfo includes client in instrumentation data" do
+      client_info = { name: "test_client", version: "1.0.0" }
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: client_info,
+        },
+      }
+
+      @server.handle(request)
+      assert_instrumentation_data({ method: "initialize", client: client_info })
+    end
+
+    test "instrumentation data includes client info for subsequent requests after initialize" do
+      client_info = { name: "test_client", version: "1.0.0" }
+      initialize_request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: client_info,
+        },
+      }
+      @server.handle(initialize_request)
+
+      ping_request = {
+        jsonrpc: "2.0",
+        method: "ping",
+        id: 2,
+      }
+      @server.handle(ping_request)
+      assert_instrumentation_data({ method: "ping", client: client_info })
+    end
+
+    test "instrumentation data does not include client key when no clientInfo provided" do
+      request = {
+        jsonrpc: "2.0",
+        method: "ping",
+        id: 1,
+      }
+
+      @server.handle(request)
+      assert_instrumentation_data({ method: "ping" })
+    end
+
     test "#handle returns nil for notification requests" do
       request = {
         jsonrpc: "2.0",
