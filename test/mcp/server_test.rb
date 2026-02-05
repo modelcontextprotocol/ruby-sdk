@@ -1274,6 +1274,95 @@ module MCP
       assert_equal custom_version, response[:result][:protocolVersion]
     end
 
+    test "server negotiates protocol version when client requests a supported version" do
+      server = Server.new(name: "test_server")
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-06-18",
+        },
+      }
+
+      response = server.handle(request)
+      assert_equal "2025-06-18", response[:result][:protocolVersion]
+    end
+
+    test "server falls back to default version when client requests unsupported version" do
+      server = Server.new(name: "test_server")
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "1999-01-01",
+        },
+      }
+
+      response = server.handle(request)
+      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
+    end
+
+    test "server removes description and icons from server_info when negotiating to 2025-06-18" do
+      server = Server.new(
+        name: "test_server",
+        description: "A test server",
+        icons: [Icon.new(src: "https://example.com/icon.png")],
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-06-18",
+        },
+      }
+
+      response = server.handle(request)
+      assert_equal "2025-06-18", response[:result][:protocolVersion]
+      refute response[:result][:serverInfo].key?(:description)
+      refute response[:result][:serverInfo].key?(:icons)
+    end
+
+    test "server removes title and websiteUrl when negotiating to 2025-03-26" do
+      server = Server.new(name: "test_server", title: "Test Server", website_url: "https://example.com")
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-03-26",
+        },
+      }
+
+      response = server.handle(request)
+      assert_equal "2025-03-26", response[:result][:protocolVersion]
+      refute response[:result][:serverInfo].key?(:title)
+      refute response[:result][:serverInfo].key?(:websiteUrl)
+    end
+
+    test "server removes instructions when negotiating to 2024-11-05" do
+      server = Server.new(name: "test_server", instructions: "Some instructions")
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2024-11-05",
+        },
+      }
+
+      response = server.handle(request)
+      assert_equal "2024-11-05", response[:result][:protocolVersion]
+      refute response[:result].key?(:instructions)
+    end
+
     test "tools/call handles missing arguments field" do
       server = Server.new(
         tools: [TestTool],
