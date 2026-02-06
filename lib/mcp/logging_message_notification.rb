@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "json_rpc_handler"
-
 module MCP
   class LoggingMessageNotification
     LOG_LEVEL_SEVERITY = {
