@@ -145,6 +145,43 @@ module MCP
       assert_empty(contents)
     end
 
+    def test_resource_templates_sends_request_to_transport_and_returns_resource_templates_array
+      transport = mock
+      mock_response = {
+        "result" => {
+          "resourceTemplates" => [
+            { "name" => "template1", "uriTemplate" => "file:///path/{filename}", "description" => "First template" },
+            { "name" => "template2", "uriTemplate" => "http://example.com/{id}", "description" => "Second template" },
+          ],
+        },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "resources/templates/list" && args.dig(:request, :jsonrpc) == "2.0"
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      resource_templates = client.resource_templates
+
+      assert_equal(2, resource_templates.size)
+      assert_equal("template1", resource_templates.first["name"])
+      assert_equal("file:///path/{filename}", resource_templates.first["uriTemplate"])
+      assert_equal("template2", resource_templates.last["name"])
+      assert_equal("http://example.com/{id}", resource_templates.last["uriTemplate"])
+    end
+
+    def test_resource_templates_returns_empty_array_when_no_resource_templates
+      transport = mock
+      mock_response = { "result" => { "resourceTemplates" => [] } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      resource_templates = client.resource_templates
+
+      assert_empty(resource_templates)
+    end
+
     def test_prompts_sends_request_to_transport_and_returns_prompts_array
       transport = mock
       mock_response = {
