@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "json_rpc_handler"
+require_relative "mcp/annotations"
 require_relative "mcp/configuration"
 require_relative "mcp/content"
 require_relative "mcp/icon"
@@ -37,15 +38,6 @@ module MCP
 
     def configuration
       @configuration ||= Configuration.new
-    end
-  end
-
-  class Annotations
-    attr_reader :audience, :priority
-
-    def initialize(audience: nil, priority: nil)
-      @audience = audience
-      @priority = priority
     end
   end
 end
