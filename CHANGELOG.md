@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-14
+
+### Added
+
+- `logging` support (#103)
+- Protocol version negotiation to server initialization (#223)
+- Tool arguments to instrumentation data (#218)
+- Client info to instrumentation callback (#221)
+- `resource_templates` to `MCP::Client` (#225)
+
+### Changed
+
+- Extract `MCP::Annotations` into a dedicated file (#224)
+
+### Fixed
+
+- `Resource::Embedded` not setting `@resource` in `initialize` (#220)
+
 ## [0.6.0] - 2026-01-16
 
 ### Changed
