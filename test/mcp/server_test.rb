@@ -810,6 +810,24 @@ module MCP
       assert_instrumentation_data({ method: "resources/templates/list" })
     end
 
+    test "#configure_logging_level returns empty hash on success" do
+      response = @server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "logging/setLevel",
+          params: {
+            level: "info",
+          },
+        },
+      )
+
+      assert_equal "2.0", response[:jsonrpc]
+      assert_equal 1, response[:id]
+      assert_empty(response[:result])
+      refute response.key?(:error)
+    end
+
     test "#configure_logging_level returns an error object when invalid log level is provided" do
       server = Server.new(
         tools: [TestTool],
