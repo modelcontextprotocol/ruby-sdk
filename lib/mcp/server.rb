@@ -377,7 +377,7 @@ module MCP
       unless tool
         add_instrumentation_data(tool_name: tool_name, error: :tool_not_found)
 
-        return error_tool_response("Tool not found: #{tool_name}")
+        raise RequestHandlerError.new("Tool not found: #{tool_name}", request, error_type: :invalid_params)
       end
 
       arguments = request[:arguments] || {}
@@ -401,6 +401,8 @@ module MCP
       end
 
       call_tool_with_args(tool, arguments)
+    rescue RequestHandlerError
+      raise
     rescue => e
       report_exception(e, request: request)
 
