@@ -362,6 +362,8 @@ module MCP
       end
 
       @logging_message_notification = logging_message_notification
+
+      {}
     end
 
     def list_tools(request)
