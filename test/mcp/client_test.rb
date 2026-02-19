@@ -305,5 +305,43 @@ module MCP
 
       assert_equal({}, contents)
     end
+
+    def test_call_tool_includes_meta_progress_token_when_provided
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      arguments = { foo: "bar" }
+      progress_token = "my-progress-token"
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/call" &&
+          args.dig(:request, :params, :_meta, :progressToken) == progress_token &&
+          args.dig(:request, :params, :name) == "tool1" &&
+          args.dig(:request, :params, :arguments) == arguments
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: arguments, progress_token: progress_token)
+    end
+
+    def test_call_tool_omits_meta_when_no_progress_token
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      arguments = { foo: "bar" }
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/call" &&
+          args.dig(:request, :params, :name) == "tool1" &&
+          args.dig(:request, :params).key?(:_meta) == false
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: arguments)
+    end
   end
 end

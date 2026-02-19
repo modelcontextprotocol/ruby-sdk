@@ -294,7 +294,7 @@ module MCP
 
       if RUBY_VERSION >= "3.1"
         # Ruby 3.1+: Mocha stub preserves `method.parameters` info.
-        @tool.expects(:call).with(arg: "value", server_context: nil).returns(tool_response)
+        @tool.expects(:call).with(arg: "value", server_context: is_a(ServerContext)).returns(tool_response)
       else
         # Ruby 3.0: Mocha stub changes `method.parameters`, so `accepts_server_context?` returns false.
         @tool.expects(:call).with(arg: "value").returns(tool_response)
@@ -352,7 +352,7 @@ module MCP
 
       if RUBY_VERSION >= "3.1"
         # Ruby 3.1+: Mocha stub preserves `method.parameters` info.
-        @tool.expects(:call).with(arg: "value", server_context: nil).returns(tool_response)
+        @tool.expects(:call).with(arg: "value", server_context: is_a(ServerContext)).returns(tool_response)
       else
         # Ruby 3.0: Mocha stub changes `method.parameters`, so `accepts_server_context?` returns false.
         @tool.expects(:call).with(arg: "value").returns(tool_response)

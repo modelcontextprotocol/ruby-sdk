@@ -4,6 +4,63 @@ require "test_helper"
 
 module MCP
   class ServerContextTest < ActiveSupport::TestCase
+    test "ServerContext delegates method calls to the underlying context" do
+      context = { user: "test_user" }
+      progress = Progress.new(server: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress)
+
+      assert_equal "test_user", server_context[:user]
+    end
+
+    test "ServerContext respond_to? returns true for methods on the underlying context" do
+      context = { user: "test_user" }
+      progress = Progress.new(server: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress)
+
+      assert_respond_to server_context, :[]
+      assert_respond_to server_context, :keys
+    end
+
+    test "ServerContext respond_to? returns false for methods not on the underlying context" do
+      context = { user: "test_user" }
+      progress = Progress.new(server: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress)
+
+      refute_respond_to server_context, :nonexistent_method
+    end
+
+    test "ServerContext raises NoMethodError for methods not on the underlying context" do
+      context = { user: "test_user" }
+      progress = Progress.new(server: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress)
+
+      assert_raises(NoMethodError) { server_context.nonexistent_method }
+    end
+
+    test "ServerContext delegates to custom object context" do
+      context = Object.new
+      def context.custom_method
+        "custom_value"
+      end
+      progress = Progress.new(server: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress)
+
+      assert_equal "custom_value", server_context.custom_method
+    end
+
+    test "ServerContext#report_progress works with nil context" do
+      progress = mock
+      progress.expects(:report).with(50, total: 100, message: nil).once
+
+      server_context = ServerContext.new(nil, progress: progress)
+      server_context.report_progress(50, total: 100)
+    end
+
     # Tool without server_context parameter
     class SimpleToolWithoutContext < Tool
       tool_name "simple_without_context"
@@ -27,7 +84,8 @@ module MCP
 
       class << self
         def call(message:, server_context: nil)
-          context_info = server_context ? "with context: #{server_context[:user]}" : "no context"
+          user = server_context.respond_to?(:[]) ? server_context[:user] : nil
+          context_info = user ? "with context: #{user}" : "no context"
           Tool::Response.new([
             { type: "text", content: "ToolWithOptionalContext: #{message} (#{context_info})" },
           ])
@@ -241,7 +299,8 @@ module MCP
 
       class << self
         def template(args, server_context: nil)
-          context_info = server_context ? "with context: #{server_context[:user]}" : "no context"
+          user = server_context.respond_to?(:[]) ? server_context[:user] : nil
+          context_info = user ? "with context: #{user}" : "no context"
           Prompt::Result.new(
             messages: [
               Prompt::Message.new(
@@ -586,6 +645,45 @@ module MCP
       assert response[:result]
       assert_equal "Message: Hello, Request ID: req_12345",
         response[:result][:messages][0][:content][:text]
+    end
+
+    test "non-Hash server_context is preserved when _meta is present" do
+      server_obj = Object.new
+      def server_obj.custom_method
+        "custom_value"
+      end
+
+      tool_class = Class.new(Tool) do
+        tool_name "tool_with_non_hash_context"
+
+        define_singleton_method(:call) do |server_context:, **_args|
+          Tool::Response.new([
+            { type: "text", content: "custom: #{server_context.custom_method}" },
+          ])
+        end
+      end
+
+      server = Server.new(
+        name: "test_server",
+        tools: [tool_class],
+        server_context: server_obj,
+      )
+
+      request = {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "tool_with_non_hash_context",
+          arguments: {},
+          _meta: { progressToken: "token-1" },
+        },
+      }
+
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_equal "custom: custom_value", response[:result][:content][0][:content]
     end
 
     test "_meta is nested within server_context for prompts" do

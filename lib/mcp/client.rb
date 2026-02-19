@@ -90,6 +90,7 @@ module MCP
     #
     # @param tool [MCP::Client::Tool] The tool to be called.
     # @param arguments [Object, nil] The arguments to pass to the tool.
+    # @param progress_token [String, Integer, nil] A token to request progress notifications from the server during tool execution.
     # @return [Hash] The full JSON-RPC response from the transport.
     #
     # @example
@@ -100,12 +101,17 @@ module MCP
     # @note
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
-    def call_tool(tool:, arguments: nil)
+    def call_tool(tool:, arguments: nil, progress_token: nil)
+      params = { name: tool.name, arguments: arguments }
+      if progress_token
+        params[:_meta] = { progressToken: progress_token }
+      end
+
       transport.send_request(request: {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,
         method: "tools/call",
-        params: { name: tool.name, arguments: arguments },
+        params: params,
       })
     end
 

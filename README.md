@@ -108,11 +108,12 @@ The server supports sending notifications to clients when lists of tools, prompt
 
 #### Notification Methods
 
-The server provides three notification methods:
+The server provides the following notification methods:
 
 - `notify_tools_list_changed` - Send a notification when the tools list changes
 - `notify_prompts_list_changed` - Send a notification when the prompts list changes
 - `notify_resources_list_changed` - Send a notification when the resources list changes
+- `notify_progress` - Send a progress notification for long-running operations
 - `notify_log_message` - Send a structured logging notification message
 
 #### Notification Format
@@ -122,7 +123,71 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 - `notifications/tools/list_changed`
 - `notifications/prompts/list_changed`
 - `notifications/resources/list_changed`
+- `notifications/progress`
 - `notifications/message`
+
+### Progress
+
+The MCP Ruby SDK supports progress tracking for long-running tool operations,
+following the [MCP Progress specification](https://modelcontextprotocol.io/specification/latest/server/utilities/progress).
+
+#### How Progress Works
+
+1. **Client Request**: The client sends a `progressToken` in the `_meta` field when calling a tool
+2. **Server Notification**: The server sends `notifications/progress` messages back to the client during tool execution
+3. **Tool Integration**: Tools call `server_context.report_progress` to report incremental progress
+
+#### Server-Side: Tool with Progress
+
+Tools that accept a `server_context:` parameter can call `report_progress` on it.
+The server automatically wraps the context in an `MCP::ServerContext` instance that provides this method:
+
+```ruby
+class LongRunningTool < MCP::Tool
+  description "A tool that reports progress during execution"
+  input_schema(
+    properties: {
+      count: { type: "integer" },
+    },
+    required: ["count"]
+  )
+
+  def self.call(count:, server_context:)
+    count.times do |i|
+      # Do work here.
+      server_context.report_progress(i + 1, total: count, message: "Processing item #{i + 1}")
+    end
+
+    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
+  end
+end
+```
+
+The `server_context.report_progress` method accepts:
+
+- `progress` (required) — current progress value (numeric)
+- `total:` (optional) — total expected value, so clients can display a percentage
+- `message:` (optional) — human-readable status message
+
+#### Server-Side: Direct `notify_progress` Usage
+
+You can also call `notify_progress` directly on the server instance:
+
+```ruby
+server.notify_progress(
+  progress_token: "token-123",
+  progress: 50,
+  total: 100,        # optional
+  message: "halfway" # optional
+)
+```
+
+**Key Features:**
+
+- Tools report progress via `server_context.report_progress`
+- `report_progress` is a no-op when no `progressToken` was provided by the client
+- `notify_progress` is a no-op when no transport is configured
+- Supports both numeric and string progress tokens
 
 ### Logging
 
@@ -1044,7 +1109,16 @@ response = client.call_tool(
   tool: tools.first,
   arguments: { message: "Hello, world!" }
 )
+
+# Call a tool with progress tracking.
+response = client.call_tool(
+  tool: tools.first,
+  arguments: { count: 10 },
+  progress_token: "my-progress-token"
+)
 ```
+
+The server will send `notifications/progress` back to the client during execution.
 
 #### HTTP Authorization
 

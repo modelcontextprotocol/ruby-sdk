@@ -5,5 +5,3 @@ server:
   - tools-call-elicitation
   - elicitation-sep1034-defaults
   - elicitation-sep1330-enums
-  # TODO: The SDK does not extract `_meta.progressToken` from tool call requests or deliver `notifications/progress` to tools.
-  - tools-call-with-progress
