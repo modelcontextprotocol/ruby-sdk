@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-02-21
+
+### Fixed
+
+- Fix `Resource::Contents#to_h` to use correct property names per MCP spec (#235)
+- Return JSON-RPC protocol errors for unknown tool calls (#231)
+- Fix `logging/setLevel` to return empty hash per MCP specification (#230)
+
 ## [0.7.0] - 2026-02-14
 
 ### Added
