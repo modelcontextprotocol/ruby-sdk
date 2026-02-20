@@ -527,7 +527,7 @@ module MCP
       assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:result][:content][0][:text])
     end
 
-    test "#handle tools/call returns error response with isError true for unknown tool" do
+    test "#handle tools/call returns JSON-RPC error for unknown tool" do
       request = {
         jsonrpc: "2.0",
         method: "tools/call",
@@ -539,14 +539,14 @@ module MCP
       }
 
       response = @server.handle(request)
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_equal "Tool not found: unknown_tool", response[:result][:content][0][:text]
-      assert_instrumentation_data({ method: "tools/call", tool_name: "unknown_tool", error: :tool_not_found })
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Tool not found: unknown_tool"
+      assert_instrumentation_data({ method: "tools/call", tool_name: "unknown_tool", error: :invalid_params })
     end
 
-    test "#handle_json returns error response with isError true for unknown tool" do
+    test "#handle_json returns JSON-RPC error for unknown tool" do
       request = JSON.generate({
         jsonrpc: "2.0",
         method: "tools/call",
@@ -558,10 +558,10 @@ module MCP
       })
 
       response = JSON.parse(@server.handle_json(request), symbolize_names: true)
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_equal "Tool not found: unknown_tool", response[:result][:content][0][:text]
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Tool not found: unknown_tool"
     end
 
     test "#tools_call_handler sets the tools/call handler" do
