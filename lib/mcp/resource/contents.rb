@@ -11,7 +11,7 @@ module MCP
       end
 
       def to_h
-        { uri: uri, mime_type: mime_type }.compact
+        { uri: uri, mimeType: mime_type }.compact
       end
     end
 
@@ -37,7 +37,7 @@ module MCP
       end
 
       def to_h
-        super.merge(data: data)
+        super.merge(blob: data)
       end
     end
   end
