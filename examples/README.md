@@ -121,6 +121,31 @@ The client will:
 - Provide an interactive menu to trigger notifications
 - Display all received SSE events in real-time
 
+### Testing with MCP Inspector
+
+[MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) is a browser-based tool for testing and debugging MCP servers.
+
+1. Start the server:
+
+```console
+$ ruby examples/streamable_http_server.rb
+```
+
+2. Start Inspector in another terminal:
+
+```console
+$ npx @modelcontextprotocol/inspector
+```
+
+3. Open `http://localhost:6274` in a browser:
+
+- Set Transport Type to "Streamable HTTP"
+- Set URL to `http://localhost:9393`
+- Disable the Authorization header toggle (the example server does not require authentication)
+- Click "Connect"
+
+Once connected, you can list tools, call them, and see SSE notifications in the Inspector UI.
+
 ### Testing SSE with cURL
 
 You can also test SSE functionality manually using cURL:
