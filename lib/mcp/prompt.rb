@@ -114,7 +114,7 @@ module MCP
       private
 
       def required_args
-        arguments_value.filter_map { |arg| arg.name.to_sym if arg.required }
+        arguments_value.map { |arg| arg.name.to_sym if arg.required }.compact
       end
     end
   end

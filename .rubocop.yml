@@ -6,7 +6,7 @@ plugins:
   - rubocop-rake
 
 AllCops:
-  TargetRubyVersion: 2.7
+  TargetRubyVersion: 2.6
 
 Gemspec/DevelopmentDependencies:
   Enabled: true
