@@ -254,7 +254,10 @@ module MCP
     end
 
     def validate_tool_name!
-      duplicated_tool_names = @tool_names.tally.filter_map { |name, count| name if count >= 2 }
+      duplicated_tool_names = @tool_names
+        .each_with_object(Hash.new(0)) { |name, counts| counts[name] += 1 }
+        .select { |_name, count| count >= 2 }
+        .keys
 
       raise ToolNotUnique, duplicated_tool_names unless duplicated_tool_names.empty?
     end
