@@ -32,7 +32,7 @@ module MCP
       assert_nil(annotations.priority)
       assert_nil(annotations.last_modified)
 
-      assert_empty(annotations.to_h)
+      assert_equal({}, annotations.to_h)
     end
 
     def test_initialization_with_partial_attributes

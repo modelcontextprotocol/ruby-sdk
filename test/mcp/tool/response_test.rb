@@ -107,7 +107,7 @@ module MCP
         actual = response.to_h
 
         assert_equal [:content, :isError, :structuredContent], actual.keys
-        assert_empty actual[:content]
+        assert_equal([], actual[:content])
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
       end
@@ -118,7 +118,7 @@ module MCP
         actual = response.to_h
 
         assert_equal [:content, :isError, :structuredContent], actual.keys
-        assert_empty actual[:content]
+        assert_equal([], actual[:content])
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
       end

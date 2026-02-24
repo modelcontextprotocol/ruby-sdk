@@ -23,7 +23,7 @@ module MCP
       assert_nil(icon.src)
       assert_nil(icon.theme)
 
-      assert_empty(icon.to_h)
+      assert_equal({}, icon.to_h)
     end
 
     def test_valid_theme_for_light
