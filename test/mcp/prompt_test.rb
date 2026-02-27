@@ -182,7 +182,7 @@ module MCP
       assert_equal expected, FullPrompt.to_h
     end
 
-    test "#to_h handles nil arguments value" do
+    test "#to_h omits arguments key when arguments are not declared" do
       class NoArgumentsPrompt < Prompt
         description "No arguments prompt"
       end
@@ -194,6 +194,51 @@ module MCP
       }
 
       assert_equal expected, prompt.to_h
+    end
+
+    test "#validate_arguments! does not raise when arguments are not declared" do
+      prompt_class = Class.new(Prompt) do
+        prompt_name "no_args_prompt"
+        description "A prompt with no arguments"
+        # NOTE: no `arguments` declaration at all
+      end
+
+      assert_nothing_raised do
+        prompt_class.validate_arguments!({})
+      end
+    end
+
+    test "#validate_arguments! handles nil args" do
+      prompt_class = Class.new(Prompt) do
+        prompt_name "no_args_prompt"
+        description "A prompt with no arguments"
+      end
+
+      assert_nothing_raised do
+        prompt_class.validate_arguments!(nil)
+      end
+    end
+
+    test "#validate_arguments! does not raise when arguments is explicitly set to nil" do
+      prompt_class = Class.new(Prompt) do
+        prompt_name "nil_args_prompt"
+        description "A prompt with nil arguments"
+        arguments nil
+      end
+
+      assert_nothing_raised do
+        prompt_class.validate_arguments!({})
+      end
+    end
+
+    test "#to_h omits arguments key when arguments is empty" do
+      prompt = Prompt.define(
+        name: "no_args_prompt",
+        description: "a prompt without arguments",
+        arguments: [],
+      )
+
+      refute prompt.to_h.key?(:arguments)
     end
 
     test "#to_h does not have `:icons` key when icons is empty" do
