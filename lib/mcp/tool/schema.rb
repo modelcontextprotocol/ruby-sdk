@@ -31,10 +31,6 @@ module MCP
         case schema
         when Hash
           schema.each_with_object({}) do |(key, value), result|
-            if key.casecmp?("$ref")
-              raise ArgumentError, "Invalid JSON Schema: $ref is not allowed in tool schemas"
-            end
-
             result[yield(key)] = deep_transform_keys(value, &block)
           end
         when Array

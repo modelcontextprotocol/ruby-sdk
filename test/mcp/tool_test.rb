@@ -320,7 +320,7 @@ module MCP
       assert_equal [{ type: "text", content: "OK" }], response.content
     end
 
-    test "input_schema rejects any $ref in schema" do
+    test "input_schema accepts $ref in schema" do
       schema_with_ref = {
         properties: {
           foo: { "$ref" => "#/definitions/bar" },
@@ -330,12 +330,10 @@ module MCP
           bar: { type: "string" },
         },
       }
-      error = assert_raises(ArgumentError) do
-        Class.new(MCP::Tool) do
-          input_schema schema_with_ref
-        end
+      tool_class = Class.new(MCP::Tool) do
+        input_schema schema_with_ref
       end
-      assert_match(/Invalid JSON Schema/, error.message)
+      assert_equal "#/definitions/bar", tool_class.input_schema.to_h[:properties][:foo][:$ref]
     end
 
     test "#to_h includes outputSchema when present" do
@@ -409,7 +407,7 @@ module MCP
       assert_includes error.message, "string did not match the following type: number"
     end
 
-    test "output_schema rejects any $ref in schema" do
+    test "output_schema accepts $ref in schema" do
       schema_with_ref = {
         properties: {
           foo: { "$ref" => "#/definitions/bar" },
@@ -419,12 +417,10 @@ module MCP
           bar: { type: "string" },
         },
       }
-      error = assert_raises(ArgumentError) do
-        Class.new(MCP::Tool) do
-          output_schema schema_with_ref
-        end
+      tool_class = Class.new(MCP::Tool) do
+        output_schema schema_with_ref
       end
-      assert_match(/Invalid JSON Schema/, error.message)
+      assert_equal "#/definitions/bar", tool_class.output_schema.to_h[:properties][:foo][:$ref]
     end
 
     test ".define allows definition of tools with output_schema" do

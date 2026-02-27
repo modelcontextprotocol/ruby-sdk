@@ -1184,6 +1184,44 @@ module MCP
       assert_equal("Error occurred in Test resource. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
     end
 
+    test "allows `$ref` in tool input schema with protocol version 2025-11-25" do
+      tool = Tool.define(
+        name: "ref_tool",
+        description: "Tool with $ref",
+        input_schema: {
+          type: "object",
+          "$defs": { address: { type: "object", properties: { city: { type: "string" } } } },
+          properties: { address: { "$ref": "#/$defs/address" } },
+        },
+      )
+      configuration = Configuration.new(protocol_version: "2025-11-25")
+
+      assert_nothing_raised do
+        Server.new(name: "test_server", tools: [tool], configuration: configuration)
+      end
+    end
+
+    test "raises error if `$ref` in tool input schema is used with protocol version 2025-06-18" do
+      tool = Tool.define(
+        name: "ref_tool",
+        description: "Tool with $ref",
+        input_schema: {
+          type: "object",
+          "$defs": { address: { type: "object", properties: { city: { type: "string" } } } },
+          properties: { address: { "$ref": "#/$defs/address" } },
+        },
+      )
+      configuration = Configuration.new(protocol_version: "2025-06-18")
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", tools: [tool], configuration: configuration)
+      end
+      assert_equal(
+        "Error occurred in ref_tool. `$ref` in input schemas is supported by protocol version 2025-11-25 or higher",
+        exception.message,
+      )
+    end
+
     test "raises error if `title` of resource template is used with protocol version 2025-03-26" do
       configuration = Configuration.new(protocol_version: "2025-03-26")
 

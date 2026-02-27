@@ -92,16 +92,41 @@ module MCP
         end
       end
 
-      test "rejects schemas with $ref references" do
-        assert_raises(ArgumentError) do
-          InputSchema.new(properties: { foo: { "$ref" => "#/definitions/bar" } }, required: ["foo"])
-        end
+      test "accepts schemas with $ref references" do
+        schema = InputSchema.new(
+          properties: {
+            foo: { type: "string" },
+          },
+          definitions: {
+            bar: { type: "string" },
+          },
+          required: ["foo"],
+        )
+        assert_includes schema.to_h.keys, :definitions
       end
 
-      test "rejects schemas with symbol $ref references" do
-        assert_raises(ArgumentError) do
-          InputSchema.new(properties: { foo: { :$ref => "#/definitions/bar" } }, required: ["foo"])
-        end
+      test "accepts schemas with $ref string key and includes $ref in to_h" do
+        schema = InputSchema.new({
+          "properties" => {
+            "foo" => { "$ref" => "#/definitions/bar" },
+          },
+          "definitions" => {
+            "bar" => { "type" => "string" },
+          },
+        })
+        assert_equal "#/definitions/bar", schema.to_h[:properties][:foo][:$ref]
+      end
+
+      test "accepts schemas with $ref symbol key and includes $ref in to_h" do
+        schema = InputSchema.new({
+          properties: {
+            foo: { :$ref => "#/definitions/bar" },
+          },
+          definitions: {
+            bar: { type: "string" },
+          },
+        })
+        assert_equal "#/definitions/bar", schema.to_h[:properties][:foo][:$ref]
       end
 
       test "== compares two input schemas with the same properties, required fields" do
