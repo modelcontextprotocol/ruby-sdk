@@ -28,5 +28,19 @@ module MCP
         { data: data, mimeType: mime_type, annotations: annotations, type: "image" }.compact
       end
     end
+
+    class Audio
+      attr_reader :data, :mime_type, :annotations
+
+      def initialize(data, mime_type, annotations: nil)
+        @data = data
+        @mime_type = mime_type
+        @annotations = annotations
+      end
+
+      def to_h
+        { data: data, mimeType: mime_type, annotations: annotations, type: "audio" }.compact
+      end
+    end
   end
 end
