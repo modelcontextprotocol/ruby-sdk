@@ -25,7 +25,7 @@ module MCP
       end
 
       def to_h
-        { data: data, mime_type: mime_type, annotations: annotations, type: "image" }.compact
+        { data: data, mimeType: mime_type, annotations: annotations, type: "image" }.compact
       end
     end
   end
