@@ -54,5 +54,44 @@ module MCP
         refute result.key?(:annotations)
       end
     end
+
+    class EmbeddedResourceTest < ActiveSupport::TestCase
+      test "#to_h returns correct format per MCP spec" do
+        resource = Object.new
+        def resource.to_h
+          { uri: "test://example", mimeType: "text/plain", text: "content" }
+        end
+
+        embedded = EmbeddedResource.new(resource)
+        result = embedded.to_h
+
+        assert_equal "resource", result[:type]
+        assert_equal({ uri: "test://example", mimeType: "text/plain", text: "content" }, result[:resource])
+      end
+
+      test "#to_h with annotations" do
+        resource = Object.new
+        def resource.to_h
+          { uri: "test://x" }
+        end
+
+        embedded = EmbeddedResource.new(resource, annotations: { role: "data" })
+        result = embedded.to_h
+
+        assert_equal({ role: "data" }, result[:annotations])
+      end
+
+      test "#to_h without annotations omits the key" do
+        resource = Object.new
+        def resource.to_h
+          { uri: "test://x" }
+        end
+
+        embedded = EmbeddedResource.new(resource)
+        result = embedded.to_h
+
+        refute result.key?(:annotations)
+      end
+    end
   end
 end
