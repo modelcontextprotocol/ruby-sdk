@@ -1540,6 +1540,87 @@ module MCP
       assert_includes response[:result][:content][0][:text], "Invalid arguments"
     end
 
+    test "#handle completion/complete returns default completion result" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: [], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle resources/subscribe returns empty result" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/subscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+    end
+
+    test "#handle resources/unsubscribe returns empty result" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/unsubscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+    end
+
     test "tools/call with no args" do
       server = Server.new(tools: [@tool_with_no_args])
 
