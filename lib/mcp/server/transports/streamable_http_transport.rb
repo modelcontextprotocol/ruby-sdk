@@ -19,6 +19,7 @@ module MCP
 
         REQUIRED_POST_ACCEPT_TYPES = ["application/json", "text/event-stream"].freeze
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
+        STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
 
         def handle_request(request)
           case request.env["REQUEST_METHOD"]
@@ -58,7 +59,7 @@ module MCP
               begin
                 send_to_stream(session[:stream], notification)
                 true
-              rescue IOError, Errno::EPIPE => e
+              rescue *STREAM_WRITE_ERRORS => e
                 MCP.configuration.exception_reporter.call(
                   e,
                   { session_id: session_id, error: "Failed to send notification" },
@@ -77,7 +78,7 @@ module MCP
                 begin
                   send_to_stream(session[:stream], notification)
                   sent_count += 1
-                rescue IOError, Errno::EPIPE => e
+                rescue *STREAM_WRITE_ERRORS => e
                   MCP.configuration.exception_reporter.call(
                     e,
                     { session_id: sid, error: "Failed to send notification" },
@@ -289,7 +290,7 @@ module MCP
           message = JSON.parse(response)
           send_to_stream(stream, message)
           handle_accepted
-        rescue IOError, Errno::EPIPE => e
+        rescue *STREAM_WRITE_ERRORS => e
           MCP.configuration.exception_reporter.call(
             e,
             { session_id: session_id, error: "Stream closed during response" },
@@ -366,7 +367,7 @@ module MCP
               send_ping_to_stream(@sessions[session_id][:stream])
             end
           end
-        rescue IOError, Errno::EPIPE => e
+        rescue *STREAM_WRITE_ERRORS => e
           MCP.configuration.exception_reporter.call(
             e,
             { session_id: session_id, error: "Stream closed" },
