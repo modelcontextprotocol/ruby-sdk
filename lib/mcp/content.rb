@@ -42,5 +42,18 @@ module MCP
         { data: data, mimeType: mime_type, annotations: annotations, type: "audio" }.compact
       end
     end
+
+    class EmbeddedResource
+      attr_reader :resource, :annotations
+
+      def initialize(resource, annotations: nil)
+        @resource = resource
+        @annotations = annotations
+      end
+
+      def to_h
+        { resource: resource.to_h, annotations: annotations, type: "resource" }.compact
+      end
+    end
   end
 end
