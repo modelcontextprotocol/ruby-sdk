@@ -1028,6 +1028,12 @@ The client provides a wrapper class for tools returned by the server:
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
 
+## Conformance Testing
+
+The `conformance/` directory contains a test server and runner that validate the SDK against the MCP specification using [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
+
+See [conformance/README.md](conformance/README.md) for usage instructions.
+
 ## Documentation
 
 - [SDK API documentation](https://rubydoc.info/gems/mcp)
