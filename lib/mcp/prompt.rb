@@ -21,7 +21,7 @@ module MCP
           title: title_value,
           description: description_value,
           icons: icons_value&.then { |icons| icons.empty? ? nil : icons.map(&:to_h) },
-          arguments: arguments_value&.map(&:to_h),
+          arguments: arguments_value.empty? ? nil : arguments_value.map(&:to_h),
           _meta: meta_value,
         }.compact
       end
@@ -32,7 +32,7 @@ module MCP
         subclass.instance_variable_set(:@title_value, nil)
         subclass.instance_variable_set(:@description_value, nil)
         subclass.instance_variable_set(:@icons_value, nil)
-        subclass.instance_variable_set(:@arguments_value, nil)
+        subclass.instance_variable_set(:@arguments_value, [])
         subclass.instance_variable_set(:@meta_value, nil)
       end
 
@@ -76,7 +76,7 @@ module MCP
         if value == NOT_SET
           @arguments_value
         else
-          @arguments_value = value
+          @arguments_value = Array(value)
         end
       end
 
@@ -103,6 +103,7 @@ module MCP
       end
 
       def validate_arguments!(args)
+        args ||= {}
         missing = required_args - args.keys
         return if missing.empty?
 
