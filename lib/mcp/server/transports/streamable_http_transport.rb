@@ -288,7 +288,7 @@ module MCP
         def send_response_to_stream(stream, response, session_id)
           message = JSON.parse(response)
           send_to_stream(stream, message)
-          [200, { "Content-Type" => "application/json" }, [{ accepted: true }.to_json]]
+          handle_accepted
         rescue IOError, Errno::EPIPE => e
           MCP.configuration.exception_reporter.call(
             e,

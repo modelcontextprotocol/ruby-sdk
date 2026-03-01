@@ -853,6 +853,47 @@ module MCP
           assert_nil(body)
         end
 
+        test "send_response_to_stream returns 202 when message is sent to stream" do
+          # Create and initialize a session
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect with SSE
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+
+          # Give the stream time to set up
+          sleep(0.1)
+
+          # Make a regular request that will be routed through send_response_to_stream
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 202, response[0]
+          assert_empty response[1]
+          assert_empty response[2]
+        end
+
         test "handle post request with a standard error" do
           request = create_rack_request(
             "POST",
