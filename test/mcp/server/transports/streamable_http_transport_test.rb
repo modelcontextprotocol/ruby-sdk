@@ -46,7 +46,7 @@ module MCP
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
-          assert_empty(body["result"])
+          assert_equal({}, body["result"])
         end
 
         test "handles POST request with invalid JSON" do
@@ -315,7 +315,7 @@ module MCP
           @transport.close
 
           # Verify session was cleaned up
-          assert_empty @transport.instance_variable_get(:@sessions)
+          assert_equal({}, @transport.instance_variable_get(:@sessions))
         end
 
         test "sends notification to correct session with multiple active sessions" do
@@ -847,7 +847,7 @@ module MCP
 
           response = stateless_transport.handle_request(request)
           assert_equal 202, response[0]
-          assert_empty(response[1])
+          assert_equal({}, response[1])
 
           body = response[2][0]
           assert_nil(body)
@@ -937,8 +937,8 @@ module MCP
 
           response = @transport.handle_request(notif_request)
           assert_equal 202, response[0]
-          assert_empty(response[1])
-          assert_empty(response[2])
+          assert_equal({}, response[1])
+          assert_equal([], response[2])
         end
 
         test "handles POST request with body including JSON-RPC response object and returns with no body" do
@@ -963,8 +963,8 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 202, response[0]
-          assert_empty(response[1])
-          assert_empty(response[2])
+          assert_equal({}, response[1])
+          assert_equal([], response[2])
         end
 
         private

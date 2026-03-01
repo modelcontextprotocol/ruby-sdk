@@ -33,7 +33,7 @@ module MCP
 
       test "missing_required_arguments returns an empty array if no required arguments are missing" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
-        assert_empty input_schema.missing_required_arguments({ message: "Hello, world!" })
+        assert_equal([], input_schema.missing_required_arguments({ message: "Hello, world!" }))
       end
 
       test "valid schema initialization" do
