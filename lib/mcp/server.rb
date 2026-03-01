@@ -99,9 +99,9 @@ module MCP
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
 
         # No op handlers for currently unsupported methods
-        Methods::RESOURCES_SUBSCRIBE => ->(_) {},
-        Methods::RESOURCES_UNSUBSCRIBE => ->(_) {},
-        Methods::COMPLETION_COMPLETE => ->(_) {},
+        Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
+        Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
+        Methods::COMPLETION_COMPLETE => ->(_) { { completion: { values: [], hasMore: false } } },
         Methods::ELICITATION_CREATE => ->(_) {},
       }
       @transport = transport
