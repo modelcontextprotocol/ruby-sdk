@@ -29,5 +29,30 @@ module MCP
         refute result.key?(:annotations)
       end
     end
+
+    class AudioTest < ActiveSupport::TestCase
+      test "#to_h returns correct format per MCP spec" do
+        audio = Audio.new("base64data", "audio/wav")
+        result = audio.to_h
+
+        assert_equal "audio", result[:type]
+        assert_equal "base64data", result[:data]
+        assert_equal "audio/wav", result[:mimeType]
+      end
+
+      test "#to_h with annotations" do
+        audio = Audio.new("base64data", "audio/wav", annotations: { role: "recording" })
+        result = audio.to_h
+
+        assert_equal({ role: "recording" }, result[:annotations])
+      end
+
+      test "#to_h without annotations omits the key" do
+        audio = Audio.new("base64data", "audio/wav")
+        result = audio.to_h
+
+        refute result.key?(:annotations)
+      end
+    end
   end
 end
