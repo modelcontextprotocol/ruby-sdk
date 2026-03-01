@@ -219,6 +219,14 @@ module MCP
           message = "Error occurred in server_info. `description` is not supported in protocol version 2025-06-18 or earlier"
           raise ArgumentError, message
         end
+
+        tools_with_ref = @tools.each_with_object([]) do |(tool_name, tool), names|
+          names << tool_name if schema_contains_ref?(tool.input_schema_value.to_h)
+        end
+        unless tools_with_ref.empty?
+          message = "Error occurred in #{tools_with_ref.join(", ")}. `$ref` in input schemas is supported by protocol version 2025-11-25 or higher"
+          raise ArgumentError, message
+        end
       end
 
       if @configuration.protocol_version <= "2025-03-26"
@@ -257,6 +265,17 @@ module MCP
       duplicated_tool_names = @tool_names.tally.filter_map { |name, count| name if count >= 2 }
 
       raise ToolNotUnique, duplicated_tool_names unless duplicated_tool_names.empty?
+    end
+
+    def schema_contains_ref?(schema)
+      case schema
+      when Hash
+        schema.any? { |key, value| key.to_s == "$ref" || schema_contains_ref?(value) }
+      when Array
+        schema.any? { |element| schema_contains_ref?(element) }
+      else
+        false
+      end
     end
 
     def handle_request(request, method)
