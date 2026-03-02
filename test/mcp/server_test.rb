@@ -824,7 +824,7 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_empty(response[:result])
+      assert_equal({}, response[:result])
       refute response.key?(:error)
     end
 

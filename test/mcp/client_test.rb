@@ -41,7 +41,7 @@ module MCP
       client = Client.new(transport: transport)
       tools = client.tools
 
-      assert_empty(tools)
+      assert_equal([], tools)
     end
 
     def test_call_tool_sends_request_to_transport_and_returns_content
@@ -102,7 +102,7 @@ module MCP
       client = Client.new(transport: transport)
       resources = client.resources
 
-      assert_empty(resources)
+      assert_equal([], resources)
     end
 
     def test_read_resource_sends_request_to_transport_and_returns_contents
@@ -142,7 +142,7 @@ module MCP
       client = Client.new(transport: transport)
       contents = client.read_resource(uri: uri)
 
-      assert_empty(contents)
+      assert_equal([], contents)
     end
 
     def test_resource_templates_sends_request_to_transport_and_returns_resource_templates_array
@@ -179,7 +179,7 @@ module MCP
       client = Client.new(transport: transport)
       resource_templates = client.resource_templates
 
-      assert_empty(resource_templates)
+      assert_equal([], resource_templates)
     end
 
     def test_prompts_sends_request_to_transport_and_returns_prompts_array
@@ -244,7 +244,7 @@ module MCP
       client = Client.new(transport: transport)
       prompts = client.prompts
 
-      assert_empty(prompts)
+      assert_equal([], prompts)
     end
 
     def test_get_prompt_sends_request_to_transport_and_returns_contents
@@ -290,7 +290,7 @@ module MCP
       client = Client.new(transport: transport)
       contents = client.get_prompt(name: name)
 
-      assert_empty(contents)
+      assert_equal({}, contents)
     end
 
     def test_get_prompt_returns_empty_hash
@@ -303,7 +303,7 @@ module MCP
       client = Client.new(transport: transport)
       contents = client.get_prompt(name: name)
 
-      assert_empty(contents)
+      assert_equal({}, contents)
     end
   end
 end

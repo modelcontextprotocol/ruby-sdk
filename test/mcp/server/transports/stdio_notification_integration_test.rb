@@ -213,7 +213,7 @@ module MCP
           # This test verifies the complete integration from server to transport
 
           # Start with no output
-          assert_empty @mock_stdout.output
+          assert_equal([], @mock_stdout.output)
 
           # Add a prompt and notify
           @server.define_prompt(
