@@ -1,0 +1,9 @@
+server:
+  # TODO: Server-to-client requests (sampling/createMessage, elicitation/create) are not implemented.
+  # `Transport#send_request` does not exist in the current SDK.
+  - tools-call-sampling
+  - tools-call-elicitation
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums
+  # TODO: The SDK does not extract `_meta.progressToken` from tool call requests or deliver `notifications/progress` to tools.
+  - tools-call-with-progress
