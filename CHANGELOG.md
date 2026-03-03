@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-03
+
+### Added
+
+- `Content::EmbeddedResource` class for embedded resource content type (#244)
+- `Content::Audio` class for audio content type (#243)
+- `$ref` support in `Tool::Schema` for protocol version 2025-11-25 (#242)
+- MCP conformance test suite (#248)
+
+### Fixed
+
+- Handle `Errno::ECONNRESET` in SSE stream operations (#249)
+- Fix default handler return values to comply with MCP spec (#247)
+- Fix `Prompt#validate_arguments!` crash when arguments are `nil` (#246)
+- Return 202 Accepted for SSE responses per MCP spec (#245)
+- Fix `Content::Image#to_h` to return `mimeType` (camelCase) per MCP spec (#241)
+
 ## [0.7.1] - 2026-02-21
 
 ### Fixed
