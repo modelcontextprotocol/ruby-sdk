@@ -272,6 +272,63 @@ module MCP
           assert_equal "Missing session ID", body["error"]
         end
 
+        test "rejects duplicate SSE connection with 409" do
+          # Create a session
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Simulate an active SSE stream by storing a stream object in the session
+          mock_stream = StringIO.new
+          @transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+
+          # Attempt a second GET request for the same session
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+
+          response = @transport.handle_request(get_request)
+          assert_equal 409, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Conflict: Only one SSE stream is allowed per session", body["error"]
+        end
+
+        test "store_stream_for_session does not overwrite existing stream (TOCTOU guard)" do
+          # Create a session
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Establish stream A
+          stream_a = StringIO.new
+          @transport.send(:store_stream_for_session, session_id, stream_a)
+          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:stream]
+
+          # Attempt to store stream B (simulating a racing request)
+          stream_b = StringIO.new
+          @transport.send(:store_stream_for_session, session_id, stream_b)
+
+          # Stream A should still be the active stream
+          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:stream]
+
+          # Stream B should have been closed
+          assert stream_b.closed?
+        end
+
         test "handles GET request with invalid session ID" do
           request = create_rack_request(
             "GET",

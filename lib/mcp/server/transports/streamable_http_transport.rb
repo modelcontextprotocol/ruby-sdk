@@ -142,6 +142,7 @@ module MCP
 
           return missing_session_id_response unless session_id
           return session_not_found_response unless session_exists?(session_id)
+          return session_already_connected_response if get_session_stream(session_id)
 
           setup_sse_stream(session_id)
         end
@@ -315,6 +316,14 @@ module MCP
           [404, { "Content-Type" => "application/json" }, [{ error: "Session not found" }.to_json]]
         end
 
+        def session_already_connected_response
+          [
+            409,
+            { "Content-Type" => "application/json" },
+            [{ error: "Conflict: Only one SSE stream is allowed per session" }.to_json],
+          ]
+        end
+
         def setup_sse_stream(session_id)
           body = create_sse_body(session_id)
 
@@ -329,17 +338,22 @@ module MCP
 
         def create_sse_body(session_id)
           proc do |stream|
-            store_stream_for_session(session_id, stream)
-            start_keepalive_thread(session_id)
+            stored = store_stream_for_session(session_id, stream)
+            start_keepalive_thread(session_id) if stored
           end
         end
 
         def store_stream_for_session(session_id, stream)
           @mutex.synchronize do
-            if @sessions[session_id]
-              @sessions[session_id][:stream] = stream
+            session = @sessions[session_id]
+            if session && !session[:stream]
+              session[:stream] = stream
             else
+              # Either session was removed, or another request already established a stream.
               stream.close
+              # `stream.close` may return a truthy value depending on the stream class.
+              # Explicitly return nil to guarantee a falsy return for callers.
+              nil
             end
           end
         end
