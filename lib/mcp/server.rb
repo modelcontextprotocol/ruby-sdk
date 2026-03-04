@@ -419,7 +419,7 @@ module MCP
         end
       end
 
-      call_tool_with_args(tool, arguments)
+      call_tool_with_args(tool, arguments, server_context_with_meta(request))
     rescue RequestHandlerError
       raise
     rescue => e
@@ -445,7 +445,7 @@ module MCP
       prompt_args = request[:arguments]
       prompt.validate_arguments!(prompt_args)
 
-      call_prompt_template_with_args(prompt, prompt_args)
+      call_prompt_template_with_args(prompt, prompt_args, server_context_with_meta(request))
     end
 
     def list_resources(request)
@@ -488,7 +488,7 @@ module MCP
       parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
-    def call_tool_with_args(tool, arguments)
+    def call_tool_with_args(tool, arguments, server_context)
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
@@ -498,11 +498,24 @@ module MCP
       end
     end
 
-    def call_prompt_template_with_args(prompt, args)
+    def call_prompt_template_with_args(prompt, args, server_context)
       if accepts_server_context?(prompt.method(:template))
         prompt.template(args, server_context: server_context).to_h
       else
         prompt.template(args).to_h
+      end
+    end
+
+    def server_context_with_meta(request)
+      meta = request[:_meta]
+      if @server_context && meta
+        context = @server_context.dup
+        context[:_meta] = meta
+        context
+      elsif meta
+        { _meta: meta }
+      elsif @server_context
+        @server_context
       end
     end
   end
