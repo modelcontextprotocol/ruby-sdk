@@ -242,11 +242,12 @@ When added to a Rails controller on a route that handles POST requests, your ser
 [Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
 requests.
 
-You can use the `Server#handle_json` method to handle requests.
+You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
+status codes (e.g., 202 Accepted for notifications).
 
 ```ruby
-class ApplicationController < ActionController::Base
-  def index
+class McpController < ActionController::Base
+  def create
     server = MCP::Server.new(
       name: "my_server",
       title: "Example Server Display Name",
@@ -256,7 +257,11 @@ class ApplicationController < ActionController::Base
       prompts: [MyPrompt],
       server_context: { user_id: current_user.id },
     )
-    render(json: server.handle_json(request.body.read))
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+    server.transport = transport
+    status, headers, body = transport.handle_request(request)
+
+    render(json: body.first, status: status, headers: headers)
   end
 end
 ```
