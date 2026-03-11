@@ -64,70 +64,62 @@ end
 # Create the Streamable HTTP transport
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 
-# Create a logger for MCP request/response logging
-mcp_logger = Logger.new($stdout)
-mcp_logger.formatter = proc do |_severity, _datetime, _progname, msg|
-  "[MCP] #{msg}\n"
-end
+# Rack middleware for MCP request/response and SSE logging.
+class McpSseLogger
+  def initialize(app)
+    @app = app
 
-# Create the Rack application
-app = proc do |env|
-  request = Rack::Request.new(env)
+    @mcp_logger = Logger.new($stdout)
+    @mcp_logger.formatter = proc { |_severity, _datetime, _progname, msg| "[MCP] #{msg}\n" }
 
-  # Log request details
-  if request.post?
-    body = request.body.read
-    request.body.rewind
-    begin
-      parsed_body = JSON.parse(body)
-      mcp_logger.info("Request: #{parsed_body["method"]} (id: #{parsed_body["id"]})")
-
-      # Log SSE-specific setup
-      if parsed_body["method"] == "initialize"
-        sse_logger.info("New client initializing session")
-      end
-    rescue JSON::ParserError
-      mcp_logger.warn("Invalid JSON in request")
-    end
-  elsif request.get?
-    session_id = request.env["HTTP_MCP_SESSION_ID"] ||
-      Rack::Utils.parse_query(request.env["QUERY_STRING"])["sessionId"]
-    sse_logger.info("SSE connection request for session: #{session_id}")
+    @sse_logger = Logger.new($stdout)
+    @sse_logger.formatter = proc { |severity, datetime, _progname, msg| "[SSE] #{severity} #{datetime.strftime("%H:%M:%S.%L")} - #{msg}\n" }
   end
 
-  # Handle the request
-  response = transport.handle_request(request)
+  def call(env)
+    if env["REQUEST_METHOD"] == "POST"
+      body = env["rack.input"].read
+      env["rack.input"].rewind
 
-  # Log response details
-  status, headers, body = response
-  if body.is_a?(Array) && !body.empty? && request.post?
-    begin
-      parsed_response = JSON.parse(body.first)
-      if parsed_response["error"]
-        mcp_logger.error("Response error: #{parsed_response["error"]["message"]}")
-      elsif parsed_response["accepted"]
-        # Response was sent via SSE
-        server.notify_log_message(data: { details: "Response accepted and sent via SSE" }, level: "info")
-        sse_logger.info("Response sent via SSE stream")
-      else
-        mcp_logger.info("Response: success (id: #{parsed_response["id"]})")
+      begin
+        parsed = JSON.parse(body)
 
-        # Log session ID for initialization
-        if headers["Mcp-Session-Id"]
-          sse_logger.info("Session created: #{headers["Mcp-Session-Id"]}")
+        @mcp_logger.info("Request: #{parsed["method"]} (id: #{parsed["id"]})")
+        @sse_logger.info("New client initializing session") if parsed["method"] == "initialize"
+      rescue JSON::ParserError
+        @mcp_logger.warn("Invalid JSON in request")
+      end
+    elsif env["REQUEST_METHOD"] == "GET"
+      session_id = env["HTTP_MCP_SESSION_ID"] || Rack::Utils.parse_query(env["QUERY_STRING"])["sessionId"]
+
+      @sse_logger.info("SSE connection request for session: #{session_id}")
+    end
+
+    status, headers, response_body = @app.call(env)
+
+    if response_body.is_a?(Array) && !response_body.empty? && env["REQUEST_METHOD"] == "POST"
+      begin
+        parsed = JSON.parse(response_body.first)
+
+        if parsed["error"]
+          @mcp_logger.error("Response error: #{parsed["error"]["message"]}")
+        else
+          @mcp_logger.info("Response: success (id: #{parsed["id"]})")
+          @sse_logger.info("Session created: #{headers["Mcp-Session-Id"]}") if headers["Mcp-Session-Id"]
         end
+      rescue JSON::ParserError
+        @mcp_logger.warn("Invalid JSON in response")
       end
-    rescue JSON::ParserError
-      mcp_logger.warn("Invalid JSON in response")
+    elsif env["REQUEST_METHOD"] == "GET" && status == 200
+      @sse_logger.info("SSE stream established")
     end
-  elsif request.get? && status == 200
-    sse_logger.info("SSE stream established")
-  end
 
-  response
+    [status, headers, response_body]
+  end
 end
 
-# Build the Rack application with middleware
+# Build the Rack application with middleware.
+# `StreamableHTTPTransport` responds to `call(env)`, so it can be used directly as a Rack app.
 rack_app = Rack::Builder.new do
   # Enable CORS to allow browser-based MCP clients (e.g., MCP Inspector)
   # WARNING: origins("*") allows all origins. Restrict this in production.
@@ -145,7 +137,9 @@ rack_app = Rack::Builder.new do
 
   use(Rack::CommonLogger, Logger.new($stdout))
   use(Rack::ShowExceptions)
-  run(app)
+  use(McpSseLogger)
+
+  run(transport)
 end
 
 # Print usage instructions

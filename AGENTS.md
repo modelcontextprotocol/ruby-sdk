@@ -116,6 +116,6 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 ### Integration patterns
 
-- **Rails controllers**: Use `server.handle_json(request.body.read)` for HTTP endpoints
+- **Rails/Rack apps**: Mount `StreamableHTTPTransport` as a Rack app (e.g., `mount transport => "/mcp"`)
 - **Command-line tools**: Use `StdioTransport.new(server).open` for CLI applications
-- **HTTP services**: Use `StreamableHttpTransport` for web-based servers
+- **HTTP services**: Use `StreamableHTTPTransport` for web-based servers
