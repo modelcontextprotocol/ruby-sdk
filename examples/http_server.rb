@@ -96,52 +96,52 @@ end
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 server.transport = transport
 
-# Create a logger for MCP-specific logging
-mcp_logger = Logger.new($stdout)
-mcp_logger.formatter = proc do |_severity, _datetime, _progname, msg|
-  "[MCP] #{msg}\n"
-end
-
-# Create a Rack application with logging
-app = proc do |env|
-  request = Rack::Request.new(env)
-
-  # Log MCP-specific details for POST requests
-  if request.post?
-    body = request.body.read
-    request.body.rewind
-    begin
-      parsed_body = JSON.parse(body)
-      mcp_logger.info("Request: #{parsed_body["method"]} (id: #{parsed_body["id"]})")
-      mcp_logger.debug("Request body: #{JSON.pretty_generate(parsed_body)}")
-    rescue JSON::ParserError
-      mcp_logger.warn("Request body (raw): #{body}")
-    end
+# Rack middleware for MCP-specific request/response logging.
+class McpRequestLogger
+  def initialize(app)
+    @app = app
+    @logger = Logger.new($stdout)
+    @logger.formatter = proc { |_severity, _datetime, _progname, msg| "[MCP] #{msg}\n" }
   end
 
-  # Handle the request
-  response = transport.handle_request(request)
+  def call(env)
+    if env["REQUEST_METHOD"] == "POST"
+      body = env["rack.input"].read
+      env["rack.input"].rewind
 
-  # Log the MCP response details
-  _, _, body = response
-  if body.is_a?(Array) && !body.empty? && body.first
-    begin
-      parsed_response = JSON.parse(body.first)
-      if parsed_response["error"]
-        mcp_logger.error("Response error: #{parsed_response["error"]["message"]}")
-      else
-        mcp_logger.info("Response: #{parsed_response["result"] ? "success" : "empty"} (id: #{parsed_response["id"]})")
+      begin
+        parsed = JSON.parse(body)
+
+        @logger.info("Request: #{parsed["method"]} (id: #{parsed["id"]})")
+        @logger.debug("Request body: #{JSON.pretty_generate(parsed)}")
+      rescue JSON::ParserError
+        @logger.warn("Request body (raw): #{body}")
       end
-      mcp_logger.debug("Response body: #{JSON.pretty_generate(parsed_response)}")
-    rescue JSON::ParserError
-      mcp_logger.warn("Response body (raw): #{body}")
     end
-  end
 
-  response
+    status, headers, response_body = @app.call(env)
+
+    if response_body.is_a?(Array) && !response_body.empty? && response_body.first
+      begin
+        parsed = JSON.parse(response_body.first)
+
+        if parsed["error"]
+          @logger.error("Response error: #{parsed["error"]["message"]}")
+        else
+          @logger.info("Response: #{parsed["result"] ? "success" : "empty"} (id: #{parsed["id"]})")
+        end
+        @logger.debug("Response body: #{JSON.pretty_generate(parsed)}")
+      rescue JSON::ParserError
+        @logger.warn("Response body (raw): #{response_body}")
+      end
+    end
+
+    [status, headers, response_body]
+  end
 end
 
-# Wrap the app with Rack middleware
+# Build the Rack application with middleware.
+# `StreamableHTTPTransport` responds to `call(env)`, so it can be used directly as a Rack app.
 rack_app = Rack::Builder.new do
   # Enable CORS to allow browser-based MCP clients (e.g., MCP Inspector)
   # WARNING: origins("*") allows all origins. Restrict this in production.
@@ -159,11 +159,10 @@ rack_app = Rack::Builder.new do
 
   # Use CommonLogger for standard HTTP request logging
   use(Rack::CommonLogger, Logger.new($stdout))
-
-  # Add other useful middleware
   use(Rack::ShowExceptions)
+  use(McpRequestLogger)
 
-  run(app)
+  run(transport)
 end
 
 # Start the server
