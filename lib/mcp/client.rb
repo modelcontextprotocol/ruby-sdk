@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "client/http"
+require_relative "client/tool"
+
 module MCP
   class Client
     # Initializes a new MCP::Client instance.

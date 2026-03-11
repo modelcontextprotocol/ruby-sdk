@@ -4,6 +4,9 @@ require_relative "../json_rpc_handler"
 require_relative "instrumentation"
 require_relative "methods"
 require_relative "logging_message_notification"
+require_relative "progress"
+require_relative "server_context"
+require_relative "server/transports"
 
 module MCP
   class ToolNotUnique < StandardError

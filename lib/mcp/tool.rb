@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+require_relative "tool/annotations"
+require_relative "tool/input_schema"
+require_relative "tool/output_schema"
+require_relative "tool/response"
+
 module MCP
   class Tool
     class << self

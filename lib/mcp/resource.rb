@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require_relative "resource/contents"
+require_relative "resource/embedded"
+
 module MCP
   class Resource
     attr_reader :uri, :name, :title, :description, :icons, :mime_type
