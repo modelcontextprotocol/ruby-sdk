@@ -96,6 +96,7 @@ module MCP
         Methods::INITIALIZE => method(:init),
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
+        Methods::NOTIFICATIONS_PROGRESS => ->(_) {},
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
 
         # No op handlers for currently unsupported methods
@@ -166,6 +167,21 @@ module MCP
       @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
     rescue => e
       report_exception(e, { notification: "resources_list_changed" })
+    end
+
+    def notify_progress(progress_token:, progress:, total: nil, message: nil)
+      return unless @transport
+
+      params = {
+        "progressToken" => progress_token,
+        "progress" => progress,
+        "total" => total,
+        "message" => message,
+      }.compact
+
+      @transport.send_notification(Methods::NOTIFICATIONS_PROGRESS, params)
+    rescue => e
+      report_exception(e, notification: "progress")
     end
 
     def notify_log_message(data:, level:, logger: nil)
@@ -419,7 +435,9 @@ module MCP
         end
       end
 
-      call_tool_with_args(tool, arguments, server_context_with_meta(request))
+      progress_token = request.dig(:_meta, :progressToken)
+
+      call_tool_with_args(tool, arguments, server_context_with_meta(request), progress_token: progress_token)
     rescue RequestHandlerError
       raise
     rescue => e
@@ -488,10 +506,12 @@ module MCP
       parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
-    def call_tool_with_args(tool, arguments, server_context)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil)
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
+        progress = Progress.new(server: self, progress_token: progress_token)
+        server_context = ServerContext.new(context, progress: progress)
         tool.call(**args, server_context: server_context).to_h
       else
         tool.call(**args).to_h
@@ -508,13 +528,13 @@ module MCP
 
     def server_context_with_meta(request)
       meta = request[:_meta]
-      if @server_context && meta
+      if meta && @server_context.is_a?(Hash)
         context = @server_context.dup
         context[:_meta] = meta
         context
-      elsif meta
+      elsif meta && @server_context.nil?
         { _meta: meta }
-      elsif @server_context
+      else
         @server_context
       end
     end

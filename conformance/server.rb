@@ -141,13 +141,16 @@ module Conformance
       end
     end
 
-    # test_tool_with_progress: the actual progress dispatch is in `tools_call_handler`
     class TestToolWithProgress < MCP::Tool
       tool_name "test_tool_with_progress"
       description "A tool that reports progress notifications"
 
       class << self
-        def call(**_args)
+        def call(server_context:, **_args)
+          server_context.report_progress(0, total: 100)
+          server_context.report_progress(50, total: 100)
+          server_context.report_progress(100, total: 100)
+
           MCP::Tool::Response.new([MCP::Content::Text.new("Progress complete").to_h])
         end
       end
