@@ -263,23 +263,16 @@ module MCP
             end
           end
 
-          response = @server.handle_json(body_string) || ""
+          response = @server.handle_json(body_string)
 
           # Stream can be nil since stateless mode doesn't retain streams
           stream = get_session_stream(session_id) if session_id
 
           if stream
             send_response_to_stream(stream, response, session_id)
-          elsif response.nil? && notification_request?(body_string)
-            [202, { "Content-Type" => "application/json" }, [response]]
           else
             [200, { "Content-Type" => "application/json" }, [response]]
           end
-        end
-
-        def notification_request?(body_string)
-          body = parse_request_body(body_string)
-          body.is_a?(Hash) && body["method"].start_with?("notifications/")
         end
 
         def get_session_stream(session_id)
