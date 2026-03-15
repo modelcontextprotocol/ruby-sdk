@@ -193,6 +193,8 @@ module MCP
           return not_acceptable_response(required_types) unless accept_header
 
           accepted_types = parse_accept_header(accept_header)
+          return if accepted_types.include?("*/*")
+
           missing_types = required_types - accepted_types
           return not_acceptable_response(required_types) unless missing_types.empty?
 

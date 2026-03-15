@@ -855,6 +855,21 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "POST request with Accept: */* succeeds" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "*/*",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
         test "GET request without Accept header returns 406" do
           init_request = create_rack_request(
             "POST",
@@ -920,6 +935,30 @@ module MCP
             {
               "HTTP_MCP_SESSION_ID" => session_id,
               "HTTP_ACCEPT" => "text/event-stream",
+            },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["Content-Type"]
+        end
+
+        test "GET request with Accept: */* succeeds" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request_without_accept(
+            "GET",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ACCEPT" => "*/*",
             },
           )
 

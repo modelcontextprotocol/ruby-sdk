@@ -2,6 +2,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "mcp"
+require "rack/cors"
 require "rackup"
 require "json"
 require "logger"
@@ -129,6 +130,20 @@ end
 
 # Build the Rack application with middleware
 rack_app = Rack::Builder.new do
+  # Enable CORS to allow browser-based MCP clients (e.g., MCP Inspector)
+  # WARNING: origins("*") allows all origins. Restrict this in production.
+  use(Rack::Cors) do
+    allow do
+      origins("*")
+      resource(
+        "*",
+        headers: :any,
+        methods: [:get, :post, :delete, :options],
+        expose: ["Mcp-Session-Id"],
+      )
+    end
+  end
+
   use(Rack::CommonLogger, Logger.new($stdout))
   use(Rack::ShowExceptions)
   run(app)
