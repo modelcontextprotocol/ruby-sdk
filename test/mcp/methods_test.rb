@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "mcp/methods"
 
 module MCP
   class MethodsTest < ActiveSupport::TestCase

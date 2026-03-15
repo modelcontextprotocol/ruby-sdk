@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require_relative "prompt/argument"
+require_relative "prompt/message"
+require_relative "prompt/result"
+
 module MCP
   class Prompt
     class << self
