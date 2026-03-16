@@ -261,7 +261,7 @@ module MCP
           unless @stateless
             # If session ID is provided, but not in the sessions hash, return an error
             if session_id && !@sessions.key?(session_id)
-              return [400, { "Content-Type" => "application/json" }, [{ error: "Invalid session ID" }.to_json]]
+              return session_not_found_response
             end
           end
 
