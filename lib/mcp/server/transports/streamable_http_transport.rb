@@ -259,8 +259,7 @@ module MCP
 
         def handle_regular_request(body_string, session_id)
           unless @stateless
-            # If session ID is provided, but not in the sessions hash, return an error
-            if session_id && !@sessions.key?(session_id)
+            if session_id && !session_exists?(session_id)
               return session_not_found_response
             end
           end
