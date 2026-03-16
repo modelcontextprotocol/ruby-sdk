@@ -155,8 +155,10 @@ module MCP
           end
 
           return missing_session_id_response unless (session_id = request.env["HTTP_MCP_SESSION_ID"])
+          return session_not_found_response unless session_exists?(session_id)
 
           cleanup_session(session_id)
+
           success_response
         end
 

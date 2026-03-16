@@ -332,6 +332,84 @@ module MCP
           assert body["success"]
         end
 
+        test "handles DELETE request with invalid session ID" do
+          request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => "invalid_id" },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 404, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
+        end
+
+        test "POST returns 404 after session is deleted" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          @transport.handle_request(delete_request)
+
+          post_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+          response = @transport.handle_request(post_request)
+          assert_equal 404, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
+        end
+
+        test "DELETE returns 404 after session is already deleted" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          first_delete = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(first_delete)
+          assert_equal 200, response[0]
+
+          second_delete = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(second_delete)
+          assert_equal 404, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
+        end
+
         test "handles DELETE request with missing session ID" do
           request = create_rack_request(
             "DELETE",
