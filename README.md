@@ -302,6 +302,14 @@ Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
 ```
 
+By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
+When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
+
+```ruby
+# Session timeout of 30 minutes
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
+```
+
 ### Unsupported Features (to be implemented in future versions)
 
 - Resource subscriptions
