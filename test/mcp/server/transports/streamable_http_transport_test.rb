@@ -287,6 +287,25 @@ module MCP
           assert_equal "Session not found", body["error"]
         end
 
+        test "handles POST request with invalid session ID" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => "invalid_id",
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 404, response[0]
+          assert_equal({ "Content-Type" => "application/json" }, response[1])
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
+        end
+
         test "handles DELETE request with valid session ID" do
           # First create a session with initialize
           init_request = create_rack_request(
