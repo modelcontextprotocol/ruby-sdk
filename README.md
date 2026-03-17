@@ -1082,6 +1082,52 @@ class CustomTransport
 end
 ```
 
+### Stdio Transport Layer
+
+Use the `MCP::Client::Stdio` transport to interact with MCP servers running as subprocesses over standard input/output.
+
+`MCP::Client::Stdio.new` accepts the following keyword arguments:
+
+| Parameter | Required | Description |
+|---|---|---|
+| `command:` | Yes | The command to spawn the server process (e.g., `"ruby"`, `"bundle"`, `"npx"`). |
+| `args:` | No | An array of arguments passed to the command. Defaults to `[]`. |
+| `env:` | No | A hash of environment variables to set for the server process. Defaults to `nil`. |
+| `read_timeout:` | No | Timeout in seconds for waiting for a server response. Defaults to `nil` (no timeout). |
+
+Example usage:
+
+```ruby
+stdio_transport = MCP::Client::Stdio.new(
+  command: "bundle",
+  args: ["exec", "ruby", "path/to/server.rb"],
+  env: { "API_KEY" => "my_secret_key" },
+  read_timeout: 30
+)
+client = MCP::Client.new(transport: stdio_transport)
+
+# List available tools.
+tools = client.tools
+tools.each do |tool|
+  puts "Tool: #{tool.name} - #{tool.description}"
+end
+
+# Call a specific tool.
+response = client.call_tool(
+  tool: tools.first,
+  arguments: { message: "Hello, world!" }
+)
+
+# Close the transport when done.
+stdio_transport.close
+```
+
+The stdio transport automatically handles:
+
+- Spawning the server process with `Open3.popen3`
+- MCP protocol initialization handshake (`initialize` request + `notifications/initialized`)
+- JSON-RPC 2.0 message framing over newline-delimited JSON
+
 ### HTTP Transport Layer
 
 Use the `MCP::Client::HTTP` transport to interact with MCP servers using simple HTTP requests.
