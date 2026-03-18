@@ -1222,6 +1222,31 @@ module MCP
           assert_equal([], response[2])
         end
 
+        test "handle_regular_request checks session existence under mutex" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          @transport.expects(:session_exists?).with(session_id).returns(true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+          response = @transport.handle_request(request)
+          assert_equal(200, response[0])
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)
