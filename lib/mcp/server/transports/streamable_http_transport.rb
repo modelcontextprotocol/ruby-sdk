@@ -154,13 +154,7 @@ module MCP
             return success_response
           end
 
-          session_id = request.env["HTTP_MCP_SESSION_ID"]
-
-          return [
-            400,
-            { "Content-Type" => "application/json" },
-            [{ error: "Missing session ID" }.to_json],
-          ] unless session_id
+          return missing_session_id_response unless (session_id = request.env["HTTP_MCP_SESSION_ID"])
 
           cleanup_session(session_id)
           success_response
