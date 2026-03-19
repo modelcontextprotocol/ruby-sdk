@@ -15,7 +15,26 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":0,"method":"tools/list"}
 ```
 
-### 2. HTTP Server (`http_server.rb`)
+### 2. STDIO Client (`stdio_client.rb`)
+
+A client that connects to the STDIO server using the `MCP::Client::Stdio` transport.
+This demonstrates how to use the SDK's built-in client classes to interact with a server subprocess.
+
+**Usage:**
+
+```console
+$ ruby examples/stdio_client.rb
+```
+
+The client will automatically launch `stdio_server.rb` as a subprocess and demonstrate:
+
+- Listing and calling tools
+- Listing prompts
+- Listing and reading resources
+- Automatic MCP protocol initialization
+- Transport cleanup on exit
+
+### 3. HTTP Server (`http_server.rb`)
 
 A standalone HTTP server built with Rack that implements the MCP Streamable HTTP transport protocol. This demonstrates how to create a web-based MCP server with session management and Server-Sent Events (SSE) support.
 
@@ -41,7 +60,7 @@ The server will start on `http://localhost:9292` and provide:
 - **Prompts**: `ExamplePrompt` - echoes back arguments as a prompt
 - **Resources**: `test_resource` - returns example content
 
-### 3. HTTP Client Example (`http_client.rb`)
+### 4. HTTP Client Example (`http_client.rb`)
 
 A client that demonstrates how to interact with the HTTP server using all MCP protocol methods.
 
@@ -67,7 +86,7 @@ The client will demonstrate:
 - Listing and reading resources
 - Session cleanup
 
-### 4. Streamable HTTP Server (`streamable_http_server.rb`)
+### 5. Streamable HTTP Server (`streamable_http_server.rb`)
 
 A specialized HTTP server designed to test and demonstrate Server-Sent Events (SSE) functionality in the MCP protocol.
 
@@ -90,7 +109,7 @@ $ ruby examples/streamable_http_server.rb
 
 The server will start on `http://localhost:9393` and provide detailed instructions for testing SSE functionality.
 
-### 5. Streamable HTTP Client (`streamable_http_client.rb`)
+### 6. Streamable HTTP Client (`streamable_http_client.rb`)
 
 An interactive client that connects to the SSE stream and provides a menu-driven interface for testing SSE functionality.
 

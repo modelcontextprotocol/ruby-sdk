@@ -11,5 +11,8 @@ AllCops:
 Gemspec/DevelopmentDependencies:
   Enabled: true
 
+Lint/IncompatibleIoSelectWithFiberScheduler:
+  Enabled: true
+
 Minitest/LiteralAsActualArgument:
   Enabled: true
