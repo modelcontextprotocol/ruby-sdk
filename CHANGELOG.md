@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-03-20
+
+### Added
+
+- `MCP::Client::Stdio` transport (#262)
+- Progress notifications per MCP specification (#254)
+- Automatic `_meta` parameter extraction support (#172)
+- CORS and Accept wildcard support for browser-based MCP clients (#253)
+
+### Changed
+
+- Use `autoload` to defer loading of unused subsystems (#255)
+- Reduce release package size (#239)
+
+### Fixed
+
+- Return 404 for invalid session ID in `handle_regular_request` (#257)
+- Use mutex-protected `session_exists?` in `handle_regular_request` (#258)
+
 ## [0.8.0] - 2026-03-03
 
 ### Added
