@@ -92,12 +92,17 @@ module MCP
 
     # Calls a tool via the transport layer and returns the full response from the server.
     #
+    # @param name [String] The name of the tool to call.
     # @param tool [MCP::Client::Tool] The tool to be called.
     # @param arguments [Object, nil] The arguments to pass to the tool.
     # @param progress_token [String, Integer, nil] A token to request progress notifications from the server during tool execution.
     # @return [Hash] The full JSON-RPC response from the transport.
     #
-    # @example
+    # @example Call by name
+    #   response = client.call_tool(name: "my_tool", arguments: { foo: "bar" })
+    #   content = response.dig("result", "content")
+    #
+    # @example Call with a tool object
     #   tool = client.tools.first
     #   response = client.call_tool(tool: tool, arguments: { foo: "bar" })
     #   structured_content = response.dig("result", "structuredContent")
@@ -105,8 +110,11 @@ module MCP
     # @note
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
-    def call_tool(tool:, arguments: nil, progress_token: nil)
-      params = { name: tool.name, arguments: arguments }
+    def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil)
+      tool_name = name || tool&.name
+      raise ArgumentError, "Either `name:` or `tool:` must be provided." unless tool_name
+
+      params = { name: tool_name, arguments: arguments }
       if progress_token
         params[:_meta] = { progressToken: progress_token }
       end
