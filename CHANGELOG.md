@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-03-23
+
+### Added
+
+- Allow `Client#call_tool` to accept a tool name (#266)
+
+### Fixed
+
+- Return 404 for invalid session ID in `handle_delete` (#261)
+
 ## [0.9.0] - 2026-03-20
 
 ### Added
