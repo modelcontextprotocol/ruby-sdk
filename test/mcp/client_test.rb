@@ -67,6 +67,32 @@ module MCP
       assert_equal([{ type: "text", text: "Hello, world!" }], content)
     end
 
+    def test_call_tool_by_name
+      transport = mock
+      arguments = { foo: "bar" }
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :params, :name) == "tool1" &&
+          args.dig(:request, :params, :arguments) == arguments
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.call_tool(name: "tool1", arguments: arguments)
+      content = result.dig("result", "content")
+
+      assert_equal([{ type: "text", text: "Hello, world!" }], content)
+    end
+
+    def test_call_tool_raises_when_no_name_or_tool
+      client = Client.new(transport: mock)
+
+      error = assert_raises(ArgumentError) { client.call_tool(arguments: { foo: "bar" }) }
+      assert_equal("Either `name:` or `tool:` must be provided.", error.message)
+    end
+
     def test_resources_sends_request_to_transport_and_returns_resources_array
       transport = mock
       mock_response = {
