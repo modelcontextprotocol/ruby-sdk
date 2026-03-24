@@ -316,7 +316,7 @@ module MCP
           when Methods::PROMPTS_LIST
             { prompts: @handlers[Methods::PROMPTS_LIST].call(params) }
           when Methods::RESOURCES_LIST
-            { resources: @handlers[Methods::RESOURCES_LIST].call(params) }
+            normalize_resources_list_result(@handlers[Methods::RESOURCES_LIST].call(params))
           when Methods::RESOURCES_READ
             { contents: @handlers[Methods::RESOURCES_READ].call(params) }
           when Methods::RESOURCES_TEMPLATES_LIST
@@ -471,6 +471,24 @@ module MCP
 
     def list_resources(request)
       @resources.map(&:to_h)
+    end
+
+    def normalize_resources_list_result(result)
+      case result
+      when Array
+        { resources: result }
+      when Hash
+        normalized = result.each_with_object({}) do |(key, value), hash|
+          hash[key.respond_to?(:to_sym) ? key.to_sym : key] = value
+        end
+        resources = normalized[:resources]
+        raise ArgumentError, "resources/list handler hash must include :resources" unless resources
+        raise ArgumentError, "resources/list handler :resources must be an array" unless resources.is_a?(Array)
+
+        normalized
+      else
+        raise ArgumentError, "resources/list handler must return an Array or a Hash"
+      end
     end
 
     # Server implementation should set `resources_read_handler` to override no-op default

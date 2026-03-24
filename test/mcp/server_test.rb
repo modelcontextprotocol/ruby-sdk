@@ -726,6 +726,49 @@ module MCP
       assert_instrumentation_data({ method: "resources/list" })
     end
 
+    test "#resources_list_handler allows paginated resources/list payloads" do
+      @server.resources_list_handler do
+        {
+          resources: [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }],
+          nextCursor: "cursor-1",
+        }
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: "resources/list",
+        id: 1,
+      }
+
+      response = @server.handle(request)
+      assert_equal(
+        {
+          resources: [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }],
+          nextCursor: "cursor-1",
+        },
+        response[:result],
+      )
+      assert_instrumentation_data({ method: "resources/list" })
+    end
+
+    test "#resources_list_handler rejects malformed paginated payloads" do
+      @server.resources_list_handler do
+        { nextCursor: "cursor-1" }
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: "resources/list",
+        id: 1,
+      }
+
+      response = @server.handle(request)
+      assert_equal(-32603, response.dig(:error, :code))
+      assert_equal("Internal error", response.dig(:error, :message))
+      assert_equal("Internal error handling resources/list request", response.dig(:error, :data))
+      assert_instrumentation_data({ method: "resources/list", error: :internal_error })
+    end
+
     test "#handle resources/read returns an empty array of contents by default" do
       request = {
         jsonrpc: "2.0",
