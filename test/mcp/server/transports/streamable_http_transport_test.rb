@@ -586,8 +586,8 @@ module MCP
           # Monkey-patch handle_json on the server to send a notification when called
           original_handle_json = @server.method(:handle_json)
           transport = @transport # Capture the transport in a local variable
-          @server.define_singleton_method(:handle_json) do |request|
-            result = original_handle_json.call(request)
+          @server.define_singleton_method(:handle_json) do |request, **kwargs|
+            result = original_handle_json.call(request, **kwargs)
             # Send notification while still in request context - broadcast to all sessions
             transport.send_notification("test_notification", { session: "current" }, **{})
             result
@@ -1357,29 +1357,289 @@ module MCP
           assert_equal([], response[2])
         end
 
-        test "handle_regular_request checks session existence under mutex" do
-          init_request = create_rack_request(
-            "POST",
-            "/",
-            { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
-          )
-          init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
-
-          @transport.expects(:session_exists?).with(session_id).returns(true)
-
+        test "handle_regular_request returns 404 for unknown session_id" do
           request = create_rack_request(
             "POST",
             "/",
             {
               "CONTENT_TYPE" => "application/json",
-              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_SESSION_ID" => "nonexistent-session",
             },
             { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
           )
           response = @transport.handle_request(request)
-          assert_equal(200, response[0])
+          assert_equal(404, response[0])
+          body = JSON.parse(response[2][0])
+          assert_equal("Session not found", body["error"])
+        end
+
+        test "session-scoped log notification is sent only to the originating session" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          server.define_tool(name: "log_tool") do |server_context:|
+            server_context.notify_log_message(data: "secret", level: "info")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          server.server_context = server
+
+          # Create two sessions.
+          init1 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "1",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+            }.to_json,
+          )
+          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+
+          init2 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "2",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+            }.to_json,
+          )
+          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+
+          # Connect SSE for both sessions.
+          io1 = StringIO.new
+          get1 = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session1 })
+          response1 = transport.handle_request(get1)
+          response1[2].call(io1) if response1[2].is_a?(Proc)
+
+          io2 = StringIO.new
+          get2 = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session2 })
+          response2 = transport.handle_request(get2)
+          response2[2].call(io2) if response2[2].is_a?(Proc)
+
+          sleep(0.1)
+
+          # Call tool from session 1.
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session1 },
+            {
+              jsonrpc: "2.0",
+              method: "tools/call",
+              id: "call-1",
+              params: { name: "log_tool", arguments: {} },
+            }.to_json,
+          )
+          transport.handle_request(tool_request)
+
+          # Session 1 should receive the log notification.
+          io1.rewind
+          assert_includes io1.read, "secret"
+
+          # Session 2 should NOT receive the log notification.
+          io2.rewind
+          refute_includes io2.read, "secret"
+        end
+
+        test "session-scoped progress notification is sent only to the originating session" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          server.define_tool(name: "progress_tool") do |server_context:|
+            server_context.report_progress(50, total: 100, message: "halfway")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          server.server_context = server
+
+          # Create two sessions.
+          init1 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "1",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+            }.to_json,
+          )
+          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+
+          init2 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "2",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+            }.to_json,
+          )
+          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+
+          # Connect SSE for both sessions.
+          io1 = StringIO.new
+          get1 = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session1 })
+          response1 = transport.handle_request(get1)
+          response1[2].call(io1) if response1[2].is_a?(Proc)
+
+          io2 = StringIO.new
+          get2 = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session2 })
+          response2 = transport.handle_request(get2)
+          response2[2].call(io2) if response2[2].is_a?(Proc)
+
+          sleep(0.1)
+
+          # Call tool from session 1 with a progress token.
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session1 },
+            {
+              jsonrpc: "2.0",
+              method: "tools/call",
+              id: "call-1",
+              params: {
+                name: "progress_tool",
+                arguments: {},
+                _meta: { progressToken: "token-1" },
+              },
+            }.to_json,
+          )
+          transport.handle_request(tool_request)
+
+          # Session 1 should receive the progress notification.
+          io1.rewind
+          assert_includes io1.read, "halfway"
+
+          # Session 2 should NOT receive the progress notification.
+          io2.rewind
+          refute_includes io2.read, "halfway"
+        end
+
+        test "each session stores its own client info independently" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          # Initialize session 1 with client "alpha".
+          init1 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "1",
+              params: {
+                protocolVersion: "2025-11-25",
+                clientInfo: { name: "alpha", version: "1.0" },
+              },
+            }.to_json,
+          )
+          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+
+          # Initialize session 2 with client "beta".
+          init2 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "2",
+              params: {
+                protocolVersion: "2025-11-25",
+                clientInfo: { name: "beta", version: "2.0" },
+              },
+            }.to_json,
+          )
+          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+
+          # Each session should have its own client info.
+          sessions = transport.instance_variable_get(:@sessions)
+          assert_equal({ name: "alpha", version: "1.0" }, sessions[session1][:server_session].client)
+          assert_equal({ name: "beta", version: "2.0" }, sessions[session2][:server_session].client)
+        end
+
+        test "each session stores its own logging level independently" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          # Initialize two sessions.
+          init1 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "1",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+            }.to_json,
+          )
+          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+
+          init2 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "2",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+            }.to_json,
+          )
+          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+
+          # Session 1 sets log level to "error".
+          set_level1 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session1 },
+            {
+              jsonrpc: "2.0",
+              method: "logging/setLevel",
+              id: "3",
+              params: { level: "error" },
+            }.to_json,
+          )
+          transport.handle_request(set_level1)
+
+          # Session 2 sets log level to "debug".
+          set_level2 = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session2 },
+            {
+              jsonrpc: "2.0",
+              method: "logging/setLevel",
+              id: "4",
+              params: { level: "debug" },
+            }.to_json,
+          )
+          transport.handle_request(set_level2)
+
+          # Session 1 (error level) should not notify for "info", but should for "error".
+          session1_logging = transport.instance_variable_get(:@sessions)[session1][:server_session].logging_message_notification
+          refute session1_logging.should_notify?("info")
+          assert session1_logging.should_notify?("error")
+
+          # Session 2 (debug level) should notify for both "info" and "debug".
+          session2_logging = transport.instance_variable_get(:@sessions)[session2][:server_session].logging_message_notification
+          assert session2_logging.should_notify?("info")
+          assert session2_logging.should_notify?("debug")
         end
 
         private

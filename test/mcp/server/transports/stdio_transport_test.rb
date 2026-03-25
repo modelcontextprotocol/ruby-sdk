@@ -101,6 +101,38 @@ module MCP
           end
         end
 
+        test "open creates a ServerSession and processes requests through it" do
+          request = {
+            jsonrpc: "2.0",
+            method: "initialize",
+            id: "1",
+            params: {
+              protocolVersion: "2025-11-25",
+              clientInfo: { name: "stdio-client", version: "1.0" },
+            },
+          }
+          input = StringIO.new(JSON.generate(request) + "\n")
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            # Verify a session was created.
+            session = @transport.instance_variable_get(:@session)
+            assert_instance_of(ServerSession, session)
+
+            # Verify client info was stored on the session, not on the server.
+            assert_equal({ name: "stdio-client", version: "1.0" }, session.client)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
         test "handles invalid JSON requests" do
           invalid_json = "invalid json"
           output = StringIO.new

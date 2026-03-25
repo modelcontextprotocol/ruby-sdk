@@ -10,7 +10,7 @@ module MCP
       class StreamableHTTPTransport < Transport
         def initialize(server, stateless: false)
           super(server)
-          # { session_id => { stream: stream_object }
+          # Maps `session_id` to `{ stream: stream_object, server_session: ServerSession }`.
           @sessions = {}
           @mutex = Mutex.new
 
@@ -228,18 +228,25 @@ module MCP
 
         def handle_initialization(body_string, body)
           session_id = nil
+          server_session = nil
 
           unless @stateless
             session_id = SecureRandom.uuid
+            server_session = ServerSession.new(server: @server, transport: self, session_id: session_id)
 
             @mutex.synchronize do
               @sessions[session_id] = {
                 stream: nil,
+                server_session: server_session,
               }
             end
           end
 
-          response = @server.handle_json(body_string)
+          response = if server_session
+            server_session.handle_json(body_string)
+          else
+            @server.handle_json(body_string)
+          end
 
           headers = {
             "Content-Type" => "application/json",
@@ -255,16 +262,24 @@ module MCP
         end
 
         def handle_regular_request(body_string, session_id)
-          unless @stateless
-            if session_id && !session_exists?(session_id)
-              return session_not_found_response
+          server_session = nil
+          stream = nil
+
+          if session_id && !@stateless
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              return session_not_found_response unless session
+
+              server_session = session[:server_session]
+              stream = session[:stream]
             end
           end
 
-          response = @server.handle_json(body_string)
-
-          # Stream can be nil since stateless mode doesn't retain streams
-          stream = get_session_stream(session_id) if session_id
+          response = if server_session
+            server_session.handle_json(body_string)
+          else
+            @server.handle_json(body_string)
+          end
 
           if stream
             send_response_to_stream(stream, response, session_id)

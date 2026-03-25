@@ -15,6 +15,7 @@ module MCP
   autoload :Resource, "mcp/resource"
   autoload :ResourceTemplate, "mcp/resource_template"
   autoload :Server, "mcp/server"
+  autoload :ServerSession, "mcp/server_session"
   autoload :Tool, "mcp/tool"
 
   class << self

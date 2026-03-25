@@ -175,5 +175,23 @@ module MCP
       assert_equal Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED, notifications[2][:method]
       assert_equal Methods::NOTIFICATIONS_MESSAGE, notifications[3][:method]
     end
+
+    test "server.notify_log_message works after logging/setLevel via session" do
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+
+      # Client sends logging/setLevel through session.
+      @server.handle(
+        { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "info" } },
+        session: session,
+      )
+
+      # Server-level broadcast should still work because logging level
+      # is stored on both the session and the server.
+      @server.notify_log_message(data: "broadcast log", level: "info")
+
+      log_notifications = @mock_transport.notifications.select { |n| n[:method] == Methods::NOTIFICATIONS_MESSAGE }
+      assert_equal 1, log_notifications.size
+      assert_equal "broadcast log", log_notifications.first[:params]["data"]
+    end
   end
 end
