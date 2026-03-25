@@ -4,7 +4,7 @@ This directory contains examples of how to use the Model Context Protocol (MCP) 
 
 ## Available Examples
 
-### 1. STDIO Server (`stdio_server.rb`)
+### 1. stdio Server (`stdio_server.rb`)
 
 A simple server that communicates over standard input/output. This is useful for desktop applications and command-line tools.
 
@@ -15,9 +15,9 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":0,"method":"tools/list"}
 ```
 
-### 2. STDIO Client (`stdio_client.rb`)
+### 2. stdio Client (`stdio_client.rb`)
 
-A client that connects to the STDIO server using the `MCP::Client::Stdio` transport.
+A client that connects to the stdio server using the `MCP::Client::Stdio` transport.
 This demonstrates how to use the SDK's built-in client classes to interact with a server subprocess.
 
 **Usage:**
