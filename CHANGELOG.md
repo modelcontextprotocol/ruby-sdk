@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-03-27
+
+### Fixed
+
+- Use accessor method in `server_context_with_meta` instead of ivar (#273)
+- Reject duplicate SSE connections with 409 to prevent stream hijacking
+
 ## [0.9.1] - 2026-03-23
 
 ### Added
