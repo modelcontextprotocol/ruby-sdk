@@ -1731,5 +1731,31 @@ module MCP
         end
       end
     end
+
+    test "server_context_with_meta uses accessor method, not ivar directly" do
+      subclass = Class.new(Server) do
+        def server_context
+          { custom: "from_accessor" }
+        end
+      end
+
+      server = subclass.new(name: "test", tools: [])
+
+      received_context = nil
+      server.define_tool(name: "ctx_tool") do |server_context:|
+        received_context = server_context
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "ctx_tool", arguments: {} },
+      }
+
+      server.handle(request)
+      assert_equal "from_accessor", received_context[:custom]
+    end
   end
 end

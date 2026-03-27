@@ -531,14 +531,14 @@ module MCP
 
     def server_context_with_meta(request)
       meta = request[:_meta]
-      if meta && @server_context.is_a?(Hash)
-        context = @server_context.dup
+      if meta && server_context.is_a?(Hash)
+        context = server_context.dup
         context[:_meta] = meta
         context
-      elsif meta && @server_context.nil?
+      elsif meta && server_context.nil?
         { _meta: meta }
       else
-        @server_context
+        server_context
       end
     end
   end
