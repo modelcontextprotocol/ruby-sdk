@@ -9,6 +9,7 @@ module MCP
 
     def report(progress, total: nil, message: nil)
       return unless @progress_token
+      return unless @notification_target
 
       @notification_target.notify_progress(
         progress_token: @progress_token,

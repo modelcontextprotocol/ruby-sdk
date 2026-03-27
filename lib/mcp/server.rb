@@ -116,7 +116,7 @@ module MCP
     # @param request [Hash] A parsed JSON-RPC request.
     # @param session [ServerSession, nil] Per-connection session. Passed by
     #   `ServerSession#handle` for session-scoped notification delivery.
-    #   When `nil`, notifications broadcast to all sessions.
+    #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
     # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
     def handle(request, session: nil)
       JsonRpcHandler.handle(request) do |method|
@@ -129,7 +129,7 @@ module MCP
     # @param request [String] A JSON-RPC request as a JSON string.
     # @param session [ServerSession, nil] Per-connection session. Passed by
     #   `ServerSession#handle_json` for session-scoped notification delivery.
-    #   When `nil`, notifications broadcast to all sessions.
+    #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
     # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
     def handle_json(request, session: nil)
       JsonRpcHandler.handle_json(request) do |method|
@@ -184,21 +184,6 @@ module MCP
       @transport.send_notification(Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED)
     rescue => e
       report_exception(e, { notification: "resources_list_changed" })
-    end
-
-    def notify_progress(progress_token:, progress:, total: nil, message: nil)
-      return unless @transport
-
-      params = {
-        "progressToken" => progress_token,
-        "progress" => progress,
-        "total" => total,
-        "message" => message,
-      }.compact
-
-      @transport.send_notification(Methods::NOTIFICATIONS_PROGRESS, params)
-    rescue => e
-      report_exception(e, notification: "progress")
     end
 
     def notify_log_message(data:, level:, logger: nil)
@@ -524,9 +509,8 @@ module MCP
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
-        notification_target = session || self
-        progress = Progress.new(notification_target: notification_target, progress_token: progress_token)
-        server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+        progress = Progress.new(notification_target: session, progress_token: progress_token)
+        server_context = ServerContext.new(context, progress: progress, notification_target: session)
         tool.call(**args, server_context: server_context).to_h
       else
         tool.call(**args).to_h

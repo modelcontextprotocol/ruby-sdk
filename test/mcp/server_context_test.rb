@@ -61,6 +61,13 @@ module MCP
       server_context.report_progress(50, total: 100)
     end
 
+    test "ServerContext#notify_log_message is a no-op when notification_target is nil" do
+      progress = Progress.new(notification_target: nil, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: nil)
+
+      assert_nothing_raised { server_context.notify_log_message(data: "test", level: "info") }
+    end
+
     # Tool without server_context parameter
     class SimpleToolWithoutContext < Tool
       tool_name "simple_without_context"

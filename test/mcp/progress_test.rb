@@ -27,17 +27,25 @@ module MCP
       @server = Server.new(name: "test_server")
       @transport = MockTransport.new(@server)
       @server.transport = @transport
+      @session = ServerSession.new(server: @server, transport: @transport)
     end
 
     test "#report is a no-op when progress_token is nil" do
-      progress = Progress.new(notification_target: @server, progress_token: nil)
+      progress = Progress.new(notification_target: @session, progress_token: nil)
+      progress.report(50, total: 100, message: "halfway")
+
+      assert_equal 0, @transport.notifications.size
+    end
+
+    test "#report is a no-op when notification_target is nil" do
+      progress = Progress.new(notification_target: nil, progress_token: "token-1")
       progress.report(50, total: 100, message: "halfway")
 
       assert_equal 0, @transport.notifications.size
     end
 
     test "#report sends notification when progress_token is present" do
-      progress = Progress.new(notification_target: @server, progress_token: "token-1")
+      progress = Progress.new(notification_target: @session, progress_token: "token-1")
       progress.report(50, total: 100, message: "halfway")
 
       assert_equal 1, @transport.notifications.size
@@ -50,7 +58,7 @@ module MCP
     end
 
     test "#report omits total and message when not provided" do
-      progress = Progress.new(notification_target: @server, progress_token: "token-1")
+      progress = Progress.new(notification_target: @session, progress_token: "token-1")
       progress.report(50)
 
       assert_equal 1, @transport.notifications.size

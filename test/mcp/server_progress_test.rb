@@ -90,59 +90,7 @@ module MCP
 
       @mock_transport = MockTransport.new(@server)
       @server.transport = @mock_transport
-    end
-
-    test "#notify_progress sends correct notification through transport with all params" do
-      @server.notify_progress(progress_token: "token-1", progress: 50, total: 100, message: "halfway")
-
-      assert_equal 1, @mock_transport.notifications.size
-      notification = @mock_transport.notifications.first
-      assert_equal Methods::NOTIFICATIONS_PROGRESS, notification[:method]
-      assert_equal "token-1", notification[:params]["progressToken"]
-      assert_equal 50, notification[:params]["progress"]
-      assert_equal 100, notification[:params]["total"]
-      assert_equal "halfway", notification[:params]["message"]
-    end
-
-    test "#notify_progress omits total and message when nil" do
-      @server.notify_progress(progress_token: "token-1", progress: 50)
-
-      assert_equal 1, @mock_transport.notifications.size
-      notification = @mock_transport.notifications.first
-      assert_equal Methods::NOTIFICATIONS_PROGRESS, notification[:method]
-      assert_equal "token-1", notification[:params]["progressToken"]
-      assert_equal 50, notification[:params]["progress"]
-      refute notification[:params].key?("total")
-      refute notification[:params].key?("message")
-    end
-
-    test "#notify_progress does nothing without transport" do
-      server_without_transport = Server.new(name: "test_server")
-
-      assert_nothing_raised do
-        server_without_transport.notify_progress(progress_token: "token-1", progress: 50)
-      end
-    end
-
-    test "#notify_progress handles transport errors gracefully" do
-      error_transport = Class.new(MockTransport) do
-        def send_notification(method, params = nil)
-          raise StandardError, "Transport error"
-        end
-      end.new(@server)
-
-      @server.transport = error_transport
-
-      @server.configuration.exception_reporter.expects(:call).once.with do |exception, context|
-        assert_kind_of StandardError, exception
-        assert_equal "Transport error", exception.message
-        assert_equal({ notification: "progress" }, context)
-        true
-      end
-
-      assert_nothing_raised do
-        @server.notify_progress(progress_token: "token-1", progress: 50)
-      end
+      @session = ServerSession.new(server: @server, transport: @mock_transport)
     end
 
     test "tool with progress parameter receives Progress instance and sends notifications via _meta.progressToken" do
@@ -157,7 +105,7 @@ module MCP
         },
       }
 
-      response = @server.handle(request)
+      response = @session.handle(request)
 
       assert response[:result]
       assert_equal "ToolWithProgress: Hello", response[:result][:content][0][:text]
@@ -190,7 +138,7 @@ module MCP
         },
       }
 
-      response = @server.handle(request)
+      response = @session.handle(request)
 
       assert response[:result]
       assert_equal "SimpleToolWithoutProgress: Hello", response[:result][:content][0][:text]
@@ -215,6 +163,7 @@ module MCP
         server_context: { user: "test" },
       )
       server.transport = @mock_transport
+      session = ServerSession.new(server: server, transport: @mock_transport)
 
       request = {
         jsonrpc: "2.0",
@@ -226,7 +175,7 @@ module MCP
         },
       }
 
-      server.handle(request)
+      session.handle(request)
 
       assert_instance_of ServerContext, received_context
       assert_nothing_raised { received_context.report_progress(50) }
@@ -245,7 +194,7 @@ module MCP
         },
       }
 
-      response = @server.handle(request)
+      response = @session.handle(request)
 
       assert response[:result]
       assert_equal "ToolWithContextAndProgress: Hello context=test_user", response[:result][:content][0][:text]
@@ -269,7 +218,7 @@ module MCP
         },
       }
 
-      response = @server.handle(request)
+      response = @session.handle(request)
 
       assert response[:result]
       assert_equal "ToolWithKwargs: progress=present", response[:result][:content][0][:text]
@@ -290,6 +239,8 @@ module MCP
         Tool::Response.new([{ type: "text", text: "block_tool done" }])
       end
 
+      session = ServerSession.new(server: server, transport: @mock_transport)
+
       request = {
         jsonrpc: "2.0",
         id: 1,
@@ -301,7 +252,7 @@ module MCP
         },
       }
 
-      response = server.handle(request)
+      response = session.handle(request)
 
       assert response[:result]
       assert_equal "block_tool done", response[:result][:content][0][:text]
@@ -325,6 +276,8 @@ module MCP
         Tool::Response.new([{ type: "text", text: "done" }])
       end
 
+      session = ServerSession.new(server: server, transport: @mock_transport)
+
       request = {
         jsonrpc: "2.0",
         id: 1,
@@ -336,7 +289,7 @@ module MCP
         },
       }
 
-      server.handle(request)
+      session.handle(request)
 
       assert_equal 5, @mock_transport.notifications.size
       @mock_transport.notifications.each_with_index do |n, i|
@@ -358,7 +311,7 @@ module MCP
       }
 
       # Should not raise and should return nil (notification, no id).
-      result = @server.handle(request)
+      result = @session.handle(request)
       assert_nil result
     end
   end

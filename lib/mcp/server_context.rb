@@ -18,22 +18,14 @@ module MCP
       @progress.report(progress, total: total, message: message)
     end
 
-    # Sends a progress notification scoped to the originating session.
-    #
-    # @param progress_token [String, Integer] The token identifying the operation.
-    # @param progress [Numeric] Current progress value.
-    # @param total [Numeric, nil] Total expected value.
-    # @param message [String, nil] Human-readable status message.
-    def notify_progress(progress_token:, progress:, total: nil, message: nil)
-      @notification_target.notify_progress(progress_token: progress_token, progress: progress, total: total, message: message)
-    end
-
     # Sends a log message notification scoped to the originating session.
     #
     # @param data [Object] The log data to send.
     # @param level [String] Log level (e.g., `"debug"`, `"info"`, `"error"`).
     # @param logger [String, nil] Logger name.
     def notify_log_message(data:, level:, logger: nil)
+      return unless @notification_target
+
       @notification_target.notify_log_message(data: data, level: level, logger: logger)
     end
 
