@@ -272,6 +272,62 @@ module MCP
           assert_equal "Missing session ID", body["error"]
         end
 
+        test "rejects POST request without session ID in stateful mode" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Missing session ID", body["error"]
+        end
+
+        test "rejects notification without session ID in stateful mode" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "notifications/initialized" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Missing session ID", body["error"]
+        end
+
+        test "rejects response without session ID in stateful mode" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", id: "1", result: {} }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Missing session ID", body["error"]
+        end
+
+        test "allows POST request without session ID in stateless mode" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
         test "rejects duplicate SSE connection with 409" do
           # Create a session
           init_request = create_rack_request(
