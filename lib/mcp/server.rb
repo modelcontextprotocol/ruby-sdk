@@ -199,32 +199,14 @@ module MCP
       report_exception(e, { notification: "log_message" })
     end
 
-    def resources_list_handler(&block)
-      @handlers[Methods::RESOURCES_LIST] = block
-    end
-
+    # Sets a custom handler for `resources/read` requests.
+    # The block receives the parsed request params and should return resource
+    # contents. The return value is set as the `contents` field of the response.
+    #
+    # @yield [params] The request params containing `:uri`.
+    # @yieldreturn [Array<Hash>, Hash] Resource contents.
     def resources_read_handler(&block)
       @handlers[Methods::RESOURCES_READ] = block
-    end
-
-    def resources_templates_list_handler(&block)
-      @handlers[Methods::RESOURCES_TEMPLATES_LIST] = block
-    end
-
-    def tools_list_handler(&block)
-      @handlers[Methods::TOOLS_LIST] = block
-    end
-
-    def tools_call_handler(&block)
-      @handlers[Methods::TOOLS_CALL] = block
-    end
-
-    def prompts_list_handler(&block)
-      @handlers[Methods::PROMPTS_LIST] = block
-    end
-
-    def prompts_get_handler(&block)
-      @handlers[Methods::PROMPTS_GET] = block
     end
 
     private

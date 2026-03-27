@@ -270,23 +270,6 @@ module MCP
       assert_equal({ foo: "bar" }, result[:tools][0][:_meta])
     end
 
-    test "#tools_list_handler sets the tools/list handler" do
-      @server.tools_list_handler do
-        [{ name: "hammer", description: "Hammer time!" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "tools/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      result = response[:result]
-      assert_equal({ tools: [{ name: "hammer", description: "Hammer time!" }] }, result)
-      assert_instrumentation_data({ method: "tools/list" })
-    end
-
     test "#handle tools/call executes tool and returns result" do
       tool_name = "test_tool"
       tool_args = { arg: "value" }
@@ -564,24 +547,6 @@ module MCP
       assert_includes response[:error][:data], "Tool not found: unknown_tool"
     end
 
-    test "#tools_call_handler sets the tools/call handler" do
-      @server.tools_call_handler do |request|
-        tool_name = request[:name]
-        Tool::Response.new("#{tool_name} called successfully").to_h
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: "my_tool", arguments: {} },
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal({ content: "my_tool called successfully", isError: false }, response[:result])
-      assert_instrumentation_data({ method: "tools/call" })
-    end
-
     test "#handle prompts/list returns list of prompts" do
       request = {
         jsonrpc: "2.0",
@@ -591,22 +556,6 @@ module MCP
 
       response = @server.handle(request)
       assert_equal({ prompts: [@prompt.to_h] }, response[:result])
-      assert_instrumentation_data({ method: "prompts/list" })
-    end
-
-    test "#prompts_list_handler sets the prompts/list handler" do
-      @server.prompts_list_handler do
-        [{ name: "foo_prompt", description: "Foo prompt" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "prompts/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal({ prompts: [{ name: "foo_prompt", description: "Foo prompt" }] }, response[:result])
       assert_instrumentation_data({ method: "prompts/list" })
     end
 
@@ -669,32 +618,6 @@ module MCP
       })
     end
 
-    test "#prompts_get_handler sets the prompts/get handler" do
-      @server.prompts_get_handler do |request|
-        prompt_name = request[:name]
-        Prompt::Result.new(
-          description: prompt_name,
-          messages: [
-            Prompt::Message.new(role: "user", content: Content::Text.new(request[:arguments]["foo"])),
-          ],
-        ).to_h
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "prompts/get",
-        id: 1,
-        params: { name: "foo_bar_prompt", arguments: { "foo" => "bar" } },
-      }
-
-      response = @server.handle(request)
-      assert_equal(
-        { description: "foo_bar_prompt", messages: [{ role: "user", content: { type: "text", text: "bar" } }] },
-        response[:result],
-      )
-      assert_instrumentation_data({ method: "prompts/get" })
-    end
-
     test "#handle resources/list returns a list of resources" do
       request = {
         jsonrpc: "2.0",
@@ -704,25 +627,6 @@ module MCP
 
       response = @server.handle(request)
       assert_equal({ resources: [@resource.to_h] }, response[:result])
-      assert_instrumentation_data({ method: "resources/list" })
-    end
-
-    test "#resources_list_handler sets the resources/list handler" do
-      @server.resources_list_handler do
-        [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "resources/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal(
-        { resources: [{ uri: "https://test_resource.invalid", name: "test-resource", title: "Test Resource", description: "Test resource" }] },
-        response[:result],
-      )
       assert_instrumentation_data({ method: "resources/list" })
     end
 
@@ -777,33 +681,6 @@ module MCP
       assert_equal(
         {
           resourceTemplates: [@resource_template.to_h],
-        },
-        response[:result],
-      )
-      assert_instrumentation_data({ method: "resources/templates/list" })
-    end
-
-    test "#resources_templates_list_handler sets the resources/templates/list handler" do
-      @server.resources_templates_list_handler do
-        [{ uriTemplate: "test_resource_template/{id}", name: "Test resource template", description: "a template" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "resources/templates/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal(
-        {
-          resourceTemplates: [
-            {
-              uriTemplate: "test_resource_template/{id}",
-              name: "Test resource template",
-              description: "a template",
-            },
-          ],
         },
         response[:result],
       )
