@@ -113,7 +113,6 @@ The server provides the following notification methods:
 - `notify_tools_list_changed` - Send a notification when the tools list changes
 - `notify_prompts_list_changed` - Send a notification when the prompts list changes
 - `notify_resources_list_changed` - Send a notification when the resources list changes
-- `notify_progress` - Send a progress notification for long-running operations
 - `notify_log_message` - Send a structured logging notification message
 
 #### Session Scoping
@@ -178,24 +177,10 @@ The `server_context.report_progress` method accepts:
 - `total:` (optional) — total expected value, so clients can display a percentage
 - `message:` (optional) — human-readable status message
 
-#### Server-Side: Direct `notify_progress` Usage
-
-You can also call `notify_progress` directly on the server instance:
-
-```ruby
-server.notify_progress(
-  progress_token: "token-123",
-  progress: 50,
-  total: 100,        # optional
-  message: "halfway" # optional
-)
-```
-
 **Key Features:**
 
 - Tools report progress via `server_context.report_progress`
 - `report_progress` is a no-op when no `progressToken` was provided by the client
-- `notify_progress` is a no-op when no transport is configured
 - Supports both numeric and string progress tokens
 
 ### Logging
