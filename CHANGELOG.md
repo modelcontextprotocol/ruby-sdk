@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-03-30
+
+### Added
+
+- Session expiry controls for `StreamableHTTPTransport` via `session_idle_timeout:` option (#268)
+
+### Changed
+
+- `ServerSession` for per-connection state (#275)
+
+### Removed
+
+- Remove `Server#notify_progress` broadcast API (#276)
+- Remove undocumented handler override methods (#270)
+
+### Fixed
+
+- Reject POST requests without session ID in stateful mode (#274)
+
 ## [0.9.2] - 2026-03-27
 
 ### Fixed
