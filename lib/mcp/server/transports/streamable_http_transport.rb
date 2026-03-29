@@ -120,10 +120,14 @@ module MCP
 
           if body["method"] == "initialize"
             handle_initialization(body_string, body)
-          elsif notification?(body) || response?(body)
-            handle_accepted
           else
-            handle_regular_request(body_string, session_id)
+            return missing_session_id_response if !@stateless && !session_id
+
+            if notification?(body) || response?(body)
+              handle_accepted
+            else
+              handle_regular_request(body_string, session_id)
+            end
           end
         rescue StandardError => e
           MCP.configuration.exception_reporter.call(e, { request: body_string })
