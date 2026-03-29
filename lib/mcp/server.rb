@@ -54,6 +54,7 @@ module MCP
     include Instrumentation
 
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
+    attr_reader :client_capabilities
 
     def initialize(
       description: nil,
@@ -92,6 +93,7 @@ module MCP
       validate!
 
       @capabilities = capabilities || default_capabilities
+      @client_capabilities = nil
       @logging_message_notification = nil
 
       @handlers = {
@@ -204,6 +206,43 @@ module MCP
       report_exception(e, { notification: "log_message" })
     end
 
+    # Sends a `sampling/createMessage` request to the client.
+    # For single-client transports (e.g., `StdioTransport`). For multi-client transports
+    # (e.g., `StreamableHTTPTransport`), use `ServerSession#create_sampling_message` instead
+    # to ensure the request is routed to the correct client.
+    def create_sampling_message(
+      messages:,
+      max_tokens:,
+      system_prompt: nil,
+      model_preferences: nil,
+      include_context: nil,
+      temperature: nil,
+      stop_sequences: nil,
+      metadata: nil,
+      tools: nil,
+      tool_choice: nil
+    )
+      unless @transport
+        raise "Cannot send sampling request without a transport."
+      end
+
+      params = build_sampling_params(
+        @client_capabilities,
+        messages: messages,
+        max_tokens: max_tokens,
+        system_prompt: system_prompt,
+        model_preferences: model_preferences,
+        include_context: include_context,
+        temperature: temperature,
+        stop_sequences: stop_sequences,
+        metadata: metadata,
+        tools: tools,
+        tool_choice: tool_choice,
+      )
+
+      @transport.send_request(Methods::SAMPLING_CREATE_MESSAGE, params)
+    end
+
     # Sets a custom handler for `resources/read` requests.
     # The block receives the parsed request params and should return resource
     # contents. The return value is set as the `contents` field of the response.
@@ -221,6 +260,45 @@ module MCP
     # @yieldreturn [Hash] A hash with `:completion` key containing `:values`, optional `:total`, and `:hasMore`.
     def completion_handler(&block)
       @handlers[Methods::COMPLETION_COMPLETE] = block
+    end
+
+    def build_sampling_params(
+      capabilities,
+      messages:,
+      max_tokens:,
+      system_prompt: nil,
+      model_preferences: nil,
+      include_context: nil,
+      temperature: nil,
+      stop_sequences: nil,
+      metadata: nil,
+      tools: nil,
+      tool_choice: nil
+    )
+      unless capabilities&.dig(:sampling)
+        raise "Client does not support sampling."
+      end
+
+      if tools && !capabilities.dig(:sampling, :tools)
+        raise "Client does not support sampling with tools."
+      end
+
+      if tool_choice && !capabilities.dig(:sampling, :tools)
+        raise "Client does not support sampling with tool_choice."
+      end
+
+      {
+        messages: messages,
+        maxTokens: max_tokens,
+        systemPrompt: system_prompt,
+        modelPreferences: model_preferences,
+        includeContext: include_context,
+        temperature: temperature,
+        stopSequences: stop_sequences,
+        metadata: metadata,
+        tools: tools,
+        toolChoice: tool_choice,
+      }.compact
     end
 
     private
@@ -371,10 +449,11 @@ module MCP
           session.store_client_info(client: params[:clientInfo], capabilities: params[:capabilities])
         else
           @client = params[:clientInfo]
+          @client_capabilities = params[:capabilities]
         end
+        protocol_version = params[:protocolVersion]
       end
 
-      protocol_version = params[:protocolVersion] if params
       negotiated_version = if Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
         protocol_version
       else

@@ -1,7 +1,5 @@
 server:
-  # TODO: Server-to-client requests (sampling/createMessage, elicitation/create) are not implemented.
-  # `Transport#send_request` does not exist in the current SDK.
-  - tools-call-sampling
+  # TODO: Server-to-client requests (elicitation/create) are not implemented.
   - tools-call-elicitation
   - elicitation-sep1034-defaults
   - elicitation-sep1330-enums

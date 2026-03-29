@@ -38,6 +38,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports resource registration and retrieval
 - Supports stdio & Streamable HTTP (including SSE) transports
 - Supports notifications for list changes (tools, prompts, resources)
+- Supports sampling (server-to-client LLM completion requests)
 
 ### Supported Methods
 
@@ -51,6 +52,7 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
+- `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
 
 ### Custom Methods
 
@@ -102,6 +104,163 @@ end
 
 - Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
 - Supports the same exception reporting and instrumentation as standard methods
+
+### Sampling
+
+The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
+This enables servers to leverage the client's LLM capabilities without needing direct access to AI models.
+
+**Key Concepts:**
+
+- **Server-to-Client Request**: Unlike typical MCP methods (client→server), sampling is initiated by the server
+- **Client Capability**: Clients must declare `sampling` capability during initialization
+- **Tool Support**: When using tools in sampling requests, clients must declare `sampling.tools` capability
+- **Human-in-the-Loop**: Clients can implement user approval before forwarding requests to LLMs
+
+**Usage Example (Stdio transport):**
+
+`Server#create_sampling_message` is for single-client transports (e.g., `StdioTransport`).
+For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools instead,
+which routes the request to the correct client session.
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Server::Transports::StdioTransport.new(server)
+server.transport = transport
+```
+
+Client must declare sampling capability during initialization.
+This happens automatically when the client connects.
+
+```ruby
+result = server.create_sampling_message(
+  messages: [
+    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
+  ],
+  max_tokens: 100,
+  system_prompt: "You are a helpful assistant.",
+  temperature: 0.7
+)
+```
+
+Result contains the LLM response:
+
+```ruby
+{
+  role: "assistant",
+  content: { type: "text", text: "The capital of France is Paris." },
+  model: "claude-3-sonnet-20240307",
+  stopReason: "endTurn"
+}
+```
+
+**Parameters:**
+
+Required:
+
+- `messages:` (Array) - Array of message objects with `role` and `content`
+- `max_tokens:` (Integer) - Maximum tokens in the response
+
+Optional:
+
+- `system_prompt:` (String) - System prompt for the LLM
+- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
+- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
+- `temperature:` (Float) - Sampling temperature
+- `stop_sequences:` (Array) - Sequences that stop generation
+- `metadata:` (Hash) - Additional metadata
+- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
+- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
+
+**Using Sampling in Tools (works with both Stdio and HTTP transports):**
+
+Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
+The request is automatically routed to the correct client session.
+Set `server.server_context = server` so that `server_context.create_sampling_message` delegates to the server:
+
+```ruby
+class SummarizeTool < MCP::Tool
+  description "Summarize text using LLM"
+  input_schema(
+    properties: {
+      text: { type: "string" }
+    },
+    required: ["text"]
+  )
+
+  def self.call(text:, server_context:)
+    result = server_context.create_sampling_message(
+      messages: [
+        { role: "user", content: { type: "text", text: "Please summarize: #{text}" } }
+      ],
+      max_tokens: 500
+    )
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: result[:content][:text]
+    }])
+  end
+end
+
+server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
+server.server_context = server
+```
+
+**Tool Use in Sampling:**
+
+When tools are provided in a sampling request, the LLM can call them during generation.
+The server must handle tool calls and continue the conversation with tool results:
+
+```ruby
+result = server.create_sampling_message(
+  messages: [
+    { role: "user", content: { type: "text", text: "What's the weather in Paris?" } }
+  ],
+  max_tokens: 1000,
+  tools: [
+    {
+      name: "get_weather",
+      description: "Get weather for a city",
+      inputSchema: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"]
+      }
+    }
+  ],
+  tool_choice: { mode: "auto" }
+)
+
+if result[:stopReason] == "toolUse"
+  tool_results = result[:content].map do |tool_use|
+    weather_data = get_weather(tool_use[:input][:city])
+
+    {
+      type: "tool_result",
+      toolUseId: tool_use[:id],
+      content: [{ type: "text", text: weather_data.to_json }]
+    }
+  end
+
+  final_result = server.create_sampling_message(
+    messages: [
+      { role: "user", content: { type: "text", text: "What's the weather in Paris?" } },
+      { role: "assistant", content: result[:content] },
+      { role: "user", content: tool_results }
+    ],
+    max_tokens: 1000,
+    tools: [...]
+  )
+end
+```
+
+**Error Handling:**
+
+- Raises `RuntimeError` if transport is not set
+- Raises `RuntimeError` if client does not support `sampling` capability
+- Raises `RuntimeError` if `tools` are used but client lacks `sampling.tools` capability
+- Raises `StandardError` if client returns an error response
 
 ### Notifications
 
