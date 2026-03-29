@@ -6,18 +6,18 @@ module MCP
   class ServerContextTest < ActiveSupport::TestCase
     test "ServerContext delegates method calls to the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_equal "test_user", server_context[:user]
     end
 
     test "ServerContext respond_to? returns true for methods on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_respond_to server_context, :[]
       assert_respond_to server_context, :keys
@@ -25,18 +25,18 @@ module MCP
 
     test "ServerContext respond_to? returns false for methods not on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       refute_respond_to server_context, :nonexistent_method
     end
 
     test "ServerContext raises NoMethodError for methods not on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_raises(NoMethodError) { server_context.nonexistent_method }
     end
@@ -46,9 +46,9 @@ module MCP
       def context.custom_method
         "custom_value"
       end
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_equal "custom_value", server_context.custom_method
     end
@@ -57,7 +57,7 @@ module MCP
       progress = mock
       progress.expects(:report).with(50, total: 100, message: nil).once
 
-      server_context = ServerContext.new(nil, progress: progress)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock)
       server_context.report_progress(50, total: 100)
     end
 

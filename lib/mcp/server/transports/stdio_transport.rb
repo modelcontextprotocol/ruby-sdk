@@ -10,17 +10,19 @@ module MCP
         STATUS_INTERRUPTED = Signal.list["INT"] + 128
 
         def initialize(server)
-          @server = server
+          super(server)
           @open = false
+          @session = nil
           $stdin.set_encoding("UTF-8")
           $stdout.set_encoding("UTF-8")
-          super
         end
 
         def open
           @open = true
+          @session = ServerSession.new(server: @server, transport: self)
           while @open && (line = $stdin.gets)
-            handle_json_request(line.strip)
+            response = @session.handle_json(line.strip)
+            send_response(response) if response
           end
         rescue Interrupt
           warn("\nExiting...")

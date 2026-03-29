@@ -116,6 +116,15 @@ The server provides the following notification methods:
 - `notify_progress` - Send a progress notification for long-running operations
 - `notify_log_message` - Send a structured logging notification message
 
+#### Session Scoping
+
+When using Streamable HTTP transport with multiple clients, each client connection gets its own session. Notifications are scoped as follows:
+
+- **`report_progress`** and **`notify_log_message`** called via `server_context` inside a tool handler are automatically sent only to the requesting client.
+No extra configuration is needed.
+- **`notify_tools_list_changed`**, **`notify_prompts_list_changed`**, and **`notify_resources_list_changed`** are always broadcast to all connected clients,
+as they represent server-wide state changes. These should be called on the `server` instance directly.
+
 #### Notification Format
 
 Notifications follow the JSON-RPC 2.0 specification and use these method names:

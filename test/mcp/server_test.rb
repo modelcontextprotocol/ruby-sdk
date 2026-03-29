@@ -206,6 +206,20 @@ module MCP
       assert_instrumentation_data({ method: "ping" })
     end
 
+    test "unsupported method instrumentation includes client from session" do
+      session = ServerSession.new(server: @server, transport: mock)
+      session.store_client_info(client: { name: "session-client", version: "1.0" })
+
+      request = {
+        jsonrpc: "2.0",
+        method: "does/not/exist",
+        id: 1,
+      }
+
+      @server.handle(request, session: session)
+      assert_instrumentation_data({ method: "unsupported_method", client: { name: "session-client", version: "1.0" } })
+    end
+
     test "#handle returns nil for notification requests" do
       request = {
         jsonrpc: "2.0",

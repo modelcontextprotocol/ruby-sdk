@@ -111,15 +111,29 @@ module MCP
       @transport = transport
     end
 
-    def handle(request)
+    # Processes a parsed JSON-RPC request and returns the response as a Hash.
+    #
+    # @param request [Hash] A parsed JSON-RPC request.
+    # @param session [ServerSession, nil] Per-connection session. Passed by
+    #   `ServerSession#handle` for session-scoped notification delivery.
+    #   When `nil`, notifications broadcast to all sessions.
+    # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
+    def handle(request, session: nil)
       JsonRpcHandler.handle(request) do |method|
-        handle_request(request, method)
+        handle_request(request, method, session: session)
       end
     end
 
-    def handle_json(request)
+    # Processes a JSON-RPC request string and returns the response as a JSON string.
+    #
+    # @param request [String] A JSON-RPC request as a JSON string.
+    # @param session [ServerSession, nil] Per-connection session. Passed by
+    #   `ServerSession#handle_json` for session-scoped notification delivery.
+    #   When `nil`, notifications broadcast to all sessions.
+    # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
+    def handle_json(request, session: nil)
       JsonRpcHandler.handle_json(request) do |method|
-        handle_request(request, method)
+        handle_request(request, method, session: session)
       end
     end
 
@@ -279,11 +293,12 @@ module MCP
       end
     end
 
-    def handle_request(request, method)
+    def handle_request(request, method, session: nil)
       handler = @handlers[method]
       unless handler
         instrument_call("unsupported_method") do
-          add_instrumentation_data(client: @client) if @client
+          client = session&.client || @client
+          add_instrumentation_data(client: client) if client
         end
         return
       end
@@ -293,6 +308,8 @@ module MCP
       ->(params) {
         instrument_call(method) do
           result = case method
+          when Methods::INITIALIZE
+            init(params, session: session)
           when Methods::TOOLS_LIST
             { tools: @handlers[Methods::TOOLS_LIST].call(params) }
           when Methods::PROMPTS_LIST
@@ -303,10 +320,15 @@ module MCP
             { contents: @handlers[Methods::RESOURCES_READ].call(params) }
           when Methods::RESOURCES_TEMPLATES_LIST
             { resourceTemplates: @handlers[Methods::RESOURCES_TEMPLATES_LIST].call(params) }
+          when Methods::TOOLS_CALL
+            call_tool(params, session: session)
+          when Methods::LOGGING_SET_LEVEL
+            configure_logging_level(params, session: session)
           else
             @handlers[method].call(params)
           end
-          add_instrumentation_data(client: @client) if @client
+          client = session&.client || @client
+          add_instrumentation_data(client: client) if client
 
           result
         rescue => e
@@ -342,8 +364,14 @@ module MCP
       }.compact
     end
 
-    def init(params)
-      @client = params[:clientInfo] if params
+    def init(params, session: nil)
+      if params
+        if session
+          session.store_client_info(client: params[:clientInfo], capabilities: params[:capabilities])
+        else
+          @client = params[:clientInfo]
+        end
+      end
 
       protocol_version = params[:protocolVersion] if params
       negotiated_version = if Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
@@ -371,7 +399,7 @@ module MCP
       }.compact
     end
 
-    def configure_logging_level(request)
+    def configure_logging_level(request, session: nil)
       if capabilities[:logging].nil?
         raise RequestHandlerError.new("Server does not support logging", request, error_type: :internal_error)
       end
@@ -381,6 +409,7 @@ module MCP
         raise RequestHandlerError.new("Invalid log level #{request[:level]}", request, error_type: :invalid_params)
       end
 
+      session&.configure_logging(logging_message_notification)
       @logging_message_notification = logging_message_notification
 
       {}
@@ -390,7 +419,7 @@ module MCP
       @tools.values.map(&:to_h)
     end
 
-    def call_tool(request)
+    def call_tool(request, session: nil)
       tool_name = request[:name]
 
       tool = tools[tool_name]
@@ -422,7 +451,7 @@ module MCP
 
       progress_token = request.dig(:_meta, :progressToken)
 
-      call_tool_with_args(tool, arguments, server_context_with_meta(request), progress_token: progress_token)
+      call_tool_with_args(tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session)
     rescue RequestHandlerError
       raise
     rescue => e
@@ -491,12 +520,13 @@ module MCP
       parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
-    def call_tool_with_args(tool, arguments, context, progress_token: nil)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil)
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
-        progress = Progress.new(server: self, progress_token: progress_token)
-        server_context = ServerContext.new(context, progress: progress)
+        notification_target = session || self
+        progress = Progress.new(notification_target: notification_target, progress_token: progress_token)
+        server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
         tool.call(**args, server_context: server_context).to_h
       else
         tool.call(**args).to_h

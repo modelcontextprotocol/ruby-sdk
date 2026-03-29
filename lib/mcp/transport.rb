@@ -36,8 +36,8 @@ module MCP
       send_response(response) if response
     end
 
-    # Send a notification to the client
-    # Returns true if the notification was sent successfully
+    # Send a notification to the client.
+    # Returns true if the notification was sent successfully.
     def send_notification(method, params = nil)
       raise NotImplementedError, "Subclasses must implement send_notification"
     end
