@@ -17,6 +17,10 @@ module MCP
           @transport = StreamableHTTPTransport.new(@server)
         end
 
+        teardown do
+          @transport.close
+        end
+
         test "handles POST request with valid JSON-RPC message" do
           # First create a session
           init_request = create_rack_request(
@@ -1385,6 +1389,344 @@ module MCP
           assert_equal 202, response[0]
           assert_equal({}, response[1])
           assert_equal([], response[2])
+        end
+
+        test "expired session returns 404 on GET request" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          # Create a session
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+          assert(session_id)
+
+          # Session should now be expired (timeout is 0)
+          sleep(0.01)
+
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = transport.handle_request(get_request)
+          assert_equal(404, response[0])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("Session not found", body["error"])
+        ensure
+          transport.close
+        end
+
+        test "expired session returns 404 on POST request" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          # Create a session
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Session should now be expired (timeout is 0)
+          sleep(0.01)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(404, response[0])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("Session not found", body["error"])
+        ensure
+          transport.close
+        end
+
+        test "session_idle_timeout: nil disables session expiry" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: nil)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Make a request - session should still be valid
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
+        test "session within timeout period remains valid" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 3600)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
+        test "session activity resets the idle timeout" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.5)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Send requests every 0.2s to keep the session alive.
+          # Total elapsed time (~0.6s) exceeds timeout (0.5s), but each request
+          # resets the idle timer so the session remains valid.
+          3.times do
+            sleep(0.2)
+            request = create_rack_request(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_MCP_SESSION_ID" => session_id,
+              },
+              { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+            )
+            response = transport.handle_request(request)
+            assert_equal(200, response[0])
+          end
+        ensure
+          transport.close
+        end
+
+        test "reaper thread cleans up expired sessions" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+          assert(session_id)
+
+          # Wait for session to expire
+          sleep(0.02)
+
+          # Manually trigger reaper since the background thread runs on 60s interval
+          transport.send(:reap_expired_sessions)
+
+          # Session should have been reaped
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = transport.handle_request(get_request)
+          assert_equal(404, response[0])
+        ensure
+          transport.close
+        end
+
+        test "reaper thread cleans up expired sessions and POST returns 404" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Wait for the session to exceed the idle timeout (0.01s)
+          sleep(0.02)
+          transport.send(:reap_expired_sessions)
+
+          # POST to a reaped session should also return 404
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+          response = transport.handle_request(request)
+          assert_equal(404, response[0])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("Session not found", body["error"])
+        ensure
+          transport.close
+        end
+
+        test "close stops the reaper thread" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 3600)
+          reaper_thread = transport.instance_variable_get(:@reaper_thread)
+          assert reaper_thread
+          assert reaper_thread.alive?
+
+          transport.close
+
+          sleep(0.01)
+          refute reaper_thread.alive?
+          assert_nil transport.instance_variable_get(:@reaper_thread)
+        end
+
+        test "reaper thread is not started when session_idle_timeout is nil" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: nil)
+          assert_nil(transport.instance_variable_get(:@reaper_thread))
+        ensure
+          transport.close
+        end
+
+        test "default session_idle_timeout is nil and sessions do not expire" do
+          transport = StreamableHTTPTransport.new(@server)
+          assert_nil(transport.instance_variable_get(:@reaper_thread))
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
+        test "raises ArgumentError when session_idle_timeout is zero" do
+          error = assert_raises(ArgumentError) do
+            StreamableHTTPTransport.new(@server, session_idle_timeout: 0)
+          end
+          assert_equal("session_idle_timeout must be a positive number.", error.message)
+        end
+
+        test "raises ArgumentError when session_idle_timeout is negative" do
+          error = assert_raises(ArgumentError) do
+            StreamableHTTPTransport.new(@server, session_idle_timeout: -1)
+          end
+          assert_equal("session_idle_timeout must be a positive number.", error.message)
+        end
+
+        test "raises ArgumentError when session_idle_timeout is used with stateless mode" do
+          error = assert_raises(ArgumentError) do
+            StreamableHTTPTransport.new(@server, stateless: true, session_idle_timeout: 3600)
+          end
+          assert_equal("session_idle_timeout is not supported in stateless mode.", error.message)
+        end
+
+        test "expired session does not receive targeted notification" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Wait for the session to exceed the idle timeout (0.01s)
+          sleep(0.02)
+
+          result = transport.send_notification("test/notify", { message: "hello" }, session_id: session_id)
+          refute(result)
+        ensure
+          transport.close
+        end
+
+        test "expired session is skipped during broadcast notification" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Attach a mock stream to the session
+          stream = StringIO.new
+          transport.instance_variable_get(:@sessions)[session_id][:stream] = stream
+
+          # Wait for the session to exceed the idle timeout (0.01s)
+          sleep(0.02)
+
+          sent_count = transport.send_notification("test/notify", { message: "hello" }, **{})
+          assert_equal(0, sent_count)
+        ensure
+          transport.close
         end
 
         test "handles POST request with body including JSON-RPC response object and returns with no body" do

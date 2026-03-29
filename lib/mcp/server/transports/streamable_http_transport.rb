@@ -8,18 +8,30 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransport < Transport
-        def initialize(server, stateless: false)
+        def initialize(server, stateless: false, session_idle_timeout: nil)
           super(server)
-          # Maps `session_id` to `{ stream: stream_object, server_session: ServerSession }`.
+          # Maps `session_id` to `{ stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
           @mutex = Mutex.new
 
           @stateless = stateless
+          @session_idle_timeout = session_idle_timeout
+
+          if @session_idle_timeout
+            if @stateless
+              raise ArgumentError, "session_idle_timeout is not supported in stateless mode."
+            elsif @session_idle_timeout <= 0
+              raise ArgumentError, "session_idle_timeout must be a positive number."
+            end
+          end
+
+          start_reaper_thread if @session_idle_timeout
         end
 
         REQUIRED_POST_ACCEPT_TYPES = ["application/json", "text/event-stream"].freeze
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
+        SESSION_REAP_INTERVAL = 60
 
         def handle_request(request)
           case request.env["REQUEST_METHOD"]
@@ -35,6 +47,9 @@ module MCP
         end
 
         def close
+          @reaper_thread&.kill
+          @reaper_thread = nil
+
           @mutex.synchronize do
             @sessions.each_key { |session_id| cleanup_session_unsafe(session_id) }
           end
@@ -56,6 +71,11 @@ module MCP
               session = @sessions[session_id]
               return false unless session && session[:stream]
 
+              if session_expired?(session)
+                cleanup_session_unsafe(session_id)
+                return false
+              end
+
               begin
                 send_to_stream(session[:stream], notification)
                 true
@@ -74,6 +94,11 @@ module MCP
 
               @sessions.each do |sid, session|
                 next unless session[:stream]
+
+                if session_expired?(session)
+                  failed_sessions << sid
+                  next
+                end
 
                 begin
                   send_to_stream(session[:stream], notification)
@@ -96,6 +121,39 @@ module MCP
         end
 
         private
+
+        def start_reaper_thread
+          @reaper_thread = Thread.new do
+            loop do
+              sleep(SESSION_REAP_INTERVAL)
+              reap_expired_sessions
+            rescue StandardError => e
+              MCP.configuration.exception_reporter.call(e, error: "Session reaper error")
+            end
+          end
+        end
+
+        def reap_expired_sessions
+          return unless @session_idle_timeout
+
+          expired_streams = @mutex.synchronize do
+            @sessions.each_with_object([]) do |(session_id, session), streams|
+              next unless session_expired?(session)
+
+              streams << session[:stream] if session[:stream]
+              @sessions.delete(session_id)
+            end
+          end
+
+          expired_streams.each do |stream|
+            # Closing outside the mutex is safe because expired sessions are already
+            # removed from `@sessions` above, so other threads will not find them
+            # and will not attempt to close the same stream.
+            stream.close
+          rescue
+            nil
+          end
+        end
 
         def send_to_stream(stream, data)
           message = data.is_a?(String) ? data : data.to_json
@@ -145,7 +203,9 @@ module MCP
           session_id = extract_session_id(request)
 
           return missing_session_id_response unless session_id
-          return session_not_found_response unless session_exists?(session_id)
+
+          error_response = validate_and_touch_session(session_id)
+          return error_response if error_response
           return session_already_connected_response if get_session_stream(session_id)
 
           setup_sse_stream(session_id)
@@ -242,6 +302,7 @@ module MCP
               @sessions[session_id] = {
                 stream: nil,
                 server_session: server_session,
+                last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
               }
             end
           end
@@ -269,13 +330,16 @@ module MCP
           server_session = nil
           stream = nil
 
-          if session_id && !@stateless
-            @mutex.synchronize do
-              session = @sessions[session_id]
-              return session_not_found_response unless session
+          unless @stateless
+            if session_id
+              error_response = validate_and_touch_session(session_id)
+              return error_response if error_response
 
-              server_session = session[:server_session]
-              stream = session[:stream]
+              @mutex.synchronize do
+                session = @sessions[session_id]
+                server_session = session[:server_session] if session
+                stream = session[:stream] if session
+              end
             end
           end
 
@@ -290,6 +354,22 @@ module MCP
           else
             [200, { "Content-Type" => "application/json" }, [response]]
           end
+        end
+
+        def validate_and_touch_session(session_id)
+          @mutex.synchronize do
+            return session_not_found_response unless (session = @sessions[session_id])
+            return unless @session_idle_timeout
+
+            if session_expired?(session)
+              cleanup_session_unsafe(session_id)
+              return session_not_found_response
+            end
+
+            session[:last_active_at] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          end
+
+          nil
         end
 
         def get_session_stream(session_id)
@@ -396,6 +476,12 @@ module MCP
             { session_id: session_id, error: "Stream closed" },
           )
           raise # Re-raise to exit the keepalive loop
+        end
+
+        def session_expired?(session)
+          return false unless @session_idle_timeout
+
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) - session[:last_active_at] > @session_idle_timeout
         end
       end
     end
