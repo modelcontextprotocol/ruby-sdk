@@ -8,7 +8,7 @@ module MCP
       attr_reader :schema
 
       def initialize(schema = {})
-        @schema = deep_transform_keys(JSON.parse(JSON.dump(schema)), &:to_sym)
+        @schema = JSON.parse(JSON.dump(schema), symbolize_names: true)
         @schema[:type] ||= "object"
         validate_schema!
       end
@@ -25,19 +25,6 @@ module MCP
 
       def fully_validate(data)
         JSON::Validator.fully_validate(to_h, data)
-      end
-
-      def deep_transform_keys(schema, &block)
-        case schema
-        when Hash
-          schema.each_with_object({}) do |(key, value), result|
-            result[yield(key)] = deep_transform_keys(value, &block)
-          end
-        when Array
-          schema.map { |e| deep_transform_keys(e, &block) }
-        else
-          schema
-        end
       end
 
       def validate_schema!

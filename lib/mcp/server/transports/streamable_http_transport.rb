@@ -176,7 +176,7 @@ module MCP
           body = parse_request_body(body_string)
           return body unless body.is_a?(Hash) # Error response
 
-          if body["method"] == "initialize"
+          if body[:method] == "initialize"
             handle_initialization(body_string, body)
           else
             return missing_session_id_response if !@stateless && !session_id
@@ -277,17 +277,17 @@ module MCP
         end
 
         def parse_request_body(body_string)
-          JSON.parse(body_string)
+          JSON.parse(body_string, symbolize_names: true)
         rescue JSON::ParserError, TypeError
           [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
         end
 
         def notification?(body)
-          !body["id"] && !!body["method"]
+          !body[:id] && !!body[:method]
         end
 
         def response?(body)
-          !!body["id"] && !body["method"]
+          !!body[:id] && !body[:method]
         end
 
         def handle_initialization(body_string, body)
