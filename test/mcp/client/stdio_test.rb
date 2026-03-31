@@ -25,7 +25,7 @@ module MCP
         }
 
         # Simulate server responses: initialize response, then tools/list response
-        Thread.new do
+        server_thread = Thread.new do
           # Read and respond to initialize request
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -62,6 +62,7 @@ module MCP
         assert_equal(1, response.dig("result", "tools").size)
         assert_equal("test_tool", response.dig("result", "tools", 0, "name"))
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -85,7 +86,7 @@ module MCP
 
         received_methods = []
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -126,6 +127,7 @@ module MCP
 
         assert_equal(["initialize", "notifications/initialized", "tools/list"], received_methods)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -147,7 +149,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -187,6 +189,7 @@ module MCP
         assert_equal("test-id", response["id"])
         assert_equal([], response.dig("result", "tools"))
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -242,7 +245,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -272,6 +275,7 @@ module MCP
         assert_equal("Server process closed stdout unexpectedly", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -330,7 +334,7 @@ module MCP
 
         received_methods = []
 
-        Thread.new do
+        server_thread = Thread.new do
           # First call: initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -384,6 +388,7 @@ module MCP
           received_methods,
         )
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -415,7 +420,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -447,6 +452,7 @@ module MCP
         assert_equal(:internal_error, error.error_type)
         assert_instance_of(JSON::ParserError, error.original_error)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -468,7 +474,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request and return an error
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -487,6 +493,7 @@ module MCP
         assert_equal("Server initialization failed: Invalid Request", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -534,7 +541,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -563,6 +570,7 @@ module MCP
         assert_equal("Timed out waiting for server response", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -689,7 +697,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request and return a response without result
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -707,6 +715,7 @@ module MCP
         assert_equal("Server initialization failed: missing result in response", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
