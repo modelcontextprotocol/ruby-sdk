@@ -369,5 +369,92 @@ module MCP
       client = Client.new(transport: transport)
       client.call_tool(tool: tool, arguments: arguments)
     end
+
+    def test_tools_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_601, "message" => "Method not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.tools }
+      assert_equal(-32_601, error.code)
+      assert_equal("Method not found", error.message)
+    end
+
+    def test_resources_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_602, "message" => "Invalid params" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.resources }
+      assert_equal(-32_602, error.code)
+    end
+
+    def test_read_resource_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_602, "message" => "Resource not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      assert_raises(Client::ServerError) { client.read_resource(uri: "file:///missing") }
+    end
+
+    def test_get_prompt_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_602, "message" => "Prompt not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      assert_raises(Client::ServerError) { client.get_prompt(name: "missing") }
+    end
+
+    def test_prompts_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_601, "message" => "Method not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      assert_raises(Client::ServerError) { client.prompts }
+    end
+
+    def test_resource_templates_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_601, "message" => "Method not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      assert_raises(Client::ServerError) { client.resource_templates }
+    end
+
+    def test_call_tool_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_602, "message" => "Tool not found" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.call_tool(name: "missing") }
+      assert_equal(-32_602, error.code)
+    end
+
+    def test_server_error_includes_data_field
+      transport = mock
+      mock_response = {
+        "error" => { "code" => -32_603, "message" => "Internal error", "data" => "extra details" },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.tools }
+      assert_equal("extra details", error.data)
+    end
   end
 end
