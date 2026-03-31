@@ -456,5 +456,86 @@ module MCP
       error = assert_raises(Client::ServerError) { client.tools }
       assert_equal("extra details", error.data)
     end
+
+    def test_complete_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_602, "message" => "Invalid params" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.complete(ref: { type: "ref/prompt", name: "missing" }, argument: { name: "arg", value: "" }) }
+      assert_equal(-32_602, error.code)
+    end
+
+    def test_complete_sends_request_and_returns_completion_result
+      transport = mock
+      mock_response = {
+        "result" => {
+          "completion" => {
+            "values" => ["python", "pytorch"],
+            "hasMore" => false,
+          },
+        },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "completion/complete" &&
+          args.dig(:request, :jsonrpc) == "2.0" &&
+          args.dig(:request, :params, :ref) == { type: "ref/prompt", name: "code_review" } &&
+          args.dig(:request, :params, :argument) == { name: "language", value: "py" } &&
+          !args.dig(:request, :params).key?(:context)
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.complete(
+        ref: { type: "ref/prompt", name: "code_review" },
+        argument: { name: "language", value: "py" },
+      )
+
+      assert_equal(["python", "pytorch"], result["values"])
+      refute(result["hasMore"])
+    end
+
+    def test_complete_includes_context_when_provided
+      transport = mock
+      mock_response = {
+        "result" => {
+          "completion" => {
+            "values" => ["flask"],
+            "hasMore" => false,
+          },
+        },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :params, :context) == { arguments: { language: "python" } }
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.complete(
+        ref: { type: "ref/prompt", name: "code_review" },
+        argument: { name: "framework", value: "fla" },
+        context: { arguments: { language: "python" } },
+      )
+
+      assert_equal(["flask"], result["values"])
+    end
+
+    def test_complete_returns_default_when_result_is_missing
+      transport = mock
+      mock_response = { "result" => {} }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.complete(
+        ref: { type: "ref/prompt", name: "test" },
+        argument: { name: "arg", value: "" },
+      )
+
+      assert_equal([], result["values"])
+      refute(result["hasMore"])
+    end
   end
 end

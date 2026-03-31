@@ -488,6 +488,7 @@ module Conformance
       server.server_context = server
 
       configure_resources_read_handler(server)
+      configure_completion_handler(server)
     end
 
     def configure_resources_read_handler(server)
@@ -524,6 +525,35 @@ module Conformance
           ]
         else
           []
+        end
+      end
+    end
+
+    def configure_completion_handler(server)
+      server.completion_handler do |params|
+        ref = params[:ref]
+        argument = params[:argument]
+        value = argument[:value].to_s
+
+        case ref[:type]
+        when "ref/prompt"
+          case ref[:name]
+          when "test_prompt_with_arguments"
+            candidates = case argument[:name]
+            when "arg1"
+              ["value1", "value2", "value3"]
+            when "arg2"
+              ["optionA", "optionB", "optionC"]
+            else
+              []
+            end
+            values = candidates.select { |v| v.start_with?(value) }
+            { completion: { values: values, hasMore: false } }
+          else
+            { completion: { values: [], hasMore: false } }
+          end
+        else
+          { completion: { values: [], hasMore: false } }
         end
       end
     end
