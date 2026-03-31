@@ -6,6 +6,27 @@ require_relative "client/tool"
 
 module MCP
   class Client
+    class ServerError < StandardError
+      attr_reader :code, :data
+
+      def initialize(message, code:, data: nil)
+        super(message)
+        @code = code
+        @data = data
+      end
+    end
+
+    class RequestHandlerError < StandardError
+      attr_reader :error_type, :original_error, :request
+
+      def initialize(message, request, error_type: :internal_error, original_error: nil)
+        super(message)
+        @request = request
+        @error_type = error_type
+        @original_error = original_error
+      end
+    end
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
@@ -33,11 +54,7 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "tools/list",
-      })
+      response = request(method: "tools/list")
 
       response.dig("result", "tools")&.map do |tool|
         Tool.new(
@@ -53,11 +70,7 @@ module MCP
     #
     # @return [Array<Hash>] An array of available resources.
     def resources
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "resources/list",
-      })
+      response = request(method: "resources/list")
 
       response.dig("result", "resources") || []
     end
@@ -67,11 +80,7 @@ module MCP
     #
     # @return [Array<Hash>] An array of available resource templates.
     def resource_templates
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "resources/templates/list",
-      })
+      response = request(method: "resources/templates/list")
 
       response.dig("result", "resourceTemplates") || []
     end
@@ -81,11 +90,7 @@ module MCP
     #
     # @return [Array<Hash>] An array of available prompts.
     def prompts
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "prompts/list",
-      })
+      response = request(method: "prompts/list")
 
       response.dig("result", "prompts") || []
     end
@@ -119,12 +124,7 @@ module MCP
         params[:_meta] = { progressToken: progress_token }
       end
 
-      transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "tools/call",
-        params: params,
-      })
+      request(method: "tools/call", params: params)
     end
 
     # Reads a resource from the server by URI and returns the contents.
@@ -132,12 +132,7 @@ module MCP
     # @param uri [String] The URI of the resource to read.
     # @return [Array<Hash>] An array of resource contents (text or blob).
     def read_resource(uri:)
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "resources/read",
-        params: { uri: uri },
-      })
+      response = request(method: "resources/read", params: { uri: uri })
 
       response.dig("result", "contents") || []
     end
@@ -147,31 +142,34 @@ module MCP
     # @param name [String] The name of the prompt to get.
     # @return [Hash] A hash containing the prompt details.
     def get_prompt(name:)
-      response = transport.send_request(request: {
-        jsonrpc: JsonRpcHandler::Version::V2_0,
-        id: request_id,
-        method: "prompts/get",
-        params: { name: name },
-      })
+      response = request(method: "prompts/get", params: { name: name })
 
       response.fetch("result", {})
     end
 
     private
 
-    def request_id
-      SecureRandom.uuid
+    def request(method:, params: nil)
+      request_body = {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: method,
+      }
+      request_body[:params] = params if params
+
+      response = transport.send_request(request: request_body)
+
+      # Guard with `is_a?(Hash)` because custom transports may return non-Hash values.
+      if response.is_a?(Hash) && response.key?("error")
+        error = response["error"]
+        raise ServerError.new(error["message"], code: error["code"], data: error["data"])
+      end
+
+      response
     end
 
-    class RequestHandlerError < StandardError
-      attr_reader :error_type, :original_error, :request
-
-      def initialize(message, request, error_type: :internal_error, original_error: nil)
-        super(message)
-        @request = request
-        @error_type = error_type
-        @original_error = original_error
-      end
+    def request_id
+      SecureRandom.uuid
     end
   end
 end
