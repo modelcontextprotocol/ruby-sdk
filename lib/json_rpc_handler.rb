@@ -92,7 +92,7 @@ module JsonRpcHandler
     end
 
     begin
-      method = method_finder.call(method_name)
+      method = method_finder.call(method_name, id)
 
       if method.nil?
         return error_response(id: id, id_validation_pattern: id_validation_pattern, error: {

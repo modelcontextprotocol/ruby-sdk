@@ -260,7 +260,7 @@ module MCP
           max_tokens: 100,
         )
       end
-      assert_equal("No active SSE stream for sampling/createMessage request.", error_with_sampling.message)
+      assert_equal("No active stream for sampling/createMessage request.", error_with_sampling.message)
 
       # Session without sampling capability should be rejected.
       session_without_sampling = ServerSession.new(server: @server, transport: transport, session_id: "s2")
@@ -290,7 +290,7 @@ module MCP
           max_tokens: 100,
         )
       end
-      assert_equal("No active SSE stream for sampling/createMessage request.", error.message)
+      assert_equal("No active stream for sampling/createMessage request.", error.message)
     end
 
     test "session init does not overwrite server global client_capabilities" do
@@ -375,7 +375,18 @@ module MCP
           max_tokens: 100,
         )
       end
-      assert_equal("No active SSE stream for sampling/createMessage request.", error.message)
+      assert_equal("No active stream for sampling/createMessage request.", error.message)
+    end
+
+    test "Server#create_sampling_message accepts related_request_id without error" do
+      @server.create_sampling_message(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+        related_request_id: "req-1",
+      )
+
+      request = @mock_transport.requests.first
+      assert_equal "sampling/createMessage", request[:method]
     end
 
     test "create_sampling_message omits nil optional params" do

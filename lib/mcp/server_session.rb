@@ -42,13 +42,13 @@ module MCP
     end
 
     # Sends a `sampling/createMessage` request scoped to this session.
-    def create_sampling_message(**kwargs)
+    def create_sampling_message(related_request_id: nil, **kwargs)
       params = @server.build_sampling_params(client_capabilities, **kwargs)
-      send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params)
+      send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
     end
 
     # Sends a progress notification to this session only.
-    def notify_progress(progress_token:, progress:, total: nil, message: nil)
+    def notify_progress(progress_token:, progress:, total: nil, message: nil, related_request_id: nil)
       params = {
         "progressToken" => progress_token,
         "progress" => progress,
@@ -56,20 +56,20 @@ module MCP
         "message" => message,
       }.compact
 
-      send_to_transport(Methods::NOTIFICATIONS_PROGRESS, params)
+      send_to_transport(Methods::NOTIFICATIONS_PROGRESS, params, related_request_id: related_request_id)
     rescue => e
       @server.report_exception(e, notification: "progress")
     end
 
     # Sends a log message notification to this session only.
-    def notify_log_message(data:, level:, logger: nil)
+    def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
       effective_logging = @logging_message_notification || @server.logging_message_notification
       return unless effective_logging&.should_notify?(level)
 
       params = { "data" => data, "level" => level }
       params["logger"] = logger if logger
 
-      send_to_transport(Methods::NOTIFICATIONS_MESSAGE, params)
+      send_to_transport(Methods::NOTIFICATIONS_MESSAGE, params, related_request_id: related_request_id)
     rescue => e
       @server.report_exception(e, { notification: "log_message" })
     end
@@ -82,9 +82,9 @@ module MCP
     # TODO: When Ruby 2.7 support is dropped, replace with a direct call:
     # `@transport.send_notification(method, params, session_id: @session_id)` and
     # add `**` to `Transport#send_notification` and `StdioTransport#send_notification`.
-    def send_to_transport(method, params)
+    def send_to_transport(method, params, related_request_id: nil)
       if @session_id
-        @transport.send_notification(method, params, session_id: @session_id)
+        @transport.send_notification(method, params, session_id: @session_id, related_request_id: related_request_id)
       else
         @transport.send_notification(method, params)
       end
@@ -96,9 +96,9 @@ module MCP
     # TODO: When Ruby 2.7 support is dropped, replace with a direct call:
     # `@transport.send_request(method, params, session_id: @session_id)` and
     # add `**` to `Transport#send_request` and `StdioTransport#send_request`.
-    def send_to_transport_request(method, params)
+    def send_to_transport_request(method, params, related_request_id: nil)
       if @session_id
-        @transport.send_request(method, params, session_id: @session_id)
+        @transport.send_request(method, params, session_id: @session_id, related_request_id: related_request_id)
       else
         @transport.send_request(method, params)
       end

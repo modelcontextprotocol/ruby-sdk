@@ -46,6 +46,7 @@ module MCP
       notification_target.expects(:create_sampling_message).with(
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
+        related_request_id: nil,
       ).returns({ role: "assistant", content: { type: "text", text: "Hi" } })
 
       context = mock
@@ -67,6 +68,7 @@ module MCP
       context.expects(:create_sampling_message).with(
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
+        related_request_id: nil,
       ).returns({ role: "assistant", content: { type: "text", text: "Fallback" } })
 
       progress = Progress.new(notification_target: notification_target, progress_token: nil)

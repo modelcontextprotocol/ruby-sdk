@@ -621,7 +621,7 @@ describe JsonRpcHandler do
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } },
           id_validation_pattern: custom_pattern,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
         assert_equal "user@example.com", @response[:id]
@@ -633,7 +633,7 @@ describe JsonRpcHandler do
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "id<script>", method: "add", params: { a: 1, b: 2 } },
           id_validation_pattern: custom_pattern,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
 
         assert_rpc_error expected_error: {
           code: -32600,
@@ -649,7 +649,7 @@ describe JsonRpcHandler do
         @response_json = JsonRpcHandler.handle_json(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } }.to_json,
           id_validation_pattern: custom_pattern,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
         @response = JSON.parse(@response_json, symbolize_names: true)
 
         assert_rpc_success expected_result: 3
@@ -667,7 +667,7 @@ describe JsonRpcHandler do
             { jsonrpc: "2.0", id: "req@2", method: "mul", params: { a: 3, b: 4 } },
           ],
           id_validation_pattern: custom_pattern,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
 
         assert @response.is_a?(Array)
         assert_equal ["req@1", "req@2"], @response.map { |r| r[:id] }
@@ -682,7 +682,7 @@ describe JsonRpcHandler do
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "user@example.com", method: "add", params: { a: 1, b: 2 } },
           id_validation_pattern: custom_pattern,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
         assert_equal "user@example.com", @response[:id]
@@ -694,7 +694,7 @@ describe JsonRpcHandler do
         @response = JsonRpcHandler.handle(
           { jsonrpc: "2.0", id: "<script>alert('xss')</script>", method: "add", params: { a: 1, b: 2 } },
           id_validation_pattern: nil,
-        ) { |method_name| @registry[method_name] }
+        ) { |method_name, _request_id| @registry[method_name] }
 
         assert_rpc_success expected_result: 3
         assert_equal "<script>alert('xss')</script>", @response[:id]
@@ -733,11 +733,11 @@ describe JsonRpcHandler do
   end
 
   def handle(request)
-    @response = JsonRpcHandler.handle(request) { |method_name| @registry[method_name] }
+    @response = JsonRpcHandler.handle(request) { |method_name, _request_id| @registry[method_name] }
   end
 
   def handle_json(request_json)
-    @response_json = JsonRpcHandler.handle_json(request_json) { |method_name| @registry[method_name] }
+    @response_json = JsonRpcHandler.handle_json(request_json) { |method_name, _request_id| @registry[method_name] }
     @response = JSON.parse(@response_json, symbolize_names: true) if @response_json
   end
 
