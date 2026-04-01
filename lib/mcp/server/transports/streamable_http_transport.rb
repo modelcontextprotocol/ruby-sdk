@@ -150,8 +150,8 @@ module MCP
             # removed from `@sessions` above, so other threads will not find them
             # and will not attempt to close the same stream.
             stream.close
-          rescue
-            nil
+          rescue StandardError
+            # Ignore close-related errors from already closed/broken streams.
           end
         end
 
@@ -239,8 +239,8 @@ module MCP
 
           begin
             session[:stream]&.close
-          rescue
-            nil
+          rescue StandardError
+            # Ignore close-related errors from already closed/broken streams.
           end
           @sessions.delete(session_id)
         end
