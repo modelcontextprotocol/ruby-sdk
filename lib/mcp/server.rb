@@ -316,13 +316,12 @@ module MCP
           add_instrumentation_data(client: client) if client
 
           result
+        rescue RequestHandlerError => e
+          report_exception(e.original_error || e, { request: request })
+          add_instrumentation_data(error: e.error_type)
+          raise e
         rescue => e
           report_exception(e, { request: request })
-          if e.is_a?(RequestHandlerError)
-            add_instrumentation_data(error: e.error_type)
-            raise e
-          end
-
           add_instrumentation_data(error: :internal_error)
           raise RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
         end
@@ -421,7 +420,7 @@ module MCP
         add_instrumentation_data(error: :missing_required_arguments)
 
         missing = tool.input_schema.missing_required_arguments(arguments).join(", ")
-        return error_tool_response("Missing required arguments: #{missing}")
+        raise RequestHandlerError.new("Missing required arguments: #{missing}", request, error_type: :invalid_params)
       end
 
       if configuration.validate_tool_call_arguments && tool.input_schema
@@ -430,7 +429,7 @@ module MCP
         rescue Tool::InputSchema::ValidationError => e
           add_instrumentation_data(error: :invalid_schema)
 
-          return error_tool_response(e.message)
+          raise RequestHandlerError.new(e.message, request, error_type: :invalid_params)
         end
       end
 
@@ -440,9 +439,12 @@ module MCP
     rescue RequestHandlerError
       raise
     rescue => e
-      report_exception(e, request: request)
-
-      error_tool_response("Internal error calling tool #{tool_name}: #{e.message}")
+      raise RequestHandlerError.new(
+        "Internal error calling tool #{tool_name}: #{e.message}",
+        request,
+        error_type: :internal_error,
+        original_error: e,
+      )
     end
 
     def list_prompts(request)

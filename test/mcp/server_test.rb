@@ -312,7 +312,7 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: tool_name, tool_arguments: tool_args })
     end
 
-    test "#handle tools/call returns error response with isError true if required tool arguments are missing" do
+    test "#handle tools/call returns protocol error in JSON-RPC format if required tool arguments are missing" do
       tool_with_required_argument = Tool.define(
         name: "test_tool",
         title: "Test tool",
@@ -336,10 +336,10 @@ module MCP
 
       response = server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_equal "Missing required arguments: message", response[:result][:content][0][:text]
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Missing required arguments: message"
     end
 
     test "#handle_json tools/call executes tool and returns result" do
@@ -407,17 +407,7 @@ module MCP
       assert_equal({ content: [{ type: "text", content: "OK" }], isError: false }, response[:result])
     end
 
-    test "#handle tools/call returns error response with isError true if the tool raises an error" do
-      @server.configuration.exception_reporter.expects(:call).with do |exception, server_context|
-        assert_not_nil exception
-        assert_equal(
-          {
-            request: { name: "tool_that_raises", arguments: { message: "test" } },
-          },
-          server_context,
-        )
-      end
-
+    test "#handle tools/call returns protocol error in JSON-RPC format if the tool raises an uncaught exception" do
       request = {
         jsonrpc: "2.0",
         method: "tools/call",
@@ -428,13 +418,18 @@ module MCP
         id: 1,
       }
 
+      @server.configuration.exception_reporter.expects(:call).with do |exception, server_context|
+        refute_kind_of MCP::Server::RequestHandlerError, exception
+        assert_equal({ request: request }, server_context)
+      end
+
       response = @server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
     test "registers tools with the same class name in different namespaces" do
@@ -475,7 +470,7 @@ module MCP
       MESSAGE
     end
 
-    test "#handle_json returns error response with isError true if the tool raises an error" do
+    test "#handle_json returns protocol error in JSON-RPC format if the tool raises an uncaught exception" do
       request = JSON.generate({
         jsonrpc: "2.0",
         method: "tools/call",
@@ -487,14 +482,14 @@ module MCP
       })
 
       response = JSON.parse(@server.handle_json(request), symbolize_names: true)
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
-    test "#handle tools/call returns error response with isError true if input_schema raises an error during validation" do
+    test "#handle tools/call returns protocol error in JSON-RPC format if input_schema raises an error during validation" do
       tool = Tool.define(
         name: "tool_with_faulty_schema",
         title: "Tool with faulty schema",
@@ -518,10 +513,10 @@ module MCP
 
       response = server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:result][:content][0][:text])
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:error][:data])
     end
 
     test "#handle tools/call returns JSON-RPC error for unknown tool" do
@@ -1310,7 +1305,7 @@ module MCP
       refute response[:result].key?(:instructions)
     end
 
-    test "tools/call handles missing arguments field" do
+    test "tools/call returns protocol error in JSON-RPC format for missing arguments" do
       server = Server.new(
         tools: [TestTool],
         configuration: Configuration.new(validate_tool_call_arguments: true),
@@ -1329,12 +1324,13 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_includes response[:result][:content][0][:text], "Missing required arguments"
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Missing required arguments"
     end
 
-    test "tools/call validates arguments against input schema when validate_tool_call_arguments is true" do
+    test "tools/call returns protocol error in JSON-RPC format for invalid arguments when validate_tool_call_arguments is true" do
       server = Server.new(
         tools: [TestTool],
         configuration: Configuration.new(validate_tool_call_arguments: true),
@@ -1354,9 +1350,10 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_includes response[:result][:content][0][:text], "Invalid arguments"
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Invalid arguments"
     end
 
     test "tools/call skips argument validation when validate_tool_call_arguments is false" do
@@ -1441,7 +1438,7 @@ module MCP
       assert_equal "OK", response[:result][:content][0][:content]
     end
 
-    test "tools/call disallows additional properties when additionalProperties set to false" do
+    test "tools/call returns protocol error in JSON-RPC format when additionalProperties set to false" do
       server = Server.new(
         tools: [TestToolWithAdditionalPropertiesSetToFalse],
         configuration: Configuration.new(validate_tool_call_arguments: true),
@@ -1464,9 +1461,10 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_includes response[:result][:content][0][:text], "Invalid arguments"
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Invalid arguments"
     end
 
     test "#handle completion/complete returns default completion result" do

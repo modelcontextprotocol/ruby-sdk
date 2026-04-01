@@ -199,7 +199,7 @@ module MCP
         response[:result][:content][0][:content]
     end
 
-    test "tool with required server_context fails when server has no context" do
+    test "tool with required server_context returns protocol error in JSON-RPC format when server has no context" do
       server_no_context = Server.new(
         name: "test_server_no_context",
         tools: [ToolWithRequiredContext],
@@ -217,10 +217,10 @@ module MCP
 
       response = server_no_context.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_with_required_context: /, response[:result][:content][0][:text])
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_with_required_context: /, response[:error][:data])
     end
 
     test "call_tool_with_args correctly detects server_context parameter presence" do
