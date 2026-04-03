@@ -1468,8 +1468,10 @@ module MCP
     end
 
     test "#handle completion/complete returns default completion result" do
+      prompt = Prompt.define(name: "test") {}
       server = Server.new(
         name: "test_server",
+        prompts: [prompt],
         capabilities: { completions: {} },
       )
 
@@ -1494,6 +1496,432 @@ module MCP
         },
         response,
       )
+    end
+
+    test "#handle completion/complete with custom handler for ref/prompt" do
+      prompt = Prompt.define(
+        name: "code_review",
+        arguments: [Prompt::Argument.new(name: "language", required: true)],
+      ) {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["python", "pytorch", "pyside"], total: 10, hasMore: true } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "code_review" },
+          argument: { name: "language", value: "py" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["python", "pytorch", "pyside"], total: 10, hasMore: true } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete with custom handler for ref/resource" do
+      template = ResourceTemplate.new(
+        uri_template: "file:///{path}",
+        name: "file",
+      )
+      server = Server.new(
+        name: "test_server",
+        resource_templates: [template],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["file:///src", "file:///spec"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "file:///{path}" },
+          argument: { name: "path", value: "s" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["file:///src", "file:///spec"], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete passes context arguments to handler" do
+      prompt = Prompt.define(
+        name: "code_review",
+        arguments: [
+          Prompt::Argument.new(name: "language", required: true),
+          Prompt::Argument.new(name: "framework", required: false),
+        ],
+      ) {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      received_params = nil
+      server.completion_handler do |params|
+        received_params = params
+        { completion: { values: ["flask"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "code_review" },
+          argument: { name: "framework", value: "fla" },
+          context: { arguments: { language: "python" } },
+        },
+      })
+
+      assert_equal({ language: "python" }, received_params.dig(:context, :arguments))
+    end
+
+    test "#handle completion/complete truncates values exceeding 100 items" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: (1..150).map(&:to_s), hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      completion = response[:result][:completion]
+      assert_equal 100, completion[:values].length
+      assert_equal "1", completion[:values].first
+      assert_equal "100", completion[:values].last
+      assert(completion[:hasMore])
+      assert_equal 150, completion[:total]
+    end
+
+    test "#handle completion/complete returns error for nonexistent prompt" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "nonexistent" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for nonexistent resource template" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "unknown://template" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for invalid ref type" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/invalid" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for missing ref" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: {},
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete with custom handler for ref/resource with resource URI" do
+      resource = Resource.new(
+        uri: "file:///README.md",
+        name: "readme",
+      )
+      server = Server.new(
+        name: "test_server",
+        resources: [resource],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["file:///README.md"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "file:///README.md" },
+          argument: { name: "path", value: "R" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["file:///README.md"], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete returns error for missing argument" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for missing argument value" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns default when handler returns nil" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        nil
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: [], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete with string-keyed handler result" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { "completion" => { "values" => ["alpha", "beta"], "hasMore" => true } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert_equal ["alpha", "beta"], response[:result][:completion][:values]
+      assert response[:result][:completion][:hasMore]
+    end
+
+    test "#handle completion/complete returns invalid params for non-Hash params" do
+      server = Server.new(
+        name: "test_server",
+        prompts: [],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: "invalid",
+      })
+
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error when completions capability is not declared" do
+      server = Server.new(
+        name: "test_server",
+        prompts: [],
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert response[:error]
+      assert_includes response[:error][:data], "completions"
     end
 
     test "#handle resources/subscribe returns empty result" do

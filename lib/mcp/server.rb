@@ -24,6 +24,12 @@ module MCP
     UNSUPPORTED_PROPERTIES_UNTIL_2025_06_18 = [:description, :icons].freeze
     UNSUPPORTED_PROPERTIES_UNTIL_2025_03_26 = [:title, :websiteUrl].freeze
 
+    DEFAULT_COMPLETION_RESULT = { completion: { values: [], hasMore: false } }.freeze
+
+    # Servers return an array of completion values ranked by relevance, with maximum 100 items per response.
+    # https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/completion#completion-results
+    MAX_COMPLETION_VALUES = 100
+
     class RequestHandlerError < StandardError
       attr_reader :error_type
       attr_reader :original_error
@@ -100,12 +106,12 @@ module MCP
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
         Methods::NOTIFICATIONS_PROGRESS => ->(_) {},
+        Methods::COMPLETION_COMPLETE => ->(_) { DEFAULT_COMPLETION_RESULT },
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
 
         # No op handlers for currently unsupported methods
         Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
-        Methods::COMPLETION_COMPLETE => ->(_) { { completion: { values: [], hasMore: false } } },
         Methods::ELICITATION_CREATE => ->(_) {},
       }
       @transport = transport
@@ -208,6 +214,15 @@ module MCP
       @handlers[Methods::RESOURCES_READ] = block
     end
 
+    # Sets a custom handler for `completion/complete` requests.
+    # The block receives the parsed request params and should return completion values.
+    #
+    # @yield [params] The request params containing `:ref`, `:argument`, and optionally `:context`.
+    # @yieldreturn [Hash] A hash with `:completion` key containing `:values`, optional `:total`, and `:hasMore`.
+    def completion_handler(&block)
+      @handlers[Methods::COMPLETION_COMPLETE] = block
+    end
+
     private
 
     def validate!
@@ -307,6 +322,8 @@ module MCP
             { resourceTemplates: @handlers[Methods::RESOURCES_TEMPLATES_LIST].call(params) }
           when Methods::TOOLS_CALL
             call_tool(params, session: session)
+          when Methods::COMPLETION_COMPLETE
+            complete(params)
           when Methods::LOGGING_SET_LEVEL
             configure_logging_level(params, session: session)
           else
@@ -481,6 +498,14 @@ module MCP
       @resource_templates.map(&:to_h)
     end
 
+    def complete(params)
+      validate_completion_params!(params)
+
+      result = @handlers[Methods::COMPLETION_COMPLETE].call(params)
+
+      normalize_completion_result(result)
+    end
+
     def report_exception(exception, server_context = {})
       configuration.exception_reporter.call(exception, server_context)
     end
@@ -538,6 +563,57 @@ module MCP
       else
         server_context
       end
+    end
+
+    def validate_completion_params!(params)
+      unless params.is_a?(Hash)
+        raise RequestHandlerError.new("Invalid params", params, error_type: :invalid_params)
+      end
+
+      ref = params[:ref]
+      if ref.nil? || ref[:type].nil?
+        raise RequestHandlerError.new("Missing or invalid ref", params, error_type: :invalid_params)
+      end
+
+      argument = params[:argument]
+      if argument.nil? || argument[:name].nil? || !argument.key?(:value)
+        raise RequestHandlerError.new("Missing argument name or value", params, error_type: :invalid_params)
+      end
+
+      case ref[:type]
+      when "ref/prompt"
+        unless @prompts[ref[:name]]
+          raise RequestHandlerError.new("Prompt not found: #{ref[:name]}", params, error_type: :invalid_params)
+        end
+      when "ref/resource"
+        uri = ref[:uri]
+        found = @resource_index.key?(uri) || @resource_templates.any? { |t| t.uri_template == uri }
+        unless found
+          raise RequestHandlerError.new("Resource not found: #{uri}", params, error_type: :invalid_params)
+        end
+      else
+        raise RequestHandlerError.new("Invalid ref type: #{ref[:type]}", params, error_type: :invalid_params)
+      end
+    end
+
+    def normalize_completion_result(result)
+      return DEFAULT_COMPLETION_RESULT unless result.is_a?(Hash)
+
+      completion = result[:completion] || result["completion"]
+      return DEFAULT_COMPLETION_RESULT unless completion.is_a?(Hash)
+
+      values = completion[:values] || completion["values"] || []
+      total = completion[:total] || completion["total"]
+      has_more = completion[:hasMore] || completion["hasMore"] || false
+
+      count = values.length
+      if count > MAX_COMPLETION_VALUES
+        has_more = true
+        total ||= count
+        values = values.first(MAX_COMPLETION_VALUES)
+      end
+
+      { completion: { values: values, total: total, hasMore: has_more }.compact }
     end
   end
 end

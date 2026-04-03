@@ -147,6 +147,22 @@ module MCP
       response.fetch("result", {})
     end
 
+    # Requests completion suggestions from the server for a prompt argument or resource template URI.
+    #
+    # @param ref [Hash] The reference, e.g. `{ type: "ref/prompt", name: "my_prompt" }`
+    #   or `{ type: "ref/resource", uri: "file:///{path}" }`.
+    # @param argument [Hash] The argument being completed, e.g. `{ name: "language", value: "py" }`.
+    # @param context [Hash, nil] Optional context with previously resolved arguments.
+    # @return [Hash] The completion result with `"values"`, `"hasMore"`, and optionally `"total"`.
+    def complete(ref:, argument:, context: nil)
+      params = { ref: ref, argument: argument }
+      params[:context] = context if context
+
+      response = request(method: "completion/complete", params: params)
+
+      response.dig("result", "completion") || { "values" => [], "hasMore" => false }
+    end
+
     private
 
     def request(method:, params: nil)

@@ -50,6 +50,7 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/list` - Lists all registered resources and their schemas
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
+- `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
 
 ### Custom Methods
 
@@ -183,6 +184,53 @@ The `server_context.report_progress` method accepts:
 - `report_progress` is a no-op when no `progressToken` was provided by the client
 - Supports both numeric and string progress tokens
 
+### Completions
+
+MCP spec includes [Completions](https://modelcontextprotocol.io/specification/latest/server/utilities/completion),
+which enable servers to provide autocompletion suggestions for prompt arguments and resource URIs.
+
+To enable completions, declare the `completions` capability and register a handler:
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  prompts: [CodeReviewPrompt],
+  resource_templates: [FileTemplate],
+  capabilities: { completions: {} },
+)
+
+server.completion_handler do |params|
+  ref = params[:ref]
+  argument = params[:argument]
+  value = argument[:value]
+
+  case ref[:type]
+  when "ref/prompt"
+    values = case argument[:name]
+    when "language"
+      ["python", "pytorch", "pyside"].select { |v| v.start_with?(value) }
+    else
+      []
+    end
+    { completion: { values: values, hasMore: false } }
+  when "ref/resource"
+    { completion: { values: [], hasMore: false } }
+  end
+end
+```
+
+The handler receives a `params` hash with:
+
+- `ref` - The reference (`{ type: "ref/prompt", name: "..." }` or `{ type: "ref/resource", uri: "..." }`)
+- `argument` - The argument being completed (`{ name: "...", value: "..." }`)
+- `context` (optional) - Previously resolved arguments (`{ arguments: { ... } }`)
+
+The handler must return a hash with a `completion` key containing `values` (array of strings), and optionally `total` and `hasMore`.
+The SDK automatically enforces the 100-item limit per the MCP specification.
+
+The server validates that the referenced prompt, resource, or resource template is registered before calling the handler.
+Requests for unknown references return an error.
+
 ### Logging
 
 The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
@@ -298,7 +346,6 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session
 ### Unsupported Features (to be implemented in future versions)
 
 - Resource subscriptions
-- Completions
 - Elicitation
 
 ### Usage
@@ -1056,6 +1103,7 @@ This class supports:
 - Resource reading via the `resources/read` method (`MCP::Client#read_resources`)
 - Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
 - Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
+- Completion requests via the `completion/complete` method (`MCP::Client#complete`)
 - Automatic JSON-RPC 2.0 message formatting
 - UUID request ID generation
 
