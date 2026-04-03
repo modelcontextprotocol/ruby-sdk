@@ -50,8 +50,12 @@ module MCP
           @reaper_thread&.kill
           @reaper_thread = nil
 
-          @mutex.synchronize do
-            @sessions.each_key { |session_id| cleanup_session_unsafe(session_id) }
+          removed_sessions = @mutex.synchronize do
+            @sessions.each_key.filter_map { |session_id| cleanup_session_unsafe(session_id) }
+          end
+
+          removed_sessions.each do |session|
+            close_stream_safely(session[:stream])
           end
         end
 
@@ -65,15 +69,17 @@ module MCP
           }
           notification[:params] = params if params
 
-          @mutex.synchronize do
+          streams_to_close = []
+
+          result = @mutex.synchronize do
             if session_id
               # Send to specific session
               session = @sessions[session_id]
-              return false unless session && session[:stream]
+              next false unless session && session[:stream]
 
               if session_expired?(session)
-                cleanup_session_unsafe(session_id)
-                return false
+                cleanup_and_collect_stream(session_id, streams_to_close)
+                next false
               end
 
               begin
@@ -84,7 +90,7 @@ module MCP
                   e,
                   { session_id: session_id, error: "Failed to send notification" },
                 )
-                cleanup_session_unsafe(session_id)
+                cleanup_and_collect_stream(session_id, streams_to_close)
                 false
               end
             else
@@ -113,11 +119,17 @@ module MCP
               end
 
               # Clean up failed sessions
-              failed_sessions.each { |sid| cleanup_session_unsafe(sid) }
+              failed_sessions.each { |sid| cleanup_and_collect_stream(sid, streams_to_close) }
 
               sent_count
             end
           end
+
+          streams_to_close.each do |stream|
+            close_stream_safely(stream)
+          end
+
+          result
         end
 
         private
@@ -136,22 +148,16 @@ module MCP
         def reap_expired_sessions
           return unless @session_idle_timeout
 
-          expired_streams = @mutex.synchronize do
-            @sessions.each_with_object([]) do |(session_id, session), streams|
-              next unless session_expired?(session)
+          removed_sessions = @mutex.synchronize do
+            @sessions.each_key.filter_map do |session_id|
+              next unless session_expired?(@sessions[session_id])
 
-              streams << session[:stream] if session[:stream]
-              @sessions.delete(session_id)
+              cleanup_session_unsafe(session_id)
             end
           end
 
-          expired_streams.each do |stream|
-            # Closing outside the mutex is safe because expired sessions are already
-            # removed from `@sessions` above, so other threads will not find them
-            # and will not attempt to close the same stream.
-            stream.close
-          rescue StandardError
-            # Ignore close-related errors from already closed/broken streams.
+          removed_sessions.each do |session|
+            close_stream_safely(session[:stream])
           end
         end
 
@@ -228,21 +234,30 @@ module MCP
         end
 
         def cleanup_session(session_id)
-          @mutex.synchronize do
+          session = @mutex.synchronize do
             cleanup_session_unsafe(session_id)
           end
+
+          close_stream_safely(session[:stream]) if session
         end
 
+        # Removes a session from `@sessions` and returns it. Does not close the stream.
+        # Callers must close the stream outside the mutex to avoid holding the lock during
+        # potentially blocking I/O.
         def cleanup_session_unsafe(session_id)
-          session = @sessions[session_id]
-          return unless session
-
-          begin
-            session[:stream]&.close
-          rescue StandardError
-            # Ignore close-related errors from already closed/broken streams.
-          end
           @sessions.delete(session_id)
+        end
+
+        def cleanup_and_collect_stream(session_id, streams_to_close)
+          return unless (removed = cleanup_session_unsafe(session_id))
+
+          streams_to_close << removed[:stream]
+        end
+
+        def close_stream_safely(stream)
+          stream&.close
+        rescue StandardError
+          # Ignore close-related errors from already closed/broken streams.
         end
 
         def extract_session_id(request)
@@ -357,19 +372,24 @@ module MCP
         end
 
         def validate_and_touch_session(session_id)
-          @mutex.synchronize do
-            return session_not_found_response unless (session = @sessions[session_id])
-            return unless @session_idle_timeout
+          removed = nil
+
+          response = @mutex.synchronize do
+            next session_not_found_response unless (session = @sessions[session_id])
+            next unless @session_idle_timeout
 
             if session_expired?(session)
-              cleanup_session_unsafe(session_id)
-              return session_not_found_response
+              removed = cleanup_session_unsafe(session_id)
+              next session_not_found_response
             end
 
             session[:last_active_at] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            nil
           end
 
-          nil
+          close_stream_safely(removed[:stream]) if removed
+
+          response
         end
 
         def get_session_stream(session_id)
