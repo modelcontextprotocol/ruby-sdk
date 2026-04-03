@@ -350,6 +350,13 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session
 
 ### Usage
 
+> [!IMPORTANT]
+> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
+> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
+> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
+> do not share memory, which breaks session management and SSE connections.
+> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
+
 #### Rails Controller
 
 When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
