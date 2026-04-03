@@ -857,6 +857,37 @@ module MCP
           assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
         end
 
+        test "send_notification closes stream outside mutex on write error" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Use a mock stream that verifies mutex is NOT held during close.
+          mutex = @transport.instance_variable_get(:@mutex)
+          closed_outside_mutex = false
+          mock_stream = Object.new
+          mock_stream.define_singleton_method(:write) { |_data| raise Errno::EPIPE }
+          mock_stream.define_singleton_method(:close) do
+            if mutex.try_lock
+              closed_outside_mutex = true
+              mutex.unlock
+            end
+          end
+
+          @transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+
+          result = @transport.send_notification("test", { message: "test" }, session_id: session_id)
+
+          refute result
+          assert closed_outside_mutex, "Stream should be closed outside the mutex"
+          assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
+        end
+
         test "send_notification broadcast continues when one session raises Errno::ECONNRESET" do
           # Create two sessions.
           init_request1 = create_rack_request(
@@ -1609,6 +1640,41 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal("Session not found", body["error"])
+        ensure
+          transport.close
+        end
+
+        test "reap_expired_sessions closes stream outside mutex" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Replace the stream with one that verifies mutex is NOT held during close.
+          mutex = transport.instance_variable_get(:@mutex)
+          closed_outside_mutex = false
+          mock_stream = Object.new
+          mock_stream.define_singleton_method(:close) do
+            # If stream.close runs outside the mutex, try_lock succeeds.
+            if mutex.try_lock
+              closed_outside_mutex = true
+              mutex.unlock
+            end
+          end
+          transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+
+          sleep(0.02) # Wait for session to expire.
+
+          transport.send(:reap_expired_sessions)
+
+          assert(closed_outside_mutex, "Stream should be closed outside the mutex")
+          assert_empty(transport.instance_variable_get(:@sessions))
         ensure
           transport.close
         end
