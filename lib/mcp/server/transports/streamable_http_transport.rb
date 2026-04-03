@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "securerandom"
 require_relative "../../transport"
 
 module MCP
@@ -16,6 +15,7 @@ module MCP
 
           @stateless = stateless
           @session_idle_timeout = session_idle_timeout
+          @pending_responses = {}
 
           if @session_idle_timeout
             if @stateless
@@ -132,6 +132,77 @@ module MCP
           result
         end
 
+        # Sends a server-to-client JSON-RPC request (e.g., `sampling/createMessage`) and
+        # blocks until the client responds.
+        #
+        # Uses a `Queue` for cross-thread synchronization. This method creates a `Queue`,
+        # sends the request via SSE stream, then blocks on `queue.pop`.
+        # When the client POSTs a response, `handle_response` matches it by `request_id`
+        # and pushes the result onto the queue, unblocking this thread.
+        def send_request(method, params = nil, session_id: nil)
+          if @stateless
+            raise "Stateless mode does not support server-to-client requests."
+          end
+
+          unless session_id
+            raise "session_id is required for server-to-client requests."
+          end
+
+          request_id = generate_request_id
+          queue = Queue.new
+
+          request = { jsonrpc: "2.0", id: request_id, method: method }
+          request[:params] = params if params
+
+          sent = false
+
+          @mutex.synchronize do
+            unless (session = @sessions[session_id])
+              raise "Session not found: #{session_id}."
+            end
+
+            @pending_responses[request_id] = { queue: queue, session_id: session_id }
+
+            if (stream = session[:stream])
+              begin
+                send_to_stream(stream, request)
+                sent = true
+              rescue *STREAM_WRITE_ERRORS
+                cleanup_session_unsafe(session_id)
+              end
+            end
+          end
+
+          # TODO: Replace with event store + replay when resumability is implemented.
+          # Resumability is a separate MCP specification feature (SSE event IDs, Last-Event-ID replay,
+          # event store management) independent of sampling.
+          # See: https://modelcontextprotocol.io/specification/latest/basic/transports#resumability-and-redelivery
+          #
+          # The TypeScript and Python SDKs buffer messages and replay on reconnect.
+          # Until then, raise to prevent queue.pop from blocking indefinitely.
+          unless sent
+            raise "No active SSE stream for #{method} request."
+          end
+
+          response = queue.pop
+
+          if response.is_a?(Hash) && response.key?(:error)
+            raise StandardError, "Client returned an error for #{method} request (code: #{response[:error][:code]}): #{response[:error][:message]}"
+          end
+
+          if response == :session_closed
+            raise "SSE session closed while waiting for #{method} response."
+          end
+
+          response
+        ensure
+          if request_id
+            @mutex.synchronize do
+              @pending_responses.delete(request_id)
+            end
+          end
+        end
+
         private
 
         def start_reaper_thread
@@ -187,8 +258,12 @@ module MCP
           else
             return missing_session_id_response if !@stateless && !session_id
 
-            if notification?(body) || response?(body)
+            if notification?(body)
               handle_accepted
+            elsif response?(body)
+              return session_not_found_response if !@stateless && !session_exists?(session_id)
+
+              handle_response(body, session_id: session_id)
             else
               handle_regular_request(body_string, session_id)
             end
@@ -245,7 +320,16 @@ module MCP
         # Callers must close the stream outside the mutex to avoid holding the lock during
         # potentially blocking I/O.
         def cleanup_session_unsafe(session_id)
-          @sessions.delete(session_id)
+          session = @sessions.delete(session_id)
+
+          # Unblock threads waiting on pending responses for this session.
+          @pending_responses.each_value do |pending_response|
+            if pending_response[:session_id] == session_id
+              pending_response[:queue].push(:session_closed)
+            end
+          end
+
+          session
         end
 
         def cleanup_and_collect_stream(session_id, streams_to_close)
@@ -303,6 +387,24 @@ module MCP
 
         def response?(body)
           !!body[:id] && !body[:method]
+        end
+
+        # Verifies that the response came from the expected session to prevent
+        # cross-session response injection if request IDs are ever leaked.
+        def handle_response(body, session_id:)
+          request_id = body[:id]
+          @mutex.synchronize do
+            if (pending_response = @pending_responses[request_id]) && pending_response[:session_id] == session_id
+              if body.key?(:error)
+                error = body[:error]
+                pending_response[:queue].push(error: { code: error[:code], message: error[:message] })
+              else
+                pending_response[:queue].push(body[:result])
+              end
+            end
+          end
+
+          handle_accepted
         end
 
         def handle_initialization(body_string, body)

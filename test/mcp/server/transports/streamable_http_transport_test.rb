@@ -1395,6 +1395,294 @@ module MCP
           assert_equal "Internal server error", body["error"]
         end
 
+        test "send_request raises error in stateless mode" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          error = assert_raises(RuntimeError) do
+            stateless_transport.send_request("sampling/createMessage", { "messages" => [] })
+          end
+
+          assert_equal("Stateless mode does not support server-to-client requests.", error.message)
+        end
+
+        test "send_request raises error when session_id is not provided" do
+          error = assert_raises(RuntimeError) do
+            @transport.send_request("sampling/createMessage", { "messages" => [] })
+          end
+
+          assert_equal("session_id is required for server-to-client requests.", error.message)
+        end
+
+        test "send_request raises error when session is not found" do
+          error = assert_raises(RuntimeError) do
+            @transport.send_request("sampling/createMessage", { "messages" => [] }, session_id: "nonexistent")
+          end
+
+          assert_equal("Session not found: nonexistent.", error.message)
+        end
+
+        test "send_request raises error when no active SSE streams" do
+          # Create session but do NOT connect SSE.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          error = assert_raises(RuntimeError) do
+            @transport.send_request("sampling/createMessage", { "messages" => [] }, session_id: session_id)
+          end
+
+          assert_equal("No active SSE stream for sampling/createMessage request.", error.message)
+        end
+
+        test "send_request sends via SSE and waits for response" do
+          # Create session.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+
+          sleep(0.1) # Give the stream time to set up.
+
+          # Send request in background.
+          result_queue = Queue.new
+          Thread.new do
+            result = @transport.send_request(
+              "sampling/createMessage",
+              { messages: [{ role: "user", content: { type: "text", text: "Hello" } }], maxTokens: 100 },
+              session_id: session_id,
+            )
+            result_queue.push(result)
+          end
+
+          sleep(0.1) # Wait for the request to be sent.
+
+          # Verify request was sent to stream.
+          io.rewind
+          output = io.read
+          assert_includes output, "sampling/createMessage"
+
+          # Parse the sent request to get its ID.
+          data_lines = output.lines.select { |line| line.start_with?("data: ") }
+          request_data = JSON.parse(data_lines.first.sub("data: ", ""))
+          request_id = request_data["id"]
+
+          # Simulate client response.
+          client_response = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: request_id,
+              result: { role: "assistant", content: { type: "text", text: "Hi there" } },
+            }.to_json,
+          )
+          @transport.handle_request(client_response)
+
+          # Get result.
+          result = result_queue.pop
+          assert_equal "assistant", result[:role]
+          assert_equal "Hi there", result[:content][:text]
+        end
+
+        test "send_request ignores response from wrong session" do
+          # Create two sessions.
+          init_a = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init-a" }.to_json,
+          )
+          resp_a = @transport.handle_request(init_a)
+          session_a = resp_a[1]["Mcp-Session-Id"]
+
+          init_b = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init-b" }.to_json,
+          )
+          resp_b = @transport.handle_request(init_b)
+          session_b = resp_b[1]["Mcp-Session-Id"]
+
+          # Connect SSE for session A.
+          io_a = StringIO.new
+          get_a = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_a })
+          response_a = @transport.handle_request(get_a)
+          response_a[2].call(io_a) if response_a[2].is_a?(Proc)
+
+          sleep(0.1) # Give the stream time to set up.
+
+          # Send sampling request targeting session A.
+          result_queue = Queue.new
+          Thread.new do
+            result = @transport.send_request(
+              "sampling/createMessage",
+              { messages: [{ role: "user", content: { type: "text", text: "Hello" } }], maxTokens: 100 },
+              session_id: session_a,
+            )
+            result_queue.push(result)
+          end
+
+          sleep(0.1) # Wait for the request to be sent.
+
+          # Get the request ID from session A's stream.
+          io_a.rewind
+          data_lines = io_a.read.lines.select { |line| line.start_with?("data: ") }
+          request_data = JSON.parse(data_lines.first.sub("data: ", ""))
+          request_id = request_data["id"]
+
+          # Session B tries to respond (cross-session injection attempt).
+          cross_session_response = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_b },
+            { jsonrpc: "2.0", id: request_id, result: { role: "assistant", content: { type: "text", text: "injected" } } }.to_json,
+          )
+          @transport.handle_request(cross_session_response)
+
+          # The request should still be pending (not resolved by wrong session).
+          assert_empty(result_queue, "Response from wrong session should be ignored")
+
+          # Now send the correct response from session A.
+          correct_response = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_a },
+            { jsonrpc: "2.0", id: request_id, result: { role: "assistant", content: { type: "text", text: "correct" } } }.to_json,
+          )
+          @transport.handle_request(correct_response)
+
+          result = result_queue.pop
+          assert_equal "correct", result[:content][:text]
+        end
+
+        test "send_request raises on error response from client" do
+          # Create session.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+
+          sleep(0.1) # Give the stream time to set up.
+
+          error_queue = Queue.new
+          Thread.new do
+            @transport.send_request("sampling/createMessage", { messages: [] }, session_id: session_id)
+          rescue => e
+            error_queue.push(e)
+          end
+
+          sleep(0.1) # Wait for the request to be sent.
+
+          # Get request ID from stream.
+          io.rewind
+          data_lines = io.read.lines.select { |line| line.start_with?("data: ") }
+          request_data = JSON.parse(data_lines.first.sub("data: ", ""))
+          request_id = request_data["id"]
+
+          # Send error response.
+          error_response = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: request_id,
+              error: { code: -1, message: "User rejected" },
+            }.to_json,
+          )
+          @transport.handle_request(error_response)
+
+          error = error_queue.pop
+          assert_kind_of StandardError, error
+          assert_equal("Client returned an error for sampling/createMessage request (code: -1): User rejected", error.message)
+        end
+
+        test "send_request unblocks when session is cleaned up" do
+          # Create session.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+
+          sleep(0.1) # Give the stream time to set up.
+
+          error_queue = Queue.new
+          Thread.new do
+            @transport.send_request("sampling/createMessage", { messages: [] }, session_id: session_id)
+          rescue => e
+            error_queue.push(e)
+          end
+
+          sleep(0.1) # Wait for the request to be sent.
+
+          # Delete the session to trigger cleanup (simulates client disconnect).
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          @transport.handle_request(delete_request)
+
+          error = error_queue.pop
+          assert_kind_of RuntimeError, error
+          assert_equal("SSE session closed while waiting for sampling/createMessage response.", error.message)
+        end
+
         test "POST notifications/initialized returns 202 with no body" do
           # Create a session first (optional for notification, but keep consistent with flow)
           init_request = create_rack_request(
@@ -1819,6 +2107,45 @@ module MCP
           assert_equal 202, response[0]
           assert_equal({}, response[1])
           assert_equal([], response[2])
+        end
+
+        test "POST response without session ID returns 400" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", result: "success", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Missing session ID", body["error"]
+        end
+
+        test "POST response with invalid session ID returns 404" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          @transport.handle_request(init_request)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => "invalid-session-id",
+            },
+            { jsonrpc: "2.0", result: "success", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 404, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
         end
 
         test "handle_regular_request returns 404 for unknown session_id" do

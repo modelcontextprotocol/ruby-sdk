@@ -41,6 +41,46 @@ module MCP
       assert_raises(NoMethodError) { server_context.nonexistent_method }
     end
 
+    test "ServerContext#create_sampling_message delegates to notification_target over context" do
+      notification_target = mock
+      notification_target.expects(:create_sampling_message).with(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      ).returns({ role: "assistant", content: { type: "text", text: "Hi" } })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_sampling_message(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      )
+
+      assert_equal "Hi", result[:content][:text]
+    end
+
+    test "ServerContext#create_sampling_message falls back to context when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      context.expects(:create_sampling_message).with(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      ).returns({ role: "assistant", content: { type: "text", text: "Fallback" } })
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_sampling_message(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      )
+
+      assert_equal "Fallback", result[:content][:text]
+    end
+
     test "ServerContext delegates to custom object context" do
       context = Object.new
       def context.custom_method

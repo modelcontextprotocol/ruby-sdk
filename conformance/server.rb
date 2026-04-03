@@ -156,7 +156,6 @@ module Conformance
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestSampling < MCP::Tool
       tool_name "test_sampling"
       description "A tool that requests LLM sampling from the client"
@@ -166,11 +165,15 @@ module Conformance
       )
 
       class << self
-        def call(prompt:)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Sampling not supported in this SDK version").to_h],
-            error: true,
+        def call(prompt:, server_context:)
+          result = server_context.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: prompt } }],
+            max_tokens: 100,
           )
+          model = result[:model] || "unknown"
+          text = result.dig(:content, :text) || ""
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("LLM response: #{text} (model: #{model})").to_h])
         end
       end
     end

@@ -53,6 +53,41 @@ module MCP
           MCP.configuration.exception_reporter.call(e, { error: "Failed to send notification" })
           false
         end
+
+        def send_request(method, params = nil)
+          request_id = generate_request_id
+          request = { jsonrpc: "2.0", id: request_id, method: method }
+          request[:params] = params if params
+
+          begin
+            send_response(request)
+          rescue => e
+            MCP.configuration.exception_reporter.call(e, { error: "Failed to send request" })
+            raise
+          end
+
+          while @open && (line = $stdin.gets)
+            begin
+              parsed = JSON.parse(line.strip, symbolize_names: true)
+            rescue JSON::ParserError => e
+              MCP.configuration.exception_reporter.call(e, { error: "Failed to parse response" })
+              raise
+            end
+
+            if parsed[:id] == request_id && !parsed.key?(:method)
+              if parsed[:error]
+                raise StandardError, "Client returned an error for #{method} request (code: #{parsed[:error][:code]}): #{parsed[:error][:message]}"
+              end
+
+              return parsed[:result]
+            else
+              response = @session ? @session.handle(parsed) : @server.handle(parsed)
+              send_response(response) if response
+            end
+          end
+
+          raise "Transport closed while waiting for response to #{method} request."
+        end
       end
     end
   end

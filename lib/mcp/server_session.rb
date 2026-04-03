@@ -13,7 +13,7 @@ module MCP
       @transport = transport
       @session_id = session_id
       @client = nil
-      @client_capabilities = nil # TODO: Use for per-session capability validation.
+      @client_capabilities = nil
       @logging_message_notification = nil
     end
 
@@ -34,6 +34,17 @@ module MCP
     # Called by `Server#configure_logging_level`.
     def configure_logging(logging_message_notification)
       @logging_message_notification = logging_message_notification
+    end
+
+    # Returns per-session client capabilities, falling back to global.
+    def client_capabilities
+      @client_capabilities || @server.client_capabilities
+    end
+
+    # Sends a `sampling/createMessage` request scoped to this session.
+    def create_sampling_message(**kwargs)
+      params = @server.build_sampling_params(client_capabilities, **kwargs)
+      send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params)
     end
 
     # Sends a progress notification to this session only.
@@ -65,6 +76,9 @@ module MCP
 
     private
 
+    # Branches on `@session_id` because `StdioTransport` creates a `ServerSession` without
+    # a `session_id` (`session_id: nil`), while `StreamableHTTPTransport` always provides one.
+    #
     # TODO: When Ruby 2.7 support is dropped, replace with a direct call:
     # `@transport.send_notification(method, params, session_id: @session_id)` and
     # add `**` to `Transport#send_notification` and `StdioTransport#send_notification`.
@@ -73,6 +87,20 @@ module MCP
         @transport.send_notification(method, params, session_id: @session_id)
       else
         @transport.send_notification(method, params)
+      end
+    end
+
+    # Branches on `@session_id` because `StdioTransport` creates a `ServerSession` without
+    # a `session_id` (`session_id: nil`), while `StreamableHTTPTransport` always provides one.
+    #
+    # TODO: When Ruby 2.7 support is dropped, replace with a direct call:
+    # `@transport.send_request(method, params, session_id: @session_id)` and
+    # add `**` to `Transport#send_request` and `StdioTransport#send_request`.
+    def send_to_transport_request(method, params)
+      if @session_id
+        @transport.send_request(method, params, session_id: @session_id)
+      else
+        @transport.send_request(method, params)
       end
     end
   end
