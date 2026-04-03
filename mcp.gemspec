@@ -23,7 +23,8 @@ Gem::Specification.new do |spec|
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["documentation_uri"] = "https://rubydoc.info/gems/mcp"
 
-  spec.files = Dir["LICENSE", "README.md", "lib/**/*"]
+  spec.files = Dir["lib/**/*"]
+  spec.extra_rdoc_files = ["LICENSE", "README.md"]
 
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
