@@ -7,6 +7,31 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransportTest < ActiveSupport::TestCase
+        # A stream that buffers writes and remains readable after close.
+        class TestStream
+          def initialize
+            @buffer = "".dup
+            @closed = false
+          end
+
+          def write(data)
+            raise IOError, "closed stream" if @closed
+
+            @buffer << data
+          end
+
+          def flush
+          end
+
+          def close
+            @closed = true
+          end
+
+          def string
+            @buffer
+          end
+        end
+
         setup do
           @server = Server.new(
             name: "test_server",
@@ -45,9 +70,11 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal "text/event-stream", response[1]["Content-Type"]
 
-          body = JSON.parse(response[2][0])
+          io = StringIO.new
+          response[2].call(io)
+          body = JSON.parse(io.string.match(/^data: (.+)$/)[1])
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
           assert_equal({}, body["result"])
@@ -114,8 +141,7 @@ module MCP
           assert response[2].is_a?(Proc) # The body should be a Proc for streaming
         end
 
-        test "handles POST request when IOError raised" do
-          # Create and initialize a session
+        test "handles POST request as SSE even when GET SSE stream is closed" do
           init_request = create_rack_request(
             "POST",
             "/",
@@ -125,7 +151,7 @@ module MCP
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
 
-          # Connect with SSE
+          # Connect with SSE then close it
           io = StringIO.new
           get_request = create_rack_request(
             "GET",
@@ -134,13 +160,10 @@ module MCP
           )
           response = @transport.handle_request(get_request)
           response[2].call(io) if response[2].is_a?(Proc)
-
-          # Give the stream time to set up
           sleep(0.1)
-
-          # Close the stream
           io.close
 
+          # POST request should still return SSE response via POST response stream
           request = create_rack_request(
             "POST",
             "/",
@@ -151,17 +174,12 @@ module MCP
             { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
           )
 
-          # This should handle IOError and return the original response
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
-
-          # Verify session was cleaned up
-          assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
+          assert_equal "text/event-stream", response[1]["Content-Type"]
         end
 
-        test "handles POST request when Errno::EPIPE raised" do
-          # Create and initialize a session
+        test "handles POST request as SSE even when GET SSE stream has EPIPE" do
           init_request = create_rack_request(
             "POST",
             "/",
@@ -171,10 +189,8 @@ module MCP
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
 
-          # Create a pipe to simulate EPIPE condition
+          # Connect GET SSE with a broken pipe
           reader, writer = IO.pipe
-
-          # Connect with SSE using the writer end of the pipe
           get_request = create_rack_request(
             "GET",
             "/",
@@ -182,13 +198,10 @@ module MCP
           )
           response = @transport.handle_request(get_request)
           response[2].call(writer) if response[2].is_a?(Proc)
-
-          # Give the stream time to set up
           sleep(0.1)
-
-          # Close the reader end to break the pipe - this will cause EPIPE on write
           reader.close
 
+          # POST request should still return SSE response via POST response stream
           request = create_rack_request(
             "POST",
             "/",
@@ -199,23 +212,18 @@ module MCP
             { jsonrpc: "2.0", method: "ping", id: "789" }.to_json,
           )
 
-          # This should handle Errno::EPIPE and return the original response
           response = @transport.handle_request(request)
-          assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
-
-          # Verify session was cleaned up
-          assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
-
+          assert_equal(200, response[0])
+          assert_equal("text/event-stream", response[1]["Content-Type"])
+        ensure
           begin
             writer.close
-          rescue
+          rescue StandardError
             nil
           end
         end
 
-        test "handles POST request when Errno::ECONNRESET raised" do
-          # Create and initialize a session.
+        test "handles POST request as SSE even when GET SSE stream has ECONNRESET" do
           init_request = create_rack_request(
             "POST",
             "/",
@@ -225,12 +233,10 @@ module MCP
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
 
-          # Use a mock stream that raises Errno::ECONNRESET on write.
+          # Connect GET SSE with a mock that raises ECONNRESET
           mock_stream = Object.new
           mock_stream.define_singleton_method(:write) { |_data| raise Errno::ECONNRESET }
           mock_stream.define_singleton_method(:close) {}
-
-          # Connect with SSE using the mock stream.
           get_request = create_rack_request(
             "GET",
             "/",
@@ -238,10 +244,9 @@ module MCP
           )
           response = @transport.handle_request(get_request)
           response[2].call(mock_stream) if response[2].is_a?(Proc)
-
-          # Give the stream time to set up.
           sleep(0.1)
 
+          # POST request should still return SSE response via POST response stream
           request = create_rack_request(
             "POST",
             "/",
@@ -252,13 +257,9 @@ module MCP
             { jsonrpc: "2.0", method: "ping", id: "789" }.to_json,
           )
 
-          # This should handle Errno::ECONNRESET and return the original response.
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
-
-          # Verify session was cleaned up.
-          assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
+          assert_equal "text/event-stream", response[1]["Content-Type"]
         end
 
         test "handles GET request with missing session ID" do
@@ -579,6 +580,54 @@ module MCP
           assert_equal({}, @transport.instance_variable_get(:@sessions))
         end
 
+        test "cleanup_session_unsafe closes request_streams" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Simulate multiple request_streams being set on the session.
+          closed = []
+          2.times do |i|
+            mock_stream = Object.new
+            mock_stream.define_singleton_method(:close) { closed << i }
+            thread = Thread.new {}
+            thread.join
+            @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams] ||= {}
+            @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams][thread] = mock_stream
+          end
+
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          @transport.handle_request(delete_request)
+
+          assert_equal [0, 1], closed.sort
+          assert_empty @transport.instance_variable_get(:@sessions)
+        end
+
+        test "broadcast notification skips sessions without GET SSE stream" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          @transport.handle_request(init_request)
+
+          # No GET SSE stream connected, only request_streams.
+          # Pass **{} to prevent Ruby 2.7 from converting the Hash to keyword arguments.
+          result = @transport.send_notification("test/notify", { message: "hello" }, **{})
+
+          assert_equal 0, result
+        end
+
         test "sends notification to correct session with multiple active sessions" do
           # Create first session
           init_request1 = create_rack_request(
@@ -653,8 +702,9 @@ module MCP
             result
           end
 
-          # Handle request from session 1
-          @transport.handle_request(request_as_session1)
+          # Handle request from session 1 (execute SSE proc)
+          response1 = @transport.handle_request(request_as_session1)
+          response1[2].call(StringIO.new) if response1[2].is_a?(Proc)
 
           # Make a request as session 2
           request_as_session2 = create_rack_request(
@@ -667,18 +717,17 @@ module MCP
             { jsonrpc: "2.0", method: "ping", id: "890" }.to_json,
           )
 
-          # Handle request from session 2
-          @transport.handle_request(request_as_session2)
+          # Handle request from session 2 (execute SSE proc)
+          response2_post = @transport.handle_request(request_as_session2)
+          response2_post[2].call(StringIO.new) if response2_post[2].is_a?(Proc)
 
-          # Check that each session received one notification
+          # Broadcast notifications are sent to GET SSE streams (no related_request_id)
           io1.rewind
           output1 = io1.read
-          # Session 1 should have received two notifications (one from each request since we broadcast)
           assert_equal 2, output1.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
 
           io2.rewind
           output2 = io2.read
-          # Session 2 should have received two notifications (one from each request since we broadcast)
           assert_equal 2, output2.scan(/data: {"jsonrpc":"2.0","method":"test_notification","params":{"session":"current"}}/).count
         end
 
@@ -886,6 +935,85 @@ module MCP
           refute result
           assert closed_outside_mutex, "Stream should be closed outside the mutex"
           assert_not @transport.instance_variable_get(:@sessions).key?(session_id)
+        end
+
+        test "send_notification on broken request_stream removes only that stream, not the session" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Simulate a broken request_stream.
+          broken_stream = Object.new
+          broken_stream.define_singleton_method(:write) { |_data| raise Errno::EPIPE }
+          broken_stream.define_singleton_method(:close) {}
+          related_id = "req-1"
+          @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams] = { related_id => broken_stream }
+
+          result = @transport.send_notification("test", { msg: "hello" }, session_id: session_id, related_request_id: related_id)
+
+          refute result
+          # Session should still exist.
+          assert @transport.instance_variable_get(:@sessions).key?(session_id)
+          # The broken request_stream should be removed.
+          refute @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams].key?(related_id)
+          # GET SSE stream should still be intact.
+          assert @transport.instance_variable_get(:@sessions)[session_id][:stream]
+        end
+
+        test "active_stream does not fall back to GET SSE when related_request_id is given but request_stream is missing" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Send notification with a related_request_id that has no matching request_stream.
+          result = @transport.send_notification(
+            "test/notify",
+            { message: "should not arrive" },
+            session_id: session_id,
+            related_request_id: "nonexistent-request-id",
+          )
+
+          # Should return false because no matching request_stream exists.
+          refute result
+
+          # Session should still exist (not cleaned up).
+          assert @transport.instance_variable_get(:@sessions).key?(session_id)
+
+          # GET SSE stream should NOT have received the notification.
+          io.rewind
+          refute_includes io.read, "should not arrive"
         end
 
         test "send_notification broadcast continues when one session raises Errno::ECONNRESET" do
@@ -1334,8 +1462,7 @@ module MCP
           assert_nil(body)
         end
 
-        test "send_response_to_stream returns 202 when message is sent to stream" do
-          # Create and initialize a session
+        test "POST request returns SSE response even with GET SSE connected" do
           init_request = create_rack_request(
             "POST",
             "/",
@@ -1345,7 +1472,7 @@ module MCP
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
 
-          # Connect with SSE
+          # Connect with GET SSE
           io = StringIO.new
           get_request = create_rack_request(
             "GET",
@@ -1354,11 +1481,9 @@ module MCP
           )
           response = @transport.handle_request(get_request)
           response[2].call(io) if response[2].is_a?(Proc)
-
-          # Give the stream time to set up
           sleep(0.1)
 
-          # Make a regular request that will be routed through send_response_to_stream
+          # POST request should return SSE, not 202
           request = create_rack_request(
             "POST",
             "/",
@@ -1370,9 +1495,13 @@ module MCP
           )
 
           response = @transport.handle_request(request)
-          assert_equal 202, response[0]
-          assert_empty response[1]
-          assert_empty response[2]
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["Content-Type"]
+
+          post_io = StringIO.new
+          response[2].call(post_io)
+          body = JSON.parse(post_io.string.match(/^data: (.+)$/)[1])
+          assert_equal "456", body["id"]
         end
 
         test "handle post request with a standard error" do
@@ -1436,7 +1565,7 @@ module MCP
             @transport.send_request("sampling/createMessage", { "messages" => [] }, session_id: session_id)
           end
 
-          assert_equal("No active SSE stream for sampling/createMessage request.", error.message)
+          assert_equal("No active stream for sampling/createMessage request.", error.message)
         end
 
         test "send_request sends via SSE and waits for response" do
@@ -1681,6 +1810,300 @@ module MCP
           error = error_queue.pop
           assert_kind_of RuntimeError, error
           assert_equal("SSE session closed while waiting for sampling/createMessage response.", error.message)
+        end
+
+        test "send_request sends via POST response stream even with GET SSE connected" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          get_io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          get_response = @transport.handle_request(get_request)
+          get_response[2].call(get_io) if get_response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Set up sampling capability for the session.
+          @transport.instance_variable_get(:@sessions)[session_id][:server_session]
+            .store_client_info(client: { name: "test" }, capabilities: { sampling: {} })
+
+          # Define a tool that calls create_sampling_message.
+          sampling_tool = MCP::Tool.define(
+            name: "sampling_tool",
+            input_schema: { properties: { prompt: { type: "string" } }, required: ["prompt"] },
+          ) do |prompt:, server_context:|
+            result = server_context.create_sampling_message(
+              messages: [{ role: "user", content: { type: "text", text: prompt } }],
+              max_tokens: 100,
+            )
+            MCP::Tool::Response.new([{ type: "text", text: result[:content][:text] }])
+          end
+          @server.tools[sampling_tool.name_value] = sampling_tool
+
+          # Send tools/call via POST (GET SSE is connected).
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "tool-1",
+              method: "tools/call",
+              params: { name: "sampling_tool", arguments: { prompt: "Hello" } },
+            }.to_json,
+          )
+
+          post_stream = TestStream.new
+          result_queue = Queue.new
+          Thread.new do
+            response = @transport.handle_request(tool_request)
+            response[2].call(post_stream)
+            result_queue.push(:done)
+          end
+
+          sleep(0.2)
+
+          # Sampling request should be in POST response stream, not GET SSE.
+          output = post_stream.string
+          data_lines = output.lines.select { |line| line.start_with?("data: ") }
+          sampling_request = JSON.parse(data_lines.first.sub("data: ", ""))
+          assert_equal "sampling/createMessage", sampling_request["method"]
+
+          # GET SSE should NOT have the sampling request.
+          get_io.rewind
+          refute_includes get_io.read, "sampling/createMessage"
+
+          # Simulate client sending sampling result via POST.
+          client_response = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: sampling_request["id"],
+              result: { role: "assistant", content: { type: "text", text: "Hi from LLM" } },
+            }.to_json,
+          )
+          @transport.handle_request(client_response)
+
+          result_queue.pop
+
+          tool_response_lines = post_stream.string.lines.select { |line| line.start_with?("data: ") }
+          tool_response = JSON.parse(tool_response_lines.last.sub("data: ", ""))
+          assert_equal "tool-1", tool_response["id"]
+          assert_includes tool_response["result"]["content"].first["text"], "Hi from LLM"
+        end
+
+        test "send_request sends via POST response stream when no GET SSE stream" do
+          # Create session without connecting GET SSE.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Set up sampling capability for the session.
+          @transport.instance_variable_get(:@sessions)[session_id][:server_session]
+            .store_client_info(client: { name: "test" }, capabilities: { sampling: {} })
+
+          # Define a tool that calls create_sampling_message.
+          sampling_tool = MCP::Tool.define(
+            name: "sampling_tool",
+            input_schema: { properties: { prompt: { type: "string" } }, required: ["prompt"] },
+          ) do |prompt:, server_context:|
+            result = server_context.create_sampling_message(
+              messages: [{ role: "user", content: { type: "text", text: prompt } }],
+              max_tokens: 100,
+            )
+            MCP::Tool::Response.new([{ type: "text", text: result[:content][:text] }])
+          end
+          @server.tools[sampling_tool.name_value] = sampling_tool
+
+          # Send tools/call via POST (no GET SSE stream).
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "tool-1",
+              method: "tools/call",
+              params: { name: "sampling_tool", arguments: { prompt: "Hello" } },
+            }.to_json,
+          )
+
+          # Process in background since handle_request blocks until tool completes.
+          post_stream = TestStream.new
+          result_queue = Queue.new
+          Thread.new do
+            response = @transport.handle_request(tool_request)
+            response[2].call(post_stream)
+            result_queue.push(:done)
+          end
+
+          sleep(0.2) # Wait for the tool to start and send sampling request.
+
+          # Read the sampling request from the POST response stream.
+          output = post_stream.string
+          data_lines = output.lines.select { |line| line.start_with?("data: ") }
+          sampling_request = JSON.parse(data_lines.first.sub("data: ", ""))
+          assert_equal "sampling/createMessage", sampling_request["method"]
+
+          # Simulate client sending sampling result via POST.
+          client_response = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: sampling_request["id"],
+              result: { role: "assistant", content: { type: "text", text: "Hi from LLM" } },
+            }.to_json,
+          )
+          @transport.handle_request(client_response)
+
+          result_queue.pop # Wait for tool to complete.
+
+          # Verify the tool result was written to the POST response stream.
+          tool_response_lines = post_stream.string.lines.select { |line| line.start_with?("data: ") }
+          tool_response = JSON.parse(tool_response_lines.last.sub("data: ", ""))
+          assert_equal "tool-1", tool_response["id"]
+          assert_includes tool_response["result"]["content"].first["text"], "Hi from LLM"
+        end
+
+        test "send_notification uses POST response stream when no GET SSE stream" do
+          # Create session without connecting GET SSE.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Define a tool that sends a notification during execution.
+          notification_sent = Queue.new
+          slow_tool = MCP::Tool.define(
+            name: "slow_tool",
+          ) do |server_context:|
+            server_context.notify_log_message(data: "test log", level: "info")
+            notification_sent.push(true)
+            MCP::Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          @server.tools[slow_tool.name_value] = slow_tool
+
+          # Configure logging so notifications are sent.
+          @transport.instance_variable_get(:@sessions)[session_id][:server_session]
+            .configure_logging(MCP::LoggingMessageNotification.new(level: "debug"))
+
+          # Send tools/call via POST (no GET SSE stream).
+          post_stream = TestStream.new
+          result_queue = Queue.new
+          Thread.new do
+            request = create_rack_request(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_MCP_SESSION_ID" => session_id,
+              },
+              {
+                jsonrpc: "2.0",
+                id: "tool-1",
+                method: "tools/call",
+                params: { name: "slow_tool", arguments: {} },
+              }.to_json,
+            )
+            response = @transport.handle_request(request)
+            response[2].call(post_stream)
+            result_queue.push(:done)
+          end
+
+          notification_sent.pop # Wait for tool to send notification.
+          result_queue.pop
+
+          # Verify notification was written to the POST response stream.
+          assert_includes post_stream.string, "notifications/message"
+          assert_includes post_stream.string, "test log"
+        end
+
+        test "progress notification uses POST response stream when no GET SSE stream" do
+          # Create session without connecting GET SSE.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Define a tool that reports progress during execution.
+          progress_reported = Queue.new
+          progress_tool = MCP::Tool.define(
+            name: "progress_tool",
+          ) do |server_context:|
+            server_context.report_progress(50, total: 100, message: "halfway")
+            progress_reported.push(true)
+            MCP::Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          @server.tools[progress_tool.name_value] = progress_tool
+
+          # Send tools/call via POST (no GET SSE stream) with a progress token.
+          post_stream = TestStream.new
+          result_queue = Queue.new
+          Thread.new do
+            request = create_rack_request(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_MCP_SESSION_ID" => session_id,
+              },
+              {
+                jsonrpc: "2.0",
+                id: "tool-1",
+                method: "tools/call",
+                params: { name: "progress_tool", arguments: {}, _meta: { progressToken: "token-1" } },
+              }.to_json,
+            )
+            response = @transport.handle_request(request)
+            response[2].call(post_stream)
+            result_queue.push(:done)
+          end
+
+          progress_reported.pop
+          result_queue.pop
+
+          # Verify progress notification was written to the POST response stream.
+          assert_includes post_stream.string, "notifications/progress"
+          assert_includes post_stream.string, "token-1"
         end
 
         test "POST notifications/initialized returns 202 with no body" do
@@ -2228,13 +2651,16 @@ module MCP
               params: { name: "log_tool", arguments: {} },
             }.to_json,
           )
-          transport.handle_request(tool_request)
+          tool_response = transport.handle_request(tool_request)
+          post_io = StringIO.new
+          tool_response[2].call(post_io)
 
-          # Session 1 should receive the log notification.
+          # Session 1's POST response stream should contain the log notification.
+          assert_includes post_io.string, "secret"
+
+          # GET SSE streams should NOT receive the log notification.
           io1.rewind
-          assert_includes io1.read, "secret"
-
-          # Session 2 should NOT receive the log notification.
+          refute_includes io1.read, "secret"
           io2.rewind
           refute_includes io2.read, "secret"
         end
@@ -2306,13 +2732,16 @@ module MCP
               },
             }.to_json,
           )
-          transport.handle_request(tool_request)
+          tool_response = transport.handle_request(tool_request)
+          post_io = StringIO.new
+          tool_response[2].call(post_io)
 
-          # Session 1 should receive the progress notification.
+          # Session 1's POST response stream should contain the progress notification.
+          assert_includes post_io.string, "halfway"
+
+          # GET SSE streams should NOT receive the progress notification.
           io1.rewind
-          assert_includes io1.read, "halfway"
-
-          # Session 2 should NOT receive the progress notification.
+          refute_includes io1.read, "halfway"
           io2.rewind
           refute_includes io2.read, "halfway"
         end
@@ -2406,7 +2835,8 @@ module MCP
               params: { level: "error" },
             }.to_json,
           )
-          transport.handle_request(set_level1)
+          response1 = transport.handle_request(set_level1)
+          response1[2].call(StringIO.new)
 
           # Session 2 sets log level to "debug".
           set_level2 = create_rack_request(
@@ -2420,7 +2850,8 @@ module MCP
               params: { level: "debug" },
             }.to_json,
           )
-          transport.handle_request(set_level2)
+          response2 = transport.handle_request(set_level2)
+          response2[2].call(StringIO.new)
 
           # Session 1 (error level) should not notify for "info", but should for "error".
           session1_logging = transport.instance_variable_get(:@sessions)[session1][:server_session].logging_message_notification

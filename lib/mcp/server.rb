@@ -127,8 +127,8 @@ module MCP
     #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
     # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
     def handle(request, session: nil)
-      JsonRpcHandler.handle(request) do |method|
-        handle_request(request, method, session: session)
+      JsonRpcHandler.handle(request) do |method, request_id|
+        handle_request(request, method, session: session, related_request_id: request_id)
       end
     end
 
@@ -140,8 +140,8 @@ module MCP
     #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
     # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
     def handle_json(request, session: nil)
-      JsonRpcHandler.handle_json(request) do |method|
-        handle_request(request, method, session: session)
+      JsonRpcHandler.handle_json(request) do |method, request_id|
+        handle_request(request, method, session: session, related_request_id: request_id)
       end
     end
 
@@ -220,7 +220,8 @@ module MCP
       stop_sequences: nil,
       metadata: nil,
       tools: nil,
-      tool_choice: nil
+      tool_choice: nil,
+      related_request_id: nil
     )
       unless @transport
         raise "Cannot send sampling request without a transport."
@@ -371,7 +372,7 @@ module MCP
       end
     end
 
-    def handle_request(request, method, session: nil)
+    def handle_request(request, method, session: nil, related_request_id: nil)
       handler = @handlers[method]
       unless handler
         instrument_call("unsupported_method") do
@@ -399,7 +400,7 @@ module MCP
           when Methods::RESOURCES_TEMPLATES_LIST
             { resourceTemplates: @handlers[Methods::RESOURCES_TEMPLATES_LIST].call(params) }
           when Methods::TOOLS_CALL
-            call_tool(params, session: session)
+            call_tool(params, session: session, related_request_id: related_request_id)
           when Methods::COMPLETION_COMPLETE
             complete(params)
           when Methods::LOGGING_SET_LEVEL
@@ -499,7 +500,7 @@ module MCP
       @tools.values.map(&:to_h)
     end
 
-    def call_tool(request, session: nil)
+    def call_tool(request, session: nil, related_request_id: nil)
       tool_name = request[:name]
 
       tool = tools[tool_name]
@@ -531,7 +532,7 @@ module MCP
 
       progress_token = request.dig(:_meta, :progressToken)
 
-      call_tool_with_args(tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session)
+      call_tool_with_args(tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id)
     rescue RequestHandlerError
       raise
     rescue => e
@@ -611,12 +612,12 @@ module MCP
       parameters.any? { |type, name| type == :keyrest || name == :server_context }
     end
 
-    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil)
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))
-        progress = Progress.new(notification_target: session, progress_token: progress_token)
-        server_context = ServerContext.new(context, progress: progress, notification_target: session)
+        progress = Progress.new(notification_target: session, progress_token: progress_token, related_request_id: related_request_id)
+        server_context = ServerContext.new(context, progress: progress, notification_target: session, related_request_id: related_request_id)
         tool.call(**args, server_context: server_context).to_h
       else
         tool.call(**args).to_h

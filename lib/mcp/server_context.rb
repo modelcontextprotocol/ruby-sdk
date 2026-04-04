@@ -2,10 +2,11 @@
 
 module MCP
   class ServerContext
-    def initialize(context, progress:, notification_target:)
+    def initialize(context, progress:, notification_target:, related_request_id: nil)
       @context = context
       @progress = progress
       @notification_target = notification_target
+      @related_request_id = related_request_id
     end
 
     # Reports progress for the current tool operation.
@@ -26,7 +27,7 @@ module MCP
     def notify_log_message(data:, level:, logger: nil)
       return unless @notification_target
 
-      @notification_target.notify_log_message(data: data, level: level, logger: logger)
+      @notification_target.notify_log_message(data: data, level: level, logger: logger, related_request_id: @related_request_id)
     end
 
     # Delegates to the session so the request is scoped to the originating client.
@@ -34,9 +35,9 @@ module MCP
     # does not support sampling.
     def create_sampling_message(**kwargs)
       if @notification_target.respond_to?(:create_sampling_message)
-        @notification_target.create_sampling_message(**kwargs)
+        @notification_target.create_sampling_message(**kwargs, related_request_id: @related_request_id)
       elsif @context.respond_to?(:create_sampling_message)
-        @context.create_sampling_message(**kwargs)
+        @context.create_sampling_message(**kwargs, related_request_id: @related_request_id)
       else
         raise NoMethodError, "undefined method 'create_sampling_message' for #{self}"
       end

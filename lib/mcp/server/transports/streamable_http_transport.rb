@@ -7,6 +7,12 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransport < Transport
+        SSE_HEADERS = {
+          "Content-Type" => "text/event-stream",
+          "Cache-Control" => "no-cache",
+          "Connection" => "keep-alive",
+        }.freeze
+
         def initialize(server, stateless: false, session_idle_timeout: nil)
           super(server)
           # Maps `session_id` to `{ stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
@@ -56,10 +62,11 @@ module MCP
 
           removed_sessions.each do |session|
             close_stream_safely(session[:stream])
+            close_post_request_streams(session)
           end
         end
 
-        def send_notification(method, params = nil, session_id: nil)
+        def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
           # Stateless mode doesn't support notifications
           raise "Stateless mode does not support notifications" if @stateless
 
@@ -74,8 +81,10 @@ module MCP
           result = @mutex.synchronize do
             if session_id
               # Send to specific session
-              session = @sessions[session_id]
-              next false unless session && session[:stream]
+              if (session = @sessions[session_id])
+                stream = active_stream(session, related_request_id: related_request_id)
+              end
+              next false unless stream
 
               if session_expired?(session)
                 cleanup_and_collect_stream(session_id, streams_to_close)
@@ -83,14 +92,19 @@ module MCP
               end
 
               begin
-                send_to_stream(session[:stream], notification)
+                send_to_stream(stream, notification)
                 true
               rescue *STREAM_WRITE_ERRORS => e
                 MCP.configuration.exception_reporter.call(
                   e,
                   { session_id: session_id, error: "Failed to send notification" },
                 )
-                cleanup_and_collect_stream(session_id, streams_to_close)
+                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
+                  session[:post_request_streams].delete(related_request_id)
+                  streams_to_close << stream
+                else
+                  cleanup_and_collect_stream(session_id, streams_to_close)
+                end
                 false
               end
             else
@@ -99,7 +113,7 @@ module MCP
               failed_sessions = []
 
               @sessions.each do |sid, session|
-                next unless session[:stream]
+                next unless (stream = session[:stream])
 
                 if session_expired?(session)
                   failed_sessions << sid
@@ -107,7 +121,7 @@ module MCP
                 end
 
                 begin
-                  send_to_stream(session[:stream], notification)
+                  send_to_stream(stream, notification)
                   sent_count += 1
                 rescue *STREAM_WRITE_ERRORS => e
                   MCP.configuration.exception_reporter.call(
@@ -139,7 +153,7 @@ module MCP
         # sends the request via SSE stream, then blocks on `queue.pop`.
         # When the client POSTs a response, `handle_response` matches it by `request_id`
         # and pushes the result onto the queue, unblocking this thread.
-        def send_request(method, params = nil, session_id: nil)
+        def send_request(method, params = nil, session_id: nil, related_request_id: nil)
           if @stateless
             raise "Stateless mode does not support server-to-client requests."
           end
@@ -163,12 +177,17 @@ module MCP
 
             @pending_responses[request_id] = { queue: queue, session_id: session_id }
 
-            if (stream = session[:stream])
+            if (stream = active_stream(session, related_request_id: related_request_id))
               begin
                 send_to_stream(stream, request)
                 sent = true
               rescue *STREAM_WRITE_ERRORS
-                cleanup_session_unsafe(session_id)
+                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
+                  session[:post_request_streams].delete(related_request_id)
+                  close_stream_safely(stream)
+                else
+                  cleanup_session_unsafe(session_id)
+                end
               end
             end
           end
@@ -181,7 +200,7 @@ module MCP
           # The TypeScript and Python SDKs buffer messages and replay on reconnect.
           # Until then, raise to prevent queue.pop from blocking indefinitely.
           unless sent
-            raise "No active SSE stream for #{method} request."
+            raise "No active stream for #{method} request."
           end
 
           response = queue.pop
@@ -229,6 +248,7 @@ module MCP
 
           removed_sessions.each do |session|
             close_stream_safely(session[:stream])
+            close_post_request_streams(session)
           end
         end
 
@@ -265,7 +285,7 @@ module MCP
 
               handle_response(body, session_id: session_id)
             else
-              handle_regular_request(body_string, session_id)
+              handle_regular_request(body_string, session_id, related_request_id: body[:id])
             end
           end
         rescue StandardError => e
@@ -313,7 +333,10 @@ module MCP
             cleanup_session_unsafe(session_id)
           end
 
-          close_stream_safely(session[:stream]) if session
+          if session
+            close_stream_safely(session[:stream])
+            close_post_request_streams(session)
+          end
         end
 
         # Removes a session from `@sessions` and returns it. Does not close the stream.
@@ -336,12 +359,21 @@ module MCP
           return unless (removed = cleanup_session_unsafe(session_id))
 
           streams_to_close << removed[:stream]
+          removed[:post_request_streams]&.each_value { |stream| streams_to_close << stream }
         end
 
         def close_stream_safely(stream)
           stream&.close
         rescue StandardError
           # Ignore close-related errors from already closed/broken streams.
+        end
+
+        def close_post_request_streams(session)
+          return unless (post_request_streams = session[:post_request_streams])
+
+          post_request_streams.each_value do |stream|
+            close_stream_safely(stream)
+          end
         end
 
         def extract_session_id(request)
@@ -443,9 +475,8 @@ module MCP
           [202, {}, []]
         end
 
-        def handle_regular_request(body_string, session_id)
+        def handle_regular_request(body_string, session_id, related_request_id: nil)
           server_session = nil
-          stream = nil
 
           unless @stateless
             if session_id
@@ -455,21 +486,72 @@ module MCP
               @mutex.synchronize do
                 session = @sessions[session_id]
                 server_session = session[:server_session] if session
-                stream = session[:stream] if session
               end
             end
           end
 
-          response = if server_session
+          if session_id && !@stateless
+            handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id)
+          else
+            response = dispatch_handle_json(body_string, server_session)
+            [200, { "Content-Type" => "application/json" }, [response]]
+          end
+        end
+
+        # Returns the POST response as an SSE stream so the server can send
+        # JSON-RPC requests and notifications during request processing.
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
+        def handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: nil)
+          body = proc do |stream|
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              if session && related_request_id
+                session[:post_request_streams] ||= {}
+                session[:post_request_streams][related_request_id] = stream
+              end
+            end
+
+            begin
+              response = dispatch_handle_json(body_string, server_session)
+
+              send_to_stream(stream, response) if response
+            ensure
+              if related_request_id
+                @mutex.synchronize do
+                  session = @sessions[session_id]
+                  session[:post_request_streams]&.delete(related_request_id) if session
+                end
+              end
+
+              begin
+                stream.close
+              rescue StandardError
+                # Ignore close-related errors from already closed/broken streams.
+              end
+            end
+          end
+
+          [200, SSE_HEADERS, body]
+        end
+
+        # Returns the SSE stream available for server-to-client messages.
+        # When `related_request_id` is given, returns only the POST response
+        # stream for that request (no fallback to GET SSE). This prevents
+        # request-scoped messages from leaking to the wrong stream.
+        # When `related_request_id` is nil, returns the GET SSE stream.
+        def active_stream(session, related_request_id: nil)
+          if related_request_id
+            session.dig(:post_request_streams, related_request_id)
+          else
+            session[:stream]
+          end
+        end
+
+        def dispatch_handle_json(body_string, server_session)
+          if server_session
             server_session.handle_json(body_string)
           else
             @server.handle_json(body_string)
-          end
-
-          if stream
-            send_response_to_stream(stream, response, session_id)
-          else
-            [200, { "Content-Type" => "application/json" }, [response]]
           end
         end
 
@@ -489,26 +571,19 @@ module MCP
             nil
           end
 
-          close_stream_safely(removed[:stream]) if removed
+          if removed
+            close_stream_safely(removed[:stream])
+
+            removed[:post_request_streams]&.each_value do |stream|
+              close_stream_safely(stream)
+            end
+          end
 
           response
         end
 
         def get_session_stream(session_id)
           @mutex.synchronize { @sessions[session_id]&.fetch(:stream, nil) }
-        end
-
-        def send_response_to_stream(stream, response, session_id)
-          message = JSON.parse(response)
-          send_to_stream(stream, message)
-          handle_accepted
-        rescue *STREAM_WRITE_ERRORS => e
-          MCP.configuration.exception_reporter.call(
-            e,
-            { session_id: session_id, error: "Stream closed during response" },
-          )
-          cleanup_session(session_id)
-          [200, { "Content-Type" => "application/json" }, [response]]
         end
 
         def session_exists?(session_id)
@@ -538,13 +613,7 @@ module MCP
         def setup_sse_stream(session_id)
           body = create_sse_body(session_id)
 
-          headers = {
-            "Content-Type" => "text/event-stream",
-            "Cache-Control" => "no-cache",
-            "Connection" => "keep-alive",
-          }
-
-          [200, headers, body]
+          [200, SSE_HEADERS, body]
         end
 
         def create_sse_body(session_id)
