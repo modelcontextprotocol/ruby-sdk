@@ -7,7 +7,7 @@ Validates the Ruby SDK's conformance to the MCP specification using [`@modelcont
 - Node.js (for `npx`)
 - `bundle install` completed
 
-## Running the Tests
+## Server Conformance
 
 ### Run all scenarios
 
@@ -64,6 +64,33 @@ bundle exec rake conformance_list
 
 Prints all scenario names that can be passed to `SCENARIO`.
 
+## Client Conformance
+
+The client conformance tests validate `MCP::Client` against the MCP specification by running
+it through scenarios served by the conformance test runner.
+
+### Run all client scenarios
+
+```bash
+npx @modelcontextprotocol/conformance client --suite core --command "ruby conformance/client.rb"
+```
+
+### Run a single scenario
+
+```bash
+npx @modelcontextprotocol/conformance client --scenario initialize --command "ruby conformance/client.rb"
+```
+
+### List available client scenarios
+
+```bash
+npx @modelcontextprotocol/conformance list --client
+```
+
+The conformance runner starts a test server for each scenario, sets the
+`MCP_CONFORMANCE_SCENARIO` environment variable, and invokes the command with the server URL
+as the first argument.
+
 ## SDK Tier Report
 
 The [MCP SDK Tier system](https://modelcontextprotocol.io/community/sdk-tiers) requires SDK
@@ -92,6 +119,7 @@ submissions.
 conformance/
   server.rb              # Conformance server (Rack + Puma, default port 9292)
   runner.rb              # Starts the server, runs npx conformance, exits with result code
+  client.rb              # Conformance client for client-side scenario testing
   expected_failures.yml  # Baseline of known-failing scenarios
   README.md              # This file
 ```
