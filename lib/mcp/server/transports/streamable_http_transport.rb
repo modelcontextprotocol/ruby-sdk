@@ -6,7 +6,8 @@ require_relative "../../transport"
 module MCP
   class Server
     module Transports
-      # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
+      # TODO: Resumability and redelivery with Last-Event-ID is not yet implemented.
+      #   See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
 
       class StreamableHTTPTransport < Transport
         def initialize(server, stateless: false, session_idle_timeout: nil)

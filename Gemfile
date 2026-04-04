@@ -10,7 +10,6 @@ gem "rubocop-minitest", require: false
 gem "rubocop-rake", require: false
 gem "rubocop-shopify", ">= 2.18", require: false if RUBY_VERSION >= "3.1"
 
-gem "event_stream_parser", ">= 1.0"
 gem "puma", ">= 5.0.0"
 gem "rack-cors"
 gem "rackup", ">= 2.1.0"

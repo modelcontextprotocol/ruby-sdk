@@ -6,7 +6,8 @@ require_relative "client/tool"
 
 module MCP
   class Client
-    # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
+    # Protocol version and header constants for Streamable HTTP transport.
+    # See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
     LATEST_PROTOCOL_VERSION = "2025-11-25"
     SESSION_ID_HEADER = "Mcp-Session-Id"
     PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
@@ -86,8 +87,8 @@ module MCP
 
       response = transport.post(body: request_body)
 
-      # Faraday normalizes headers to lowercase
-      @session_id = response.headers["mcp-session-id"]
+      # Faraday normalizes header names to lowercase
+      @session_id = response.headers[SESSION_ID_HEADER.downcase]
       @protocol_version = response.body.dig("result", "protocolVersion") || protocol_version
 
       response.body

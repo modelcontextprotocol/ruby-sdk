@@ -2,8 +2,10 @@
 
 module MCP
   class Client
-    # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
-    # TODO: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
+    # TODO: HTTP GET for SSE streaming is not yet implemented.
+    #   See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
+    # TODO: Resumability and redelivery with Last-Event-ID is not yet implemented.
+    #   See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
 
     class HTTP
       ACCEPT_HEADER = "application/json, text/event-stream"
