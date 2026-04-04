@@ -1549,6 +1549,421 @@ module MCP
           assert_equal "456", body["id"]
         end
 
+        test "JSON response mode returns application/json for POST requests" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("1", body["id"])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode accepts application/json only in Accept header" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "application/json",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode returns 406 when Accept header is missing" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(406, response[0])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode accepts wildcard Accept header" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => "*/*",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode drops notifications during tool execution" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          server.define_tool(name: "log_tool") do |server_context:|
+            server_context.notify_log_message(data: "should be dropped", level: "info")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          server.server_context = server
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+            }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "call-1",
+              method: "tools/call",
+              params: { name: "log_tool", arguments: {} },
+            }.to_json,
+          )
+
+          response = transport.handle_request(tool_request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("call-1", body["id"])
+          refute_includes(response[2][0], "should be dropped")
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode drops notifications even with GET SSE connected" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          server.define_tool(name: "log_tool") do |server_context:|
+            server_context.notify_log_message(data: "should not leak", level: "info")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          server.server_context = server
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+            }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          get_response = transport.handle_request(get_request)
+          get_response[2].call(io) if get_response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Call tool that sends a notification.
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "call-1",
+              method: "tools/call",
+              params: { name: "log_tool", arguments: {} },
+            }.to_json,
+          )
+
+          response = transport.handle_request(tool_request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+
+          # Notification should NOT leak to GET SSE stream.
+          io.rewind
+          refute_includes(io.read, "should not leak")
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode raises on send_request (sampling)" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          error = assert_raises(RuntimeError) do
+            transport.send_request("sampling/createMessage", { messages: [] }, session_id: "s1")
+          end
+
+          assert_equal("JSON response mode does not support server-to-client requests.", error.message)
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode raises on send_request (roots/list)" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          error = assert_raises(RuntimeError) do
+            transport.send_request("roots/list", nil, session_id: "s1")
+          end
+
+          assert_equal("JSON response mode does not support server-to-client requests.", error.message)
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode raises on send_request (elicitation/create)" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+
+          error = assert_raises(RuntimeError) do
+            transport.send_request(
+              "elicitation/create",
+              { mode: "form", message: "test", requestedSchema: {} },
+              session_id: "s1",
+            )
+          end
+
+          assert_equal("JSON response mode does not support server-to-client requests.", error.message)
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode allows broadcast notifications via GET SSE" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          server.server_context = server
+
+          server.define_tool(name: "notify_tool") do |server_context:|
+            server_context.notify_tools_list_changed
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+            }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          get_response = transport.handle_request(get_request)
+          get_response[2].call(io) if get_response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Call tool that triggers a broadcast notification.
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "call-1",
+              method: "tools/call",
+              params: { name: "notify_tool", arguments: {} },
+            }.to_json,
+          )
+
+          response = transport.handle_request(tool_request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+
+          # Broadcast notification should arrive on GET SSE stream.
+          io.rewind
+          assert_includes(io.read, "notifications/tools/list_changed")
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode with stateless returns application/json without session ID" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, stateless: true, enable_json_response: true)
+          server.transport = transport
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+          assert_nil(response[1]["Mcp-Session-Id"])
+
+          body = JSON.parse(response[2][0])
+          assert_equal("1", body["id"])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode with stateless returns 405 on GET" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, stateless: true, enable_json_response: true)
+          server.transport = transport
+
+          request = create_rack_request("GET", "/", {})
+
+          response = transport.handle_request(request)
+          assert_equal(405, response[0])
+        ensure
+          transport.close
+        end
+
+        test "JSON response mode delivers session-scoped standalone notifications via GET SSE" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          server.server_context = server
+
+          server.define_tool(name: "touch_tool") do |server_context:|
+            server_context.notify_resources_updated(uri: "file:///example.txt")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+            }.to_json,
+          )
+          init_response = transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          get_response = transport.handle_request(get_request)
+          get_response[2].call(io) if get_response[2].is_a?(Proc)
+          sleep(0.1)
+
+          tool_request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            {
+              jsonrpc: "2.0",
+              id: "call-1",
+              method: "tools/call",
+              params: { name: "touch_tool", arguments: {} },
+            }.to_json,
+          )
+
+          response = transport.handle_request(tool_request)
+          assert_equal(200, response[0])
+          assert_equal("application/json", response[1]["Content-Type"])
+
+          io.rewind
+          assert_includes(io.read, "notifications/resources/updated")
+        ensure
+          transport.close
+        end
+
         test "handle post request with a standard error" do
           request = create_rack_request(
             "POST",
