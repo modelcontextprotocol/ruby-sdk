@@ -265,6 +265,15 @@ module MCP
         assert_equal(:parse_error, error.error_type)
       end
 
+      def test_post_returns_accepted_for_202_with_no_content_type
+        stub_request(:post, url)
+          .to_return(status: 202, body: "")
+
+        response = transport.post(body: {})
+
+        assert_equal({ "accepted" => true }, response.body)
+      end
+
       def test_delete_sends_request_with_headers
         stub_request(:delete, url)
           .with(

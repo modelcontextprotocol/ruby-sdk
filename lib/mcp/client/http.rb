@@ -134,6 +134,9 @@ module MCP
           parse_sse_response(response.body, method, params)
         elsif content_type&.include?("application/json")
           response.body
+        elsif response.status == 202
+          # Server accepted the request and will deliver the response via SSE stream
+          { "accepted" => true }
         else
           raise RequestHandlerError.new(
             "Unsupported Content-Type: #{content_type.inspect}. Expected application/json or text/event-stream.",
