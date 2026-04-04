@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "event_stream_parser"
+
 module MCP
   class Client
     # TODO: HTTP GET for SSE streaming is not yet implemented.
