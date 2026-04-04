@@ -346,7 +346,7 @@ module MCP
 
           # Simulate an active SSE stream by storing a stream object in the session
           mock_stream = StringIO.new
-          @transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+          @transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = mock_stream
 
           # Attempt a second GET request for the same session
           get_request = create_rack_request(
@@ -377,14 +377,14 @@ module MCP
           # Establish stream A
           stream_a = StringIO.new
           @transport.send(:store_stream_for_session, session_id, stream_a)
-          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:stream]
+          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream]
 
           # Attempt to store stream B (simulating a racing request)
           stream_b = StringIO.new
           @transport.send(:store_stream_for_session, session_id, stream_b)
 
           # Stream A should still be the active stream
-          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:stream]
+          assert_equal stream_a, @transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream]
 
           # Stream B should have been closed
           assert stream_b.closed?
@@ -928,7 +928,7 @@ module MCP
             end
           end
 
-          @transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+          @transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = mock_stream
 
           result = @transport.send_notification("test", { message: "test" }, session_id: session_id)
 
@@ -973,7 +973,7 @@ module MCP
           # The broken request_stream should be removed.
           refute @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams].key?(related_id)
           # GET SSE stream should still be intact.
-          assert @transport.instance_variable_get(:@sessions)[session_id][:stream]
+          assert @transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream]
         end
 
         test "active_stream does not fall back to GET SSE when related_request_id is given but request_stream is missing" do
@@ -2378,7 +2378,7 @@ module MCP
               mutex.unlock
             end
           end
-          transport.instance_variable_get(:@sessions)[session_id][:stream] = mock_stream
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = mock_stream
 
           sleep(0.02) # Wait for session to expire.
 
@@ -2495,7 +2495,7 @@ module MCP
 
           # Attach a mock stream to the session
           stream = StringIO.new
-          transport.instance_variable_get(:@sessions)[session_id][:stream] = stream
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stream
 
           # Wait for the session to exceed the idle timeout (0.01s)
           sleep(0.02)
