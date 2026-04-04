@@ -6,6 +6,11 @@ require_relative "client/tool"
 
 module MCP
   class Client
+    # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
+    LATEST_PROTOCOL_VERSION = "2025-11-25"
+    SESSION_ID_HEADER = "Mcp-Session-Id"
+    PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
+
     class ServerError < StandardError
       attr_reader :code, :data
 
@@ -27,21 +32,66 @@ module MCP
       end
     end
 
+    class SessionExpiredError < StandardError
+      attr_reader :request
+
+      def initialize(message, request)
+        super(message)
+        @request = request
+      end
+    end
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
-    #   The transport should be a duck type that responds to `send_request`. See the README for more details.
+    #   The transport should be a duck type that responds to `post`. See the README for more details.
     #
     # @example
     #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
     #   client = MCP::Client.new(transport: transport)
     def initialize(transport:)
       @transport = transport
+      @session_id = nil
+      @protocol_version = nil
     end
 
-    # The user may want to access additional transport-specific methods/attributes
-    # So keeping it public
-    attr_reader :transport
+    attr_reader :transport, :session_id, :protocol_version
+
+    def connected?
+      !@protocol_version.nil?
+    end
+
+    # Opens a connection to the MCP server by performing the initialization handshake.
+    #
+    # @param client_info [Hash] Information about the client (name, version)
+    # @param protocol_version [String] The protocol version to request
+    # @param capabilities [Hash] Client capabilities to advertise
+    # @return [Hash] The server's initialization response
+    #
+    # @example
+    #   client.connect(
+    #     client_info: { name: "my-client", version: "1.0.0" },
+    #   )
+    def connect(client_info:, protocol_version: LATEST_PROTOCOL_VERSION, capabilities: {})
+      request_body = {
+        jsonrpc: JsonRpcHandler::Version::V2_0,
+        id: request_id,
+        method: "initialize",
+        params: {
+          protocolVersion: protocol_version,
+          capabilities: capabilities,
+          clientInfo: client_info,
+        },
+      }
+
+      response = transport.post(body: request_body)
+
+      # Faraday normalizes headers to lowercase
+      @session_id = response.headers["mcp-session-id"]
+      @protocol_version = response.body.dig("result", "protocolVersion") || protocol_version
+
+      response.body
+    end
 
     # Returns the list of tools available from the server.
     # Each call will make a new request – the result is not cached.
@@ -163,6 +213,18 @@ module MCP
       response.dig("result", "completion") || { "values" => [], "hasMore" => false }
     end
 
+    # Closes the connection with the MCP server.
+    # For HTTP transport, this sends a DELETE request to terminate the session.
+    # Session state is cleared regardless of whether the DELETE succeeds.
+    # See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-termination
+    def close
+      return unless @session_id
+
+      transport.delete(headers: session_headers)
+      @session_id = nil
+      @protocol_version = nil
+    end
+
     private
 
     def request(method:, params: nil)
@@ -173,15 +235,27 @@ module MCP
       }
       request_body[:params] = params if params
 
-      response = transport.send_request(request: request_body)
+      response = transport.post(body: request_body, headers: session_headers)
+      body = response.body
 
       # Guard with `is_a?(Hash)` because custom transports may return non-Hash values.
-      if response.is_a?(Hash) && response.key?("error")
-        error = response["error"]
+      if body.is_a?(Hash) && body.key?("error")
+        error = body["error"]
         raise ServerError.new(error["message"], code: error["code"], data: error["data"])
       end
 
-      response
+      body
+    rescue SessionExpiredError
+      @session_id = nil
+      @protocol_version = nil
+      raise
+    end
+
+    def session_headers
+      headers = {}
+      headers[SESSION_ID_HEADER] = @session_id if @session_id
+      headers[PROTOCOL_VERSION_HEADER] = @protocol_version if @protocol_version
+      headers
     end
 
     def request_id
