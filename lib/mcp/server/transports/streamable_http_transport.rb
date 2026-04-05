@@ -15,7 +15,7 @@ module MCP
 
         def initialize(server, stateless: false, session_idle_timeout: nil)
           super(server)
-          # Maps `session_id` to `{ stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
+          # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
           @mutex = Mutex.new
 
@@ -61,7 +61,7 @@ module MCP
           end
 
           removed_sessions.each do |session|
-            close_stream_safely(session[:stream])
+            close_stream_safely(session[:get_sse_stream])
             close_post_request_streams(session)
           end
         end
@@ -113,7 +113,7 @@ module MCP
               failed_sessions = []
 
               @sessions.each do |sid, session|
-                next unless (stream = session[:stream])
+                next unless (stream = session[:get_sse_stream])
 
                 if session_expired?(session)
                   failed_sessions << sid
@@ -247,7 +247,7 @@ module MCP
           end
 
           removed_sessions.each do |session|
-            close_stream_safely(session[:stream])
+            close_stream_safely(session[:get_sse_stream])
             close_post_request_streams(session)
           end
         end
@@ -334,7 +334,7 @@ module MCP
           end
 
           if session
-            close_stream_safely(session[:stream])
+            close_stream_safely(session[:get_sse_stream])
             close_post_request_streams(session)
           end
         end
@@ -358,7 +358,7 @@ module MCP
         def cleanup_and_collect_stream(session_id, streams_to_close)
           return unless (removed = cleanup_session_unsafe(session_id))
 
-          streams_to_close << removed[:stream]
+          streams_to_close << removed[:get_sse_stream]
           removed[:post_request_streams]&.each_value { |stream| streams_to_close << stream }
         end
 
@@ -449,7 +449,7 @@ module MCP
 
             @mutex.synchronize do
               @sessions[session_id] = {
-                stream: nil,
+                get_sse_stream: nil,
                 server_session: server_session,
                 last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
               }
@@ -543,7 +543,7 @@ module MCP
           if related_request_id
             session.dig(:post_request_streams, related_request_id)
           else
-            session[:stream]
+            session[:get_sse_stream]
           end
         end
 
@@ -572,7 +572,7 @@ module MCP
           end
 
           if removed
-            close_stream_safely(removed[:stream])
+            close_stream_safely(removed[:get_sse_stream])
 
             removed[:post_request_streams]&.each_value do |stream|
               close_stream_safely(stream)
@@ -583,7 +583,7 @@ module MCP
         end
 
         def get_session_stream(session_id)
-          @mutex.synchronize { @sessions[session_id]&.fetch(:stream, nil) }
+          @mutex.synchronize { @sessions[session_id]&.fetch(:get_sse_stream, nil) }
         end
 
         def session_exists?(session_id)
@@ -626,8 +626,8 @@ module MCP
         def store_stream_for_session(session_id, stream)
           @mutex.synchronize do
             session = @sessions[session_id]
-            if session && !session[:stream]
-              session[:stream] = stream
+            if session && !session[:get_sse_stream]
+              session[:get_sse_stream] = stream
             else
               # Either session was removed, or another request already established a stream.
               stream.close
@@ -652,13 +652,13 @@ module MCP
         end
 
         def session_active_with_stream?(session_id)
-          @mutex.synchronize { @sessions.key?(session_id) && @sessions[session_id][:stream] }
+          @mutex.synchronize { @sessions.key?(session_id) && @sessions[session_id][:get_sse_stream] }
         end
 
         def send_keepalive_ping(session_id)
           @mutex.synchronize do
-            if @sessions[session_id] && @sessions[session_id][:stream]
-              send_ping_to_stream(@sessions[session_id][:stream])
+            if @sessions[session_id] && @sessions[session_id][:get_sse_stream]
+              send_ping_to_stream(@sessions[session_id][:get_sse_stream])
             end
           end
         rescue *STREAM_WRITE_ERRORS => e
