@@ -56,43 +56,6 @@ It implements the Model Context Protocol specification, handling model context r
 
 ### Usage
 
-> [!IMPORTANT]
-> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
-> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
-> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
-> do not share memory, which breaks session management and SSE connections.
-> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
-
-#### Rails Controller
-
-When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
-requests.
-
-You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
-status codes (e.g., 202 Accepted for notifications).
-
-```ruby
-class McpController < ActionController::Base
-  def create
-    server = MCP::Server.new(
-      name: "my_server",
-      title: "Example Server Display Name",
-      version: "1.0.0",
-      instructions: "Use the tools of this server as a last resort",
-      tools: [SomeTool, AnotherTool],
-      prompts: [MyPrompt],
-      server_context: { user_id: current_user.id },
-    )
-    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-    server.transport = transport
-    status, headers, body = transport.handle_request(request)
-
-    render(json: body.first, status: status, headers: headers)
-  end
-end
-```
-
 #### Stdio Transport
 
 If you want to build a local command-line application, you can use the stdio transport:
@@ -139,6 +102,43 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
+
+#### Rails Controller
+
+When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
+[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
+requests.
+
+You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
+status codes (e.g., 202 Accepted for notifications).
+
+```ruby
+class McpController < ActionController::Base
+  def create
+    server = MCP::Server.new(
+      name: "my_server",
+      title: "Example Server Display Name",
+      version: "1.0.0",
+      instructions: "Use the tools of this server as a last resort",
+      tools: [SomeTool, AnotherTool],
+      prompts: [MyPrompt],
+      server_context: { user_id: current_user.id },
+    )
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+    server.transport = transport
+    status, headers, body = transport.handle_request(request)
+
+    render(json: body.first, status: status, headers: headers)
+  end
+end
+```
+
+> [!IMPORTANT]
+> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
+> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
+> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
+> do not share memory, which breaks session management and SSE connections.
+> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
 
 ### Configuration
 
