@@ -2864,6 +2864,108 @@ module MCP
           assert session2_logging.should_notify?("debug")
         end
 
+        test "call(env) works as a Rack app for POST requests" do
+          env = {
+            "REQUEST_METHOD" => "POST",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init-1" }.to_json),
+            "CONTENT_TYPE" => "application/json",
+            "HTTP_ACCEPT" => "application/json, text/event-stream",
+          }
+
+          response = @transport.call(env)
+          assert_equal 200, response[0]
+          assert_equal "application/json", response[1]["Content-Type"]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "2.0", body["jsonrpc"]
+          assert_equal "init-1", body["id"]
+        end
+
+        test "call(env) returns 405 for unsupported HTTP methods" do
+          env = {
+            "REQUEST_METHOD" => "PUT",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new(""),
+          }
+
+          response = @transport.call(env)
+          assert_equal 405, response[0]
+        end
+
+        test "call(env) handles GET SSE stream request" do
+          init_env = {
+            "REQUEST_METHOD" => "POST",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init" }.to_json),
+            "CONTENT_TYPE" => "application/json",
+            "HTTP_ACCEPT" => "application/json, text/event-stream",
+          }
+          init_response = @transport.call(init_env)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          get_env = {
+            "REQUEST_METHOD" => "GET",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new(""),
+            "HTTP_ACCEPT" => "text/event-stream",
+            "HTTP_MCP_SESSION_ID" => session_id,
+          }
+
+          response = @transport.call(get_env)
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert response[2].is_a?(Proc)
+        end
+
+        test "call(env) handles DELETE session request" do
+          init_env = {
+            "REQUEST_METHOD" => "POST",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init" }.to_json),
+            "CONTENT_TYPE" => "application/json",
+            "HTTP_ACCEPT" => "application/json, text/event-stream",
+          }
+          init_response = @transport.call(init_env)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          delete_env = {
+            "REQUEST_METHOD" => "DELETE",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new(""),
+            "HTTP_MCP_SESSION_ID" => session_id,
+          }
+
+          response = @transport.call(delete_env)
+          assert_equal 200, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert body["success"]
+        end
+
+        test "SSE response headers are not frozen so Rack middleware can modify them" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init-frozen" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "tools/list", id: "sse-headers-1" }.to_json,
+          )
+
+          status, headers, = @transport.handle_request(request)
+          assert_equal 200, status
+          assert_equal "text/event-stream", headers["Content-Type"]
+          refute headers.frozen?, "SSE response headers should not be frozen"
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)

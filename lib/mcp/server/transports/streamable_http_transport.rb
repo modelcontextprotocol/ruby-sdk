@@ -3,6 +3,15 @@
 require "json"
 require_relative "../../transport"
 
+# This file is autoloaded only when `StreamableHTTPTransport` is referenced,
+# so the `rack` dependency does not affect `StdioTransport` users.
+begin
+  require "rack"
+rescue LoadError
+  raise LoadError, "The 'rack' gem is required to use the StreamableHTTPTransport. " \
+    "Add it to your Gemfile: gem 'rack'"
+end
+
 module MCP
   class Server
     module Transports
@@ -38,6 +47,11 @@ module MCP
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
         SESSION_REAP_INTERVAL = 60
+
+        # Rack app interface. This transport can be mounted as a Rack app.
+        def call(env)
+          handle_request(Rack::Request.new(env))
+        end
 
         def handle_request(request)
           case request.env["REQUEST_METHOD"]
@@ -531,7 +545,7 @@ module MCP
             end
           end
 
-          [200, SSE_HEADERS, body]
+          [200, SSE_HEADERS.dup, body]
         end
 
         # Returns the SSE stream available for server-to-client messages.
@@ -613,7 +627,7 @@ module MCP
         def setup_sse_stream(session_id)
           body = create_sse_body(session_id)
 
-          [200, SSE_HEADERS, body]
+          [200, SSE_HEADERS.dup, body]
         end
 
         def create_sse_body(session_id)
