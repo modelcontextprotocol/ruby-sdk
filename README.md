@@ -54,57 +54,6 @@ It implements the Model Context Protocol specification, handling model context r
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
 - `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
 
-### Custom Methods
-
-The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-
-# Define a custom method that returns a result
-server.define_custom_method(method_name: "add") do |params|
-  params[:a] + params[:b]
-end
-
-# Define a custom notification method (returns nil)
-server.define_custom_method(method_name: "notify") do |params|
-  # Process notification
-  nil
-end
-```
-
-**Key Features:**
-
-- Accepts any method name as a string
-- Block receives the request parameters as a hash
-- Can handle both regular methods (with responses) and notifications
-- Prevents overriding existing MCP protocol methods
-- Supports instrumentation callbacks for monitoring
-
-**Usage Example:**
-
-```ruby
-# Client request
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "add",
-  "params": { "a": 5, "b": 3 }
-}
-
-# Server response
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": 8
-}
-```
-
-**Error Handling:**
-
-- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
-- Supports the same exception reporting and instrumentation as standard methods
-
 ### Sampling
 
 The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
@@ -501,6 +450,59 @@ When configured, sessions that receive no HTTP requests for this duration are au
 # Session timeout of 30 minutes
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
 ```
+
+### Advanced
+
+#### Custom Methods
+
+The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Define a custom method that returns a result
+server.define_custom_method(method_name: "add") do |params|
+  params[:a] + params[:b]
+end
+
+# Define a custom notification method (returns nil)
+server.define_custom_method(method_name: "notify") do |params|
+  # Process notification
+  nil
+end
+```
+
+**Key Features:**
+
+- Accepts any method name as a string
+- Block receives the request parameters as a hash
+- Can handle both regular methods (with responses) and notifications
+- Prevents overriding existing MCP protocol methods
+- Supports instrumentation callbacks for monitoring
+
+**Usage Example:**
+
+```ruby
+# Client request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "add",
+  "params": { "a": 5, "b": 3 }
+}
+
+# Server response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": 8
+}
+```
+
+**Error Handling:**
+
+- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
+- Supports the same exception reporting and instrumentation as standard methods
 
 ### Unsupported Features (to be implemented in future versions)
 
