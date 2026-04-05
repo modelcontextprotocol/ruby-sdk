@@ -138,6 +138,11 @@ end
 > so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
 > Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
 > do not share memory, which breaks session management and SSE connections.
+>
+> When running multiple server instances behind a load balancer, configure your load balancer to use
+> sticky sessions (session affinity) so that requests with the same `Mcp-Session-Id` header are always
+> routed to the same instance.
+>
 > Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
 
 ### Configuration
