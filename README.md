@@ -54,497 +54,7 @@ It implements the Model Context Protocol specification, handling model context r
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
 - `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
 
-### Custom Methods
-
-The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-
-# Define a custom method that returns a result
-server.define_custom_method(method_name: "add") do |params|
-  params[:a] + params[:b]
-end
-
-# Define a custom notification method (returns nil)
-server.define_custom_method(method_name: "notify") do |params|
-  # Process notification
-  nil
-end
-```
-
-**Key Features:**
-
-- Accepts any method name as a string
-- Block receives the request parameters as a hash
-- Can handle both regular methods (with responses) and notifications
-- Prevents overriding existing MCP protocol methods
-- Supports instrumentation callbacks for monitoring
-
-**Usage Example:**
-
-```ruby
-# Client request
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "add",
-  "params": { "a": 5, "b": 3 }
-}
-
-# Server response
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": 8
-}
-```
-
-**Error Handling:**
-
-- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
-- Supports the same exception reporting and instrumentation as standard methods
-
-### Sampling
-
-The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
-This enables servers to leverage the client's LLM capabilities without needing direct access to AI models.
-
-**Key Concepts:**
-
-- **Server-to-Client Request**: Unlike typical MCP methods (client→server), sampling is initiated by the server
-- **Client Capability**: Clients must declare `sampling` capability during initialization
-- **Tool Support**: When using tools in sampling requests, clients must declare `sampling.tools` capability
-- **Human-in-the-Loop**: Clients can implement user approval before forwarding requests to LLMs
-
-**Usage Example (Stdio transport):**
-
-`Server#create_sampling_message` is for single-client transports (e.g., `StdioTransport`).
-For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools instead,
-which routes the request to the correct client session.
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-transport = MCP::Server::Transports::StdioTransport.new(server)
-server.transport = transport
-```
-
-Client must declare sampling capability during initialization.
-This happens automatically when the client connects.
-
-```ruby
-result = server.create_sampling_message(
-  messages: [
-    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
-  ],
-  max_tokens: 100,
-  system_prompt: "You are a helpful assistant.",
-  temperature: 0.7
-)
-```
-
-Result contains the LLM response:
-
-```ruby
-{
-  role: "assistant",
-  content: { type: "text", text: "The capital of France is Paris." },
-  model: "claude-3-sonnet-20240307",
-  stopReason: "endTurn"
-}
-```
-
-**Parameters:**
-
-Required:
-
-- `messages:` (Array) - Array of message objects with `role` and `content`
-- `max_tokens:` (Integer) - Maximum tokens in the response
-
-Optional:
-
-- `system_prompt:` (String) - System prompt for the LLM
-- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
-- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
-- `temperature:` (Float) - Sampling temperature
-- `stop_sequences:` (Array) - Sequences that stop generation
-- `metadata:` (Hash) - Additional metadata
-- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
-- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
-
-**Using Sampling in Tools (works with both Stdio and HTTP transports):**
-
-Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
-The request is automatically routed to the correct client session.
-Set `server.server_context = server` so that `server_context.create_sampling_message` delegates to the server:
-
-```ruby
-class SummarizeTool < MCP::Tool
-  description "Summarize text using LLM"
-  input_schema(
-    properties: {
-      text: { type: "string" }
-    },
-    required: ["text"]
-  )
-
-  def self.call(text:, server_context:)
-    result = server_context.create_sampling_message(
-      messages: [
-        { role: "user", content: { type: "text", text: "Please summarize: #{text}" } }
-      ],
-      max_tokens: 500
-    )
-
-    MCP::Tool::Response.new([{
-      type: "text",
-      text: result[:content][:text]
-    }])
-  end
-end
-
-server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
-server.server_context = server
-```
-
-**Tool Use in Sampling:**
-
-When tools are provided in a sampling request, the LLM can call them during generation.
-The server must handle tool calls and continue the conversation with tool results:
-
-```ruby
-result = server.create_sampling_message(
-  messages: [
-    { role: "user", content: { type: "text", text: "What's the weather in Paris?" } }
-  ],
-  max_tokens: 1000,
-  tools: [
-    {
-      name: "get_weather",
-      description: "Get weather for a city",
-      inputSchema: {
-        type: "object",
-        properties: { city: { type: "string" } },
-        required: ["city"]
-      }
-    }
-  ],
-  tool_choice: { mode: "auto" }
-)
-
-if result[:stopReason] == "toolUse"
-  tool_results = result[:content].map do |tool_use|
-    weather_data = get_weather(tool_use[:input][:city])
-
-    {
-      type: "tool_result",
-      toolUseId: tool_use[:id],
-      content: [{ type: "text", text: weather_data.to_json }]
-    }
-  end
-
-  final_result = server.create_sampling_message(
-    messages: [
-      { role: "user", content: { type: "text", text: "What's the weather in Paris?" } },
-      { role: "assistant", content: result[:content] },
-      { role: "user", content: tool_results }
-    ],
-    max_tokens: 1000,
-    tools: [...]
-  )
-end
-```
-
-**Error Handling:**
-
-- Raises `RuntimeError` if transport is not set
-- Raises `RuntimeError` if client does not support `sampling` capability
-- Raises `RuntimeError` if `tools` are used but client lacks `sampling.tools` capability
-- Raises `StandardError` if client returns an error response
-
-### Notifications
-
-The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
-
-#### Notification Methods
-
-The server provides the following notification methods:
-
-- `notify_tools_list_changed` - Send a notification when the tools list changes
-- `notify_prompts_list_changed` - Send a notification when the prompts list changes
-- `notify_resources_list_changed` - Send a notification when the resources list changes
-- `notify_log_message` - Send a structured logging notification message
-
-#### Session Scoping
-
-When using Streamable HTTP transport with multiple clients, each client connection gets its own session. Notifications are scoped as follows:
-
-- **`report_progress`** and **`notify_log_message`** called via `server_context` inside a tool handler are automatically sent only to the requesting client.
-No extra configuration is needed.
-- **`notify_tools_list_changed`**, **`notify_prompts_list_changed`**, and **`notify_resources_list_changed`** are always broadcast to all connected clients,
-as they represent server-wide state changes. These should be called on the `server` instance directly.
-
-#### Notification Format
-
-Notifications follow the JSON-RPC 2.0 specification and use these method names:
-
-- `notifications/tools/list_changed`
-- `notifications/prompts/list_changed`
-- `notifications/resources/list_changed`
-- `notifications/progress`
-- `notifications/message`
-
-### Progress
-
-The MCP Ruby SDK supports progress tracking for long-running tool operations,
-following the [MCP Progress specification](https://modelcontextprotocol.io/specification/latest/server/utilities/progress).
-
-#### How Progress Works
-
-1. **Client Request**: The client sends a `progressToken` in the `_meta` field when calling a tool
-2. **Server Notification**: The server sends `notifications/progress` messages back to the client during tool execution
-3. **Tool Integration**: Tools call `server_context.report_progress` to report incremental progress
-
-#### Server-Side: Tool with Progress
-
-Tools that accept a `server_context:` parameter can call `report_progress` on it.
-The server automatically wraps the context in an `MCP::ServerContext` instance that provides this method:
-
-```ruby
-class LongRunningTool < MCP::Tool
-  description "A tool that reports progress during execution"
-  input_schema(
-    properties: {
-      count: { type: "integer" },
-    },
-    required: ["count"]
-  )
-
-  def self.call(count:, server_context:)
-    count.times do |i|
-      # Do work here.
-      server_context.report_progress(i + 1, total: count, message: "Processing item #{i + 1}")
-    end
-
-    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
-  end
-end
-```
-
-The `server_context.report_progress` method accepts:
-
-- `progress` (required) — current progress value (numeric)
-- `total:` (optional) — total expected value, so clients can display a percentage
-- `message:` (optional) — human-readable status message
-
-**Key Features:**
-
-- Tools report progress via `server_context.report_progress`
-- `report_progress` is a no-op when no `progressToken` was provided by the client
-- Supports both numeric and string progress tokens
-
-### Completions
-
-MCP spec includes [Completions](https://modelcontextprotocol.io/specification/latest/server/utilities/completion),
-which enable servers to provide autocompletion suggestions for prompt arguments and resource URIs.
-
-To enable completions, declare the `completions` capability and register a handler:
-
-```ruby
-server = MCP::Server.new(
-  name: "my_server",
-  prompts: [CodeReviewPrompt],
-  resource_templates: [FileTemplate],
-  capabilities: { completions: {} },
-)
-
-server.completion_handler do |params|
-  ref = params[:ref]
-  argument = params[:argument]
-  value = argument[:value]
-
-  case ref[:type]
-  when "ref/prompt"
-    values = case argument[:name]
-    when "language"
-      ["python", "pytorch", "pyside"].select { |v| v.start_with?(value) }
-    else
-      []
-    end
-    { completion: { values: values, hasMore: false } }
-  when "ref/resource"
-    { completion: { values: [], hasMore: false } }
-  end
-end
-```
-
-The handler receives a `params` hash with:
-
-- `ref` - The reference (`{ type: "ref/prompt", name: "..." }` or `{ type: "ref/resource", uri: "..." }`)
-- `argument` - The argument being completed (`{ name: "...", value: "..." }`)
-- `context` (optional) - Previously resolved arguments (`{ arguments: { ... } }`)
-
-The handler must return a hash with a `completion` key containing `values` (array of strings), and optionally `total` and `hasMore`.
-The SDK automatically enforces the 100-item limit per the MCP specification.
-
-The server validates that the referenced prompt, resource, or resource template is registered before calling the handler.
-Requests for unknown references return an error.
-
-### Logging
-
-The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
-
-The `notifications/message` notification is used for structured logging between client and server.
-
-#### Log Levels
-
-The SDK supports 8 log levels with increasing severity:
-
-- `debug` - Detailed debugging information
-- `info` - General informational messages
-- `notice` - Normal but significant events
-- `warning` - Warning conditions
-- `error` - Error conditions
-- `critical` - Critical conditions
-- `alert` - Action must be taken immediately
-- `emergency` - System is unusable
-
-#### How Logging Works
-
-1. **Client Configuration**: The client sends a `logging/setLevel` request to configure the minimum log level
-2. **Server Filtering**: The server only sends log messages at the configured level or higher severity
-3. **Notification Delivery**: Log messages are sent as `notifications/message` to the client
-
-For example, if the client sets the level to `"error"` (severity 4), the server will send messages with levels: `error`, `critical`, `alert`, and `emergency`.
-
-For more details, see the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
-
-**Usage Example:**
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-transport = MCP::Server::Transports::StdioTransport.new(server)
-server.transport = transport
-
-# The client first configures the logging level (on the client side):
-transport.send_request(
-  request: {
-    jsonrpc: "2.0",
-    method: "logging/setLevel",
-    params: { level: "info" },
-    id: session_id # Unique request ID within the session
-  }
-)
-
-# Send log messages at different severity levels
-server.notify_log_message(
-  data: { message: "Application started successfully" },
-  level: "info"
-)
-
-server.notify_log_message(
-  data: { message: "Configuration file not found, using defaults" },
-  level: "warning"
-)
-
-server.notify_log_message(
-  data: {
-    error: "Database connection failed",
-    details: { host: "localhost", port: 5432 }
-  },
-  level: "error",
-  logger: "DatabaseLogger" # Optional logger name
-)
-```
-
-**Key Features:**
-
-- Supports 8 log levels (debug, info, notice, warning, error, critical, alert, emergency) based on https://modelcontextprotocol.io/specification/2025-06-18/server/utilities/logging#log-levels
-- Server has capability `logging` to send log messages
-- Messages are only sent if a transport is configured
-- Messages are filtered based on the client's configured log level
-- If the log level hasn't been set by the client, no messages will be sent
-
-#### Transport Support
-
-- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
-- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
-
-#### Usage Example
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-
-# Default Streamable HTTP - session oriented
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-
-server.transport = transport
-
-# When tools change, notify clients
-server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
-server.notify_tools_list_changed
-```
-
-You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
-This mode allows for easy multi-node deployment.
-Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` (`stateless` defaults to `false`):
-
-```ruby
-# Stateless Streamable HTTP - session-less
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
-```
-
-By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
-When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
-
-```ruby
-# Session timeout of 30 minutes
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
-```
-
-### Unsupported Features (to be implemented in future versions)
-
-- Resource subscriptions
-- Elicitation
-
 ### Usage
-
-> [!IMPORTANT]
-> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
-> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
-> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
-> do not share memory, which breaks session management and SSE connections.
-> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
-
-#### Rails Controller
-
-When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
-requests.
-
-You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
-status codes (e.g., 202 Accepted for notifications).
-
-```ruby
-class McpController < ActionController::Base
-  def create
-    server = MCP::Server.new(
-      name: "my_server",
-      title: "Example Server Display Name",
-      version: "1.0.0",
-      instructions: "Use the tools of this server as a last resort",
-      tools: [SomeTool, AnotherTool],
-      prompts: [MyPrompt],
-      server_context: { user_id: current_user.id },
-    )
-    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-    server.transport = transport
-    status, headers, body = transport.handle_request(request)
-
-    render(json: body.first, status: status, headers: headers)
-  end
-end
-```
 
 #### Stdio Transport
 
@@ -592,6 +102,43 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"2","method":"tools/list"}
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
+
+#### Rails Controller
+
+When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
+[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
+requests.
+
+You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
+status codes (e.g., 202 Accepted for notifications).
+
+```ruby
+class McpController < ActionController::Base
+  def create
+    server = MCP::Server.new(
+      name: "my_server",
+      title: "Example Server Display Name",
+      version: "1.0.0",
+      instructions: "Use the tools of this server as a last resort",
+      tools: [SomeTool, AnotherTool],
+      prompts: [MyPrompt],
+      server_context: { user_id: current_user.id },
+    )
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+    server.transport = transport
+    status, headers, body = transport.handle_request(request)
+
+    render(json: body.first, status: status, headers: headers)
+  end
+end
+```
+
+> [!IMPORTANT]
+> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
+> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
+> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
+> do not share memory, which breaks session management and SSE connections.
+> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
 
 ### Configuration
 
@@ -1255,6 +802,461 @@ server = MCP::Server.new(
   resource_templates: [resource_template],
 )
 ```
+
+### Sampling
+
+The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
+This enables servers to leverage the client's LLM capabilities without needing direct access to AI models.
+
+**Key Concepts:**
+
+- **Server-to-Client Request**: Unlike typical MCP methods (client→server), sampling is initiated by the server
+- **Client Capability**: Clients must declare `sampling` capability during initialization
+- **Tool Support**: When using tools in sampling requests, clients must declare `sampling.tools` capability
+- **Human-in-the-Loop**: Clients can implement user approval before forwarding requests to LLMs
+
+**Usage Example (Stdio transport):**
+
+`Server#create_sampling_message` is for single-client transports (e.g., `StdioTransport`).
+For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools instead,
+which routes the request to the correct client session.
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Server::Transports::StdioTransport.new(server)
+server.transport = transport
+```
+
+Client must declare sampling capability during initialization.
+This happens automatically when the client connects.
+
+```ruby
+result = server.create_sampling_message(
+  messages: [
+    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
+  ],
+  max_tokens: 100,
+  system_prompt: "You are a helpful assistant.",
+  temperature: 0.7
+)
+```
+
+Result contains the LLM response:
+
+```ruby
+{
+  role: "assistant",
+  content: { type: "text", text: "The capital of France is Paris." },
+  model: "claude-3-sonnet-20240307",
+  stopReason: "endTurn"
+}
+```
+
+**Parameters:**
+
+Required:
+
+- `messages:` (Array) - Array of message objects with `role` and `content`
+- `max_tokens:` (Integer) - Maximum tokens in the response
+
+Optional:
+
+- `system_prompt:` (String) - System prompt for the LLM
+- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
+- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
+- `temperature:` (Float) - Sampling temperature
+- `stop_sequences:` (Array) - Sequences that stop generation
+- `metadata:` (Hash) - Additional metadata
+- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
+- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
+
+**Using Sampling in Tools (works with both Stdio and HTTP transports):**
+
+Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
+The request is automatically routed to the correct client session.
+Set `server.server_context = server` so that `server_context.create_sampling_message` delegates to the server:
+
+```ruby
+class SummarizeTool < MCP::Tool
+  description "Summarize text using LLM"
+  input_schema(
+    properties: {
+      text: { type: "string" }
+    },
+    required: ["text"]
+  )
+
+  def self.call(text:, server_context:)
+    result = server_context.create_sampling_message(
+      messages: [
+        { role: "user", content: { type: "text", text: "Please summarize: #{text}" } }
+      ],
+      max_tokens: 500
+    )
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: result[:content][:text]
+    }])
+  end
+end
+
+server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
+server.server_context = server
+```
+
+**Tool Use in Sampling:**
+
+When tools are provided in a sampling request, the LLM can call them during generation.
+The server must handle tool calls and continue the conversation with tool results:
+
+```ruby
+result = server.create_sampling_message(
+  messages: [
+    { role: "user", content: { type: "text", text: "What's the weather in Paris?" } }
+  ],
+  max_tokens: 1000,
+  tools: [
+    {
+      name: "get_weather",
+      description: "Get weather for a city",
+      inputSchema: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"]
+      }
+    }
+  ],
+  tool_choice: { mode: "auto" }
+)
+
+if result[:stopReason] == "toolUse"
+  tool_results = result[:content].map do |tool_use|
+    weather_data = get_weather(tool_use[:input][:city])
+
+    {
+      type: "tool_result",
+      toolUseId: tool_use[:id],
+      content: [{ type: "text", text: weather_data.to_json }]
+    }
+  end
+
+  final_result = server.create_sampling_message(
+    messages: [
+      { role: "user", content: { type: "text", text: "What's the weather in Paris?" } },
+      { role: "assistant", content: result[:content] },
+      { role: "user", content: tool_results }
+    ],
+    max_tokens: 1000,
+    tools: [...]
+  )
+end
+```
+
+**Error Handling:**
+
+- Raises `RuntimeError` if transport is not set
+- Raises `RuntimeError` if client does not support `sampling` capability
+- Raises `RuntimeError` if `tools` are used but client lacks `sampling.tools` capability
+- Raises `StandardError` if client returns an error response
+
+### Notifications
+
+The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
+
+#### Notification Methods
+
+The server provides the following notification methods:
+
+- `notify_tools_list_changed` - Send a notification when the tools list changes
+- `notify_prompts_list_changed` - Send a notification when the prompts list changes
+- `notify_resources_list_changed` - Send a notification when the resources list changes
+- `notify_log_message` - Send a structured logging notification message
+
+#### Session Scoping
+
+When using Streamable HTTP transport with multiple clients, each client connection gets its own session. Notifications are scoped as follows:
+
+- **`report_progress`** and **`notify_log_message`** called via `server_context` inside a tool handler are automatically sent only to the requesting client.
+No extra configuration is needed.
+- **`notify_tools_list_changed`**, **`notify_prompts_list_changed`**, and **`notify_resources_list_changed`** are always broadcast to all connected clients,
+as they represent server-wide state changes. These should be called on the `server` instance directly.
+
+#### Notification Format
+
+Notifications follow the JSON-RPC 2.0 specification and use these method names:
+
+- `notifications/tools/list_changed`
+- `notifications/prompts/list_changed`
+- `notifications/resources/list_changed`
+- `notifications/progress`
+- `notifications/message`
+
+### Progress
+
+The MCP Ruby SDK supports progress tracking for long-running tool operations,
+following the [MCP Progress specification](https://modelcontextprotocol.io/specification/latest/server/utilities/progress).
+
+#### How Progress Works
+
+1. **Client Request**: The client sends a `progressToken` in the `_meta` field when calling a tool
+2. **Server Notification**: The server sends `notifications/progress` messages back to the client during tool execution
+3. **Tool Integration**: Tools call `server_context.report_progress` to report incremental progress
+
+#### Server-Side: Tool with Progress
+
+Tools that accept a `server_context:` parameter can call `report_progress` on it.
+The server automatically wraps the context in an `MCP::ServerContext` instance that provides this method:
+
+```ruby
+class LongRunningTool < MCP::Tool
+  description "A tool that reports progress during execution"
+  input_schema(
+    properties: {
+      count: { type: "integer" },
+    },
+    required: ["count"]
+  )
+
+  def self.call(count:, server_context:)
+    count.times do |i|
+      # Do work here.
+      server_context.report_progress(i + 1, total: count, message: "Processing item #{i + 1}")
+    end
+
+    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
+  end
+end
+```
+
+The `server_context.report_progress` method accepts:
+
+- `progress` (required) — current progress value (numeric)
+- `total:` (optional) — total expected value, so clients can display a percentage
+- `message:` (optional) — human-readable status message
+
+**Key Features:**
+
+- Tools report progress via `server_context.report_progress`
+- `report_progress` is a no-op when no `progressToken` was provided by the client
+- Supports both numeric and string progress tokens
+
+### Completions
+
+MCP spec includes [Completions](https://modelcontextprotocol.io/specification/latest/server/utilities/completion),
+which enable servers to provide autocompletion suggestions for prompt arguments and resource URIs.
+
+To enable completions, declare the `completions` capability and register a handler:
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  prompts: [CodeReviewPrompt],
+  resource_templates: [FileTemplate],
+  capabilities: { completions: {} },
+)
+
+server.completion_handler do |params|
+  ref = params[:ref]
+  argument = params[:argument]
+  value = argument[:value]
+
+  case ref[:type]
+  when "ref/prompt"
+    values = case argument[:name]
+    when "language"
+      ["python", "pytorch", "pyside"].select { |v| v.start_with?(value) }
+    else
+      []
+    end
+    { completion: { values: values, hasMore: false } }
+  when "ref/resource"
+    { completion: { values: [], hasMore: false } }
+  end
+end
+```
+
+The handler receives a `params` hash with:
+
+- `ref` - The reference (`{ type: "ref/prompt", name: "..." }` or `{ type: "ref/resource", uri: "..." }`)
+- `argument` - The argument being completed (`{ name: "...", value: "..." }`)
+- `context` (optional) - Previously resolved arguments (`{ arguments: { ... } }`)
+
+The handler must return a hash with a `completion` key containing `values` (array of strings), and optionally `total` and `hasMore`.
+The SDK automatically enforces the 100-item limit per the MCP specification.
+
+The server validates that the referenced prompt, resource, or resource template is registered before calling the handler.
+Requests for unknown references return an error.
+
+### Logging
+
+The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+The `notifications/message` notification is used for structured logging between client and server.
+
+#### Log Levels
+
+The SDK supports 8 log levels with increasing severity:
+
+- `debug` - Detailed debugging information
+- `info` - General informational messages
+- `notice` - Normal but significant events
+- `warning` - Warning conditions
+- `error` - Error conditions
+- `critical` - Critical conditions
+- `alert` - Action must be taken immediately
+- `emergency` - System is unusable
+
+#### How Logging Works
+
+1. **Client Configuration**: The client sends a `logging/setLevel` request to configure the minimum log level
+2. **Server Filtering**: The server only sends log messages at the configured level or higher severity
+3. **Notification Delivery**: Log messages are sent as `notifications/message` to the client
+
+For example, if the client sets the level to `"error"` (severity 4), the server will send messages with levels: `error`, `critical`, `alert`, and `emergency`.
+
+For more details, see the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+**Usage Example:**
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Server::Transports::StdioTransport.new(server)
+server.transport = transport
+
+# The client first configures the logging level (on the client side):
+transport.send_request(
+  request: {
+    jsonrpc: "2.0",
+    method: "logging/setLevel",
+    params: { level: "info" },
+    id: session_id # Unique request ID within the session
+  }
+)
+
+# Send log messages at different severity levels
+server.notify_log_message(
+  data: { message: "Application started successfully" },
+  level: "info"
+)
+
+server.notify_log_message(
+  data: { message: "Configuration file not found, using defaults" },
+  level: "warning"
+)
+
+server.notify_log_message(
+  data: {
+    error: "Database connection failed",
+    details: { host: "localhost", port: 5432 }
+  },
+  level: "error",
+  logger: "DatabaseLogger" # Optional logger name
+)
+```
+
+**Key Features:**
+
+- Supports 8 log levels (debug, info, notice, warning, error, critical, alert, emergency) based on https://modelcontextprotocol.io/specification/2025-06-18/server/utilities/logging#log-levels
+- Server has capability `logging` to send log messages
+- Messages are only sent if a transport is configured
+- Messages are filtered based on the client's configured log level
+- If the log level hasn't been set by the client, no messages will be sent
+
+#### Transport Support
+
+- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
+
+#### Usage Example
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Default Streamable HTTP - session oriented
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+server.transport = transport
+
+# When tools change, notify clients
+server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
+server.notify_tools_list_changed
+```
+
+You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
+This mode allows for easy multi-node deployment.
+Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` (`stateless` defaults to `false`):
+
+```ruby
+# Stateless Streamable HTTP - session-less
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+```
+
+By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
+When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
+
+```ruby
+# Session timeout of 30 minutes
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
+```
+
+### Advanced
+
+#### Custom Methods
+
+The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Define a custom method that returns a result
+server.define_custom_method(method_name: "add") do |params|
+  params[:a] + params[:b]
+end
+
+# Define a custom notification method (returns nil)
+server.define_custom_method(method_name: "notify") do |params|
+  # Process notification
+  nil
+end
+```
+
+**Key Features:**
+
+- Accepts any method name as a string
+- Block receives the request parameters as a hash
+- Can handle both regular methods (with responses) and notifications
+- Prevents overriding existing MCP protocol methods
+- Supports instrumentation callbacks for monitoring
+
+**Usage Example:**
+
+```ruby
+# Client request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "add",
+  "params": { "a": 5, "b": 3 }
+}
+
+# Server response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": 8
+}
+```
+
+**Error Handling:**
+
+- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
+- Supports the same exception reporting and instrumentation as standard methods
+
+### Unsupported Features (to be implemented in future versions)
+
+- Resource subscriptions
+- Elicitation
 
 ## Building an MCP Client
 
