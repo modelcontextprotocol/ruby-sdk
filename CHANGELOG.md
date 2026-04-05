@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-06
+
+### Added
+
+- Support `sampling/createMessage` per MCP specification (#282)
+- Support `completion/complete` per MCP specification (#289)
+
+### Fixed
+
+- Support POST response SSE streams for server-to-client messages (#294)
+- Return protocol errors for invalid arguments and server errors (#285)
+- Fix client methods silently swallowing JSON-RPC error responses (#281)
+- Close streams outside mutex in session cleanup (#291)
+
 ## [0.10.0] - 2026-03-30
 
 ### Added
