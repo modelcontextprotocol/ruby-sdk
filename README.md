@@ -810,67 +810,12 @@ This enables servers to leverage the client's LLM capabilities without needing d
 
 **Key Concepts:**
 
-- **Server-to-Client Request**: Unlike typical MCP methods (client→server), sampling is initiated by the server
+- **Server-to-Client Request**: Unlike typical MCP methods (client to server), sampling is initiated by the server
 - **Client Capability**: Clients must declare `sampling` capability during initialization
 - **Tool Support**: When using tools in sampling requests, clients must declare `sampling.tools` capability
 - **Human-in-the-Loop**: Clients can implement user approval before forwarding requests to LLMs
 
-**Usage Example (Stdio transport):**
-
-`Server#create_sampling_message` is for single-client transports (e.g., `StdioTransport`).
-For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools instead,
-which routes the request to the correct client session.
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-transport = MCP::Server::Transports::StdioTransport.new(server)
-server.transport = transport
-```
-
-Client must declare sampling capability during initialization.
-This happens automatically when the client connects.
-
-```ruby
-result = server.create_sampling_message(
-  messages: [
-    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
-  ],
-  max_tokens: 100,
-  system_prompt: "You are a helpful assistant.",
-  temperature: 0.7
-)
-```
-
-Result contains the LLM response:
-
-```ruby
-{
-  role: "assistant",
-  content: { type: "text", text: "The capital of France is Paris." },
-  model: "claude-3-sonnet-20240307",
-  stopReason: "endTurn"
-}
-```
-
-**Parameters:**
-
-Required:
-
-- `messages:` (Array) - Array of message objects with `role` and `content`
-- `max_tokens:` (Integer) - Maximum tokens in the response
-
-Optional:
-
-- `system_prompt:` (String) - System prompt for the LLM
-- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
-- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
-- `temperature:` (Float) - Sampling temperature
-- `stop_sequences:` (Array) - Sequences that stop generation
-- `metadata:` (Hash) - Additional metadata
-- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
-- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
-
-**Using Sampling in Tools (works with both Stdio and HTTP transports):**
+**Using Sampling in Tools:**
 
 Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
 The request is automatically routed to the correct client session.
@@ -904,6 +849,53 @@ end
 server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
 server.server_context = server
 ```
+
+**Parameters:**
+
+Required:
+
+- `messages:` (Array) - Array of message objects with `role` and `content`
+- `max_tokens:` (Integer) - Maximum tokens in the response
+
+Optional:
+
+- `system_prompt:` (String) - System prompt for the LLM
+- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
+- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
+- `temperature:` (Float) - Sampling temperature
+- `stop_sequences:` (Array) - Sequences that stop generation
+- `metadata:` (Hash) - Additional metadata
+- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
+- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
+
+**Direct Usage:**
+
+`Server#create_sampling_message` can also be called directly outside of tools:
+
+```ruby
+result = server.create_sampling_message(
+  messages: [
+    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
+  ],
+  max_tokens: 100,
+  system_prompt: "You are a helpful assistant.",
+  temperature: 0.7
+)
+```
+
+Result contains the LLM response:
+
+```ruby
+{
+  role: "assistant",
+  content: { type: "text", text: "The capital of France is Paris." },
+  model: "claude-3-sonnet-20240307",
+  stopReason: "endTurn"
+}
+```
+
+For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools
+to route the request to the correct client session.
 
 **Tool Use in Sampling:**
 
