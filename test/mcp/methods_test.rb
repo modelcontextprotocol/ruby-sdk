@@ -81,5 +81,6 @@ module MCP
     ensure_capability_does_not_raise_for Methods::PING
     ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_PROGRESS
     ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_CANCELLED
+    ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_ELICITATION_COMPLETE
   end
 end

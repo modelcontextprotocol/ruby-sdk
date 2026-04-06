@@ -117,20 +117,27 @@ module JsonRpcHandler
   end
 
   def handle_request_error(error, id, id_validation_pattern)
-    error_type = error.respond_to?(:error_type) ? error.error_type : nil
+    if error.respond_to?(:error_code) && error.error_code
+      code = error.error_code
+      message = error.message
+    else
+      error_type = error.respond_to?(:error_type) ? error.error_type : nil
 
-    code, message = case error_type
-    when :invalid_request then [ErrorCode::INVALID_REQUEST, "Invalid Request"]
-    when :invalid_params then [ErrorCode::INVALID_PARAMS, "Invalid params"]
-    when :parse_error then [ErrorCode::PARSE_ERROR, "Parse error"]
-    when :internal_error then [ErrorCode::INTERNAL_ERROR, "Internal error"]
-    else [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      code, message = case error_type
+      when :invalid_request then [ErrorCode::INVALID_REQUEST, "Invalid Request"]
+      when :invalid_params then [ErrorCode::INVALID_PARAMS, "Invalid params"]
+      when :parse_error then [ErrorCode::PARSE_ERROR, "Parse error"]
+      when :internal_error then [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      else [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      end
     end
+
+    data = error.respond_to?(:error_data) && error.error_data ? error.error_data : error.message
 
     error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
       code: code,
       message: message,
-      data: error.message,
+      data: data,
     })
   end
 

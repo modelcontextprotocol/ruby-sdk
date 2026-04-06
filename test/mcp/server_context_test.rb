@@ -83,6 +83,62 @@ module MCP
       assert_equal "Fallback", result[:content][:text]
     end
 
+    test "ServerContext#create_form_elicitation delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:create_form_elicitation).with(
+        message: "Please provide your name",
+        requested_schema: { type: "object", properties: { name: { type: "string" } } },
+        related_request_id: nil,
+      ).returns(action: "accept", content: { name: "test_user" })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_form_elicitation(
+        message: "Please provide your name",
+        requested_schema: { type: "object", properties: { name: { type: "string" } } },
+      )
+
+      assert_equal "accept", result[:action]
+    end
+
+    test "ServerContext#create_url_elicitation delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:create_url_elicitation).with(
+        message: "Please authorize",
+        url: "https://example.com/oauth",
+        elicitation_id: "abc-123",
+        related_request_id: nil,
+      ).returns(action: "accept")
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_url_elicitation(
+        message: "Please authorize",
+        url: "https://example.com/oauth",
+        elicitation_id: "abc-123",
+      )
+
+      assert_equal "accept", result[:action]
+    end
+
+    test "ServerContext#notify_elicitation_complete delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:notify_elicitation_complete).with(elicitation_id: "abc-123")
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      server_context.notify_elicitation_complete(elicitation_id: "abc-123")
+    end
+
     test "ServerContext delegates to custom object context" do
       context = Object.new
       def context.custom_method

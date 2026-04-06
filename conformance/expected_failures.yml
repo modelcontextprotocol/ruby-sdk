@@ -1,5 +1,1 @@
-server:
-  # TODO: Server-to-client requests (elicitation/create) are not implemented.
-  - tools-call-elicitation
-  - elicitation-sep1034-defaults
-  - elicitation-sep1330-enums
+server: []

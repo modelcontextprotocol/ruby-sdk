@@ -488,6 +488,43 @@ describe JsonRpcHandler do
       }
     end
 
+    it "returns a custom error code when RequestHandlerError has error_code set" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Custom error",
+          nil,
+          error_code: -32042,
+          error_data: { elicitations: [{ id: "abc" }] },
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32042,
+        message: "Custom error",
+        data: { elicitations: [{ id: "abc" }] },
+      }
+    end
+
+    it "falls back to error_type when error_code is nil" do
+      register("test_method") do
+        raise MCP::Server::RequestHandlerError.new(
+          "Invalid params error",
+          nil,
+          error_type: :invalid_params,
+        )
+      end
+
+      handle jsonrpc: "2.0", id: 1, method: "test_method"
+
+      assert_rpc_error expected_error: {
+        code: -32602,
+        message: "Invalid params",
+        data: "Invalid params error",
+      }
+    end
+
     # 6 Batch
     #
     # To send several Request objects at the same time, the Client MAY send an Array filled with Request objects.
