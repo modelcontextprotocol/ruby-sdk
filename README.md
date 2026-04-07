@@ -113,7 +113,7 @@ You can use `StreamableHTTPTransport#handle_request` to handle requests with pro
 status codes (e.g., 202 Accepted for notifications).
 
 ```ruby
-class McpController < ActionController::Base
+class McpController < ActionController::API
   def create
     server = MCP::Server.new(
       name: "my_server",
@@ -124,7 +124,8 @@ class McpController < ActionController::Base
       prompts: [MyPrompt],
       server_context: { user_id: current_user.id },
     )
-    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+    # Since the `MCP-Session-Id` is not shared across requests, `stateless: true` is set.
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
     server.transport = transport
     status, headers, body = transport.handle_request(request)
 
