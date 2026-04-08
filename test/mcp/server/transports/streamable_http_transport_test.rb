@@ -2591,7 +2591,6 @@ module MCP
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
           transport = StreamableHTTPTransport.new(server)
-          server.transport = transport
 
           server.define_tool(name: "log_tool") do |server_context:|
             server_context.notify_log_message(data: "secret", level: "info")
@@ -2668,7 +2667,6 @@ module MCP
         test "session-scoped progress notification is sent only to the originating session" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server)
-          server.transport = transport
 
           server.define_tool(name: "progress_tool") do |server_context:|
             server_context.report_progress(50, total: 100, message: "halfway")
@@ -2749,7 +2747,6 @@ module MCP
         test "each session stores its own client info independently" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server)
-          server.transport = transport
 
           # Initialize session 1 with client "alpha".
           init1 = create_rack_request(
@@ -2794,7 +2791,6 @@ module MCP
         test "each session stores its own logging level independently" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server)
-          server.transport = transport
 
           # Initialize two sessions.
           init1 = create_rack_request(

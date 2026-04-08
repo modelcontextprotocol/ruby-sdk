@@ -41,7 +41,6 @@ module MCP
       )
 
       @mock_transport = MockTransport.new(@server)
-      @server.transport = @mock_transport
 
       # Simulate client initialization with sampling capability.
       @server.handle({
@@ -197,8 +196,8 @@ module MCP
 
     test "init with sampling capability allows create_sampling_message" do
       server = Server.new(name: "test", version: "1.0")
-      mock_transport = MockTransport.new(server)
-      server.transport = mock_transport
+      # Assigns server.transport via Transport#initialize, which create_sampling_message requires.
+      MockTransport.new(server)
 
       server.handle({
         jsonrpc: "2.0",
@@ -222,8 +221,8 @@ module MCP
 
     test "init without capabilities rejects create_sampling_message" do
       server = Server.new(name: "test", version: "1.0")
-      mock_transport = MockTransport.new(server)
-      server.transport = mock_transport
+      # Assigns server.transport via Transport#initialize, which create_sampling_message requires.
+      MockTransport.new(server)
 
       server.handle({
         jsonrpc: "2.0",
@@ -247,7 +246,6 @@ module MCP
 
     test "create_sampling_message uses per-session capabilities via ServerSession" do
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(@server)
-      @server.transport = transport
 
       # Session with sampling capability passes validation (fails at send_request due to no stream).
       session_with_sampling = ServerSession.new(server: @server, transport: transport, session_id: "s1")
@@ -277,7 +275,6 @@ module MCP
 
     test "ServerSession#client_capabilities falls back to server global capabilities" do
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(@server)
-      @server.transport = transport
 
       # Session without capabilities stored falls back to @server.client_capabilities.
       session = ServerSession.new(server: @server, transport: transport, session_id: "s3")
@@ -295,8 +292,8 @@ module MCP
 
     test "session init does not overwrite server global client_capabilities" do
       server = Server.new(name: "test", version: "1.0")
-      mock_transport = MockTransport.new(server)
-      server.transport = mock_transport
+      # Assigns server.transport via Transport#initialize, which create_sampling_message requires.
+      MockTransport.new(server)
 
       # Non-session init sets global capabilities.
       server.handle({
@@ -314,7 +311,6 @@ module MCP
 
       # Session-scoped init must NOT overwrite global capabilities.
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-      server.transport = transport
       session = ServerSession.new(server: server, transport: transport, session_id: "s1")
 
       server.handle(
@@ -340,7 +336,6 @@ module MCP
     test "Server#create_sampling_message does not see session-scoped capabilities from HTTP init" do
       server = Server.new(name: "test", version: "1.0")
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-      server.transport = transport
 
       # HTTP init stores capabilities on the session, not on the server.
       session = ServerSession.new(server: server, transport: transport, session_id: "s1")

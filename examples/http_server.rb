@@ -94,7 +94,6 @@ end
 
 # Create the Streamable HTTP transport
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-server.transport = transport
 
 # Create a logger for MCP-specific logging
 mcp_logger = Logger.new($stdout)
