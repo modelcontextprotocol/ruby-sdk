@@ -7,9 +7,10 @@ module MCP
 
       attr_reader :url
 
-      def initialize(url:, headers: {})
+      def initialize(url:, headers: {}, &block)
         @url = url
         @headers = headers
+        @faraday_customizer = block
       end
 
       def send_request(request:)
@@ -78,6 +79,8 @@ module MCP
           headers.each do |key, value|
             faraday.headers[key] = value
           end
+
+          @faraday_customizer&.call(faraday)
         end
       end
 

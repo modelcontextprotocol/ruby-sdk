@@ -1405,6 +1405,18 @@ client.tools # will make the call using Bearer auth
 
 You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every request.
 
+#### Customizing the Faraday Connection
+
+You can pass a block to `MCP::Client::HTTP.new` to customize the underlying Faraday connection.
+The block is called after the default middleware is configured, so you can add middleware or swap the HTTP adapter:
+
+```ruby
+http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp") do |faraday|
+  faraday.use MyApp::Middleware::HttpRecorder
+  faraday.adapter :typhoeus
+end
+```
+
 ### Tool Objects
 
 The client provides a wrapper class for tools returned by the server:
