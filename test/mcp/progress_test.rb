@@ -26,7 +26,6 @@ module MCP
     setup do
       @server = Server.new(name: "test_server")
       @transport = MockTransport.new(@server)
-      @server.transport = @transport
       @session = ServerSession.new(server: @server, transport: @transport)
     end
 

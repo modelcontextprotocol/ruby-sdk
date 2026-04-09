@@ -126,7 +126,6 @@ class McpController < ActionController::API
     )
     # Since the `MCP-Session-Id` is not shared across requests, `stateless: true` is set.
     transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
-    server.transport = transport
     status, headers, body = transport.handle_request(request)
 
     render(json: body.first, status: status, headers: headers)
@@ -1120,7 +1119,6 @@ For more details, see the [MCP Logging specification](https://modelcontextprotoc
 ```ruby
 server = MCP::Server.new(name: "my_server")
 transport = MCP::Server::Transports::StdioTransport.new(server)
-server.transport = transport
 
 # The client first configures the logging level (on the client side):
 transport.send_request(
@@ -1173,8 +1171,6 @@ server = MCP::Server.new(name: "my_server")
 
 # Default Streamable HTTP - session oriented
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-
-server.transport = transport
 
 # When tools change, notify clients
 server.define_tool(name: "new_tool") { |**args| { result: "ok" } }

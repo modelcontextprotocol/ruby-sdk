@@ -394,7 +394,7 @@ module Conformance
 
     def start
       server = build_server
-      transport = build_transport(server)
+      transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
       configure_handlers(server)
       rack_app = build_rack_app(transport)
 
@@ -478,12 +478,6 @@ module Conformance
           mime_type: "application/json",
         ),
       ]
-    end
-
-    def build_transport(server)
-      transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-      server.transport = transport
-      transport
     end
 
     def configure_handlers(server)

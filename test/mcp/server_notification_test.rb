@@ -36,7 +36,6 @@ module MCP
       )
 
       @mock_transport = MockTransport.new(@server)
-      @server.transport = @mock_transport
     end
 
     test "#notify_tools_list_changed sends notification through transport" do
@@ -122,14 +121,13 @@ module MCP
     end
 
     test "notification methods handle transport errors gracefully" do
-      # Create a transport that raises errors
-      error_transport = Class.new(MockTransport) do
+      # Replace server's transport with one that raises on send_notification.
+      Class.new(MockTransport) do
         def send_notification(method, params = nil)
           raise StandardError, "Transport error"
         end
       end.new(@server)
 
-      @server.transport = error_transport
       @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
 
       # Mock the exception reporter

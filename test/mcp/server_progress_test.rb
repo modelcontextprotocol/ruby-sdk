@@ -89,7 +89,6 @@ module MCP
       )
 
       @mock_transport = MockTransport.new(@server)
-      @server.transport = @mock_transport
       @session = ServerSession.new(server: @server, transport: @mock_transport)
     end
 

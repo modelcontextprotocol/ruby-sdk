@@ -7,6 +7,7 @@ module MCP
     # Initialize the transport with the server instance
     def initialize(server)
       @server = server
+      server.transport = self
     end
 
     # Send a response to the client
