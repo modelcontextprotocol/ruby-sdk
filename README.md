@@ -159,15 +159,17 @@ MCP.configure do |config|
     end
   }
 
-  config.instrumentation_callback = ->(data) {
-    puts "Got instrumentation data #{data.inspect}"
+  config.around_request = ->(data, &request_handler) {
+    logger.info("Start: #{data[:method]}")
+    request_handler.call
+    logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
   }
 end
 ```
 
 or by creating an explicit configuration and passing it into the server.
 This is useful for systems where an application hosts more than one MCP server but
-they might require different instrumentation callbacks.
+they might require different configurations.
 
 ```ruby
 configuration = MCP::Configuration.new
@@ -179,8 +181,10 @@ configuration.exception_reporter = ->(exception, server_context) {
   end
 }
 
-configuration.instrumentation_callback = ->(data) {
-  puts "Got instrumentation data #{data.inspect}"
+configuration.around_request = ->(data, &request_handler) {
+  logger.info("Start: #{data[:method]}")
+  request_handler.call
+  logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
 }
 
 server = MCP::Server.new(
@@ -193,7 +197,8 @@ server = MCP::Server.new(
 
 #### `server_context`
 
-The `server_context` is a user-defined hash that is passed into the server instance and made available to tools, prompts, and exception/instrumentation callbacks. It can be used to provide contextual information such as authentication state, user IDs, or request-specific data.
+The `server_context` is a user-defined hash that is passed into the server instance and made available to tool and prompt calls.
+It can be used to provide contextual information such as authentication state, user IDs, or request-specific data.
 
 **Type:**
 
@@ -210,7 +215,9 @@ server = MCP::Server.new(
 )
 ```
 
-This hash is then passed as the `server_context` argument to tool and prompt calls, and is included in exception and instrumentation callbacks.
+This hash is then passed as the `server_context` keyword argument to tool and prompt calls.
+Note that exception and instrumentation callbacks do not receive this user-defined hash.
+See the relevant sections below for the arguments they receive.
 
 #### Request-specific `_meta` Parameter
 
@@ -263,7 +270,9 @@ end
 The exception reporter receives:
 
 - `exception`: The Ruby exception object that was raised
-- `server_context`: The context hash provided to the server
+- `server_context`: A hash describing where the failure occurred (e.g., `{ request: <raw JSON-RPC request> }`
+  for request handling, `{ notification: "tools_list_changed" }` for notification delivery).
+  This is not the user-defined `server_context` passed to `Server.new`.
 
 **Signature:**
 
@@ -271,9 +280,67 @@ The exception reporter receives:
 exception_reporter = ->(exception, server_context) { ... }
 ```
 
-##### Instrumentation Callback
+##### Around Request
 
-The instrumentation callback receives a hash with the following possible keys:
+The `around_request` hook wraps request handling, allowing you to execute code before and after each request.
+This is useful for Application Performance Monitoring (APM) tracing, logging, or other observability needs.
+
+The hook receives a `data` hash and a `request_handler` block. You must call `request_handler.call` to execute the request:
+
+**Signature:**
+
+```ruby
+around_request = ->(data, &request_handler) { request_handler.call }
+```
+
+**`data` availability by timing:**
+
+- Before `request_handler.call`: `method`
+- After `request_handler.call`: `tool_name`, `tool_arguments`, `prompt_name`, `resource_uri`, `error`, `client`
+- Not available inside `around_request`: `duration` (added after `around_request` returns)
+
+> [!NOTE]
+> `tool_name`, `prompt_name` and `resource_uri` may only be populated for the corresponding request methods
+> (`tools/call`, `prompts/get`, `resources/read`), and may not be set depending on how the request is handled
+> (for example, `prompt_name` is not recorded when the prompt is not found).
+> `duration` is added after `around_request` returns, so it is not visible from within the hook.
+
+**Example:**
+
+```ruby
+MCP.configure do |config|
+  config.around_request = ->(data, &request_handler) {
+    logger.info("Start: #{data[:method]}")
+    request_handler.call
+    logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
+  }
+end
+```
+
+##### Instrumentation Callback (soft-deprecated)
+
+> [!NOTE]
+> `instrumentation_callback` is soft-deprecated. Use `around_request` instead.
+>
+> To migrate, wrap the call in `begin/ensure` so the callback still runs when the request fails:
+>
+> ```ruby
+> # Before
+> config.instrumentation_callback = ->(data) { log(data) }
+>
+> # After
+> config.around_request = ->(data, &request_handler) do
+>   request_handler.call
+> ensure
+>   log(data)
+> end
+> ```
+>
+> Note that `data[:duration]` is not available inside `around_request`.
+> If you need it, measure elapsed time yourself within the hook, or keep using `instrumentation_callback`.
+
+The instrumentation callback is called after each request finishes, whether successfully or with an error.
+It receives a hash with the following possible keys:
 
 - `method`: (String) The protocol method called (e.g., "ping", "tools/list")
 - `tool_name`: (String, optional) The name of the tool called
@@ -284,25 +351,10 @@ The instrumentation callback receives a hash with the following possible keys:
 - `duration`: (Float) Duration of the call in seconds
 - `client`: (Hash, optional) Client information with `name` and `version` keys, from the initialize request
 
-> [!NOTE]
-> `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
-> This is to avoid potential issues with metric cardinality.
-
-**Type:**
+**Signature:**
 
 ```ruby
 instrumentation_callback = ->(data) { ... }
-# where data is a Hash with keys as described above
-```
-
-**Example:**
-
-```ruby
-MCP.configure do |config|
-  config.instrumentation_callback = ->(data) {
-    puts "Instrumentation: #{data.inspect}"
-  }
-end
 ```
 
 ### Server Protocol Version
