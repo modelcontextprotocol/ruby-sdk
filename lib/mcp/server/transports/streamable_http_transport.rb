@@ -267,6 +267,9 @@ module MCP
           accept_error = validate_accept_header(request, REQUIRED_POST_ACCEPT_TYPES)
           return accept_error if accept_error
 
+          content_type_error = validate_content_type(request)
+          return content_type_error if content_type_error
+
           body_string = request.body.read
           session_id = extract_session_id(request)
 
@@ -397,6 +400,18 @@ module MCP
           header.split(",").map do |part|
             part.split(";").first.strip
           end
+        end
+
+        def validate_content_type(request)
+          content_type = request.env["CONTENT_TYPE"]
+          media_type = content_type&.split(";")&.first&.strip&.downcase
+          return if media_type == "application/json"
+
+          [
+            415,
+            { "Content-Type" => "application/json" },
+            [{ error: "Unsupported Media Type: Content-Type must be application/json" }.to_json],
+          ]
         end
 
         def not_acceptable_response(required_types)

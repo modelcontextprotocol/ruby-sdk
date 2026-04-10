@@ -1143,6 +1143,51 @@ module MCP
           assert_equal "Method not allowed", body["error"]
         end
 
+        test "POST request without Content-Type returns 415" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            { "HTTP_ACCEPT" => "application/json, text/event-stream" },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 415, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal "Unsupported Media Type: Content-Type must be application/json", body["error"]
+        end
+
+        test "POST request with wrong Content-Type returns 415" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "text/plain",
+              "HTTP_ACCEPT" => "application/json, text/event-stream",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 415, response[0]
+        end
+
+        test "POST request with Content-Type including charset succeeds" do
+          request = create_rack_request_without_accept(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json; charset=utf-8",
+              "HTTP_ACCEPT" => "application/json, text/event-stream",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
         test "POST request without Accept header returns 406" do
           request = create_rack_request_without_accept(
             "POST",
