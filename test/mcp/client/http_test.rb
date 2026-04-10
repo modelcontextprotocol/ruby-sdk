@@ -242,6 +242,31 @@ module MCP
         assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
+      def test_block_customizes_faraday_connection
+        custom_client = HTTP.new(url: url) do |faraday|
+          faraday.headers["X-Custom"] = "test-value"
+        end
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url).with(
+          headers: {
+            "X-Custom" => "test-value",
+            "Accept" => "application/json, text/event-stream",
+          },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { tools: [] } }.to_json,
+        )
+
+        custom_client.send_request(request: request)
+      end
+
       def test_send_request_raises_error_for_non_json_response
         request = {
           jsonrpc: "2.0",
