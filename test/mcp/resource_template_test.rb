@@ -36,5 +36,22 @@ module MCP
 
       assert_equal expected_icons, resource_template.to_h[:icons]
     end
+
+    test "#to_h omits _meta when nil" do
+      resource_template = ResourceTemplate.new(uri_template: "file:///{path}", name: "template_without_meta")
+
+      refute resource_template.to_h.key?(:_meta)
+    end
+
+    test "#to_h includes _meta when present" do
+      meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+      resource_template = ResourceTemplate.new(
+        uri_template: "file:///{path}",
+        name: "template_with_meta",
+        meta: meta,
+      )
+
+      assert_equal meta, resource_template.to_h[:_meta]
+    end
   end
 end

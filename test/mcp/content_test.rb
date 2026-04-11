@@ -28,6 +28,19 @@ module MCP
 
         refute result.key?(:annotations)
       end
+
+      test "#to_h with meta" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        image = Image.new("base64data", "image/png", meta: meta)
+
+        assert_equal meta, image.to_h[:_meta]
+      end
+
+      test "#to_h without meta omits the key" do
+        image = Image.new("base64data", "image/png")
+
+        refute image.to_h.key?(:_meta)
+      end
     end
 
     class AudioTest < ActiveSupport::TestCase
@@ -52,6 +65,19 @@ module MCP
         result = audio.to_h
 
         refute result.key?(:annotations)
+      end
+
+      test "#to_h with meta" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        audio = Audio.new("base64data", "audio/wav", meta: meta)
+
+        assert_equal meta, audio.to_h[:_meta]
+      end
+
+      test "#to_h without meta omits the key" do
+        audio = Audio.new("base64data", "audio/wav")
+
+        refute audio.to_h.key?(:_meta)
       end
     end
 
@@ -91,6 +117,52 @@ module MCP
         result = embedded.to_h
 
         refute result.key?(:annotations)
+      end
+
+      test "#to_h with meta" do
+        resource = Object.new
+        def resource.to_h
+          { uri: "test://x" }
+        end
+
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        embedded = EmbeddedResource.new(resource, meta: meta)
+
+        assert_equal meta, embedded.to_h[:_meta]
+      end
+
+      test "#to_h without meta omits the key" do
+        resource = Object.new
+        def resource.to_h
+          { uri: "test://x" }
+        end
+
+        embedded = EmbeddedResource.new(resource)
+
+        refute embedded.to_h.key?(:_meta)
+      end
+    end
+
+    class TextTest < ActiveSupport::TestCase
+      test "#to_h returns correct format per MCP spec" do
+        text = Text.new("hello")
+        result = text.to_h
+
+        assert_equal "text", result[:type]
+        assert_equal "hello", result[:text]
+      end
+
+      test "#to_h with meta" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        text = Text.new("hello", meta: meta)
+
+        assert_equal meta, text.to_h[:_meta]
+      end
+
+      test "#to_h without meta omits the key" do
+        text = Text.new("hello")
+
+        refute text.to_h.key?(:_meta)
       end
     end
   end
