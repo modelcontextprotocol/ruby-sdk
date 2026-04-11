@@ -36,5 +36,18 @@ module MCP
 
       assert_equal expected_icons, resource.to_h[:icons]
     end
+
+    test "#to_h omits _meta when nil" do
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_without_meta")
+
+      refute resource.to_h.key?(:_meta)
+    end
+
+    test "#to_h includes _meta when present" do
+      meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_with_meta", meta: meta)
+
+      assert_equal meta, resource.to_h[:_meta]
+    end
   end
 end
