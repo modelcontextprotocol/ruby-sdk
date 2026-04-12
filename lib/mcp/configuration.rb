@@ -7,11 +7,18 @@ module MCP
       LATEST_STABLE_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05",
     ]
 
-    attr_writer :exception_reporter, :instrumentation_callback
+    attr_writer :exception_reporter, :around_request
 
-    def initialize(exception_reporter: nil, instrumentation_callback: nil, protocol_version: nil,
+    # @deprecated Use {#around_request=} instead. `instrumentation_callback`
+    #   fires only after a request completes and cannot wrap execution in a
+    #   surrounding block (e.g. for Application Performance Monitoring (APM) spans).
+    # @see #around_request=
+    attr_writer :instrumentation_callback
+
+    def initialize(exception_reporter: nil, around_request: nil, instrumentation_callback: nil, protocol_version: nil,
       validate_tool_call_arguments: true)
       @exception_reporter = exception_reporter
+      @around_request = around_request
       @instrumentation_callback = instrumentation_callback
       @protocol_version = protocol_version
       if protocol_version
@@ -50,10 +57,24 @@ module MCP
       !@exception_reporter.nil?
     end
 
+    def around_request
+      @around_request || default_around_request
+    end
+
+    def around_request?
+      !@around_request.nil?
+    end
+
+    # @deprecated Use {#around_request} instead. `instrumentation_callback`
+    #   fires only after a request completes and cannot wrap execution in a
+    #   surrounding block (e.g. for Application Performance Monitoring (APM) spans).
+    # @see #around_request
     def instrumentation_callback
       @instrumentation_callback || default_instrumentation_callback
     end
 
+    # @deprecated Use {#around_request?} instead.
+    # @see #around_request?
     def instrumentation_callback?
       !@instrumentation_callback.nil?
     end
@@ -72,20 +93,30 @@ module MCP
       else
         @exception_reporter
       end
+
+      around_request = if other.around_request?
+        other.around_request
+      else
+        @around_request
+      end
+
       instrumentation_callback = if other.instrumentation_callback?
         other.instrumentation_callback
       else
         @instrumentation_callback
       end
+
       protocol_version = if other.protocol_version?
         other.protocol_version
       else
         @protocol_version
       end
+
       validate_tool_call_arguments = other.validate_tool_call_arguments
 
       Configuration.new(
         exception_reporter: exception_reporter,
+        around_request: around_request,
         instrumentation_callback: instrumentation_callback,
         protocol_version: protocol_version,
         validate_tool_call_arguments: validate_tool_call_arguments,
@@ -111,6 +142,11 @@ module MCP
       @default_exception_reporter ||= ->(exception, server_context) {}
     end
 
+    def default_around_request
+      @default_around_request ||= ->(_data, &request_handler) { request_handler.call }
+    end
+
+    # @deprecated Use {#default_around_request} instead.
     def default_instrumentation_callback
       @default_instrumentation_callback ||= ->(data) {}
     end

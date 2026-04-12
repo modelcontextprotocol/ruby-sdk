@@ -375,7 +375,7 @@ module MCP
     def handle_request(request, method, session: nil, related_request_id: nil)
       handler = @handlers[method]
       unless handler
-        instrument_call("unsupported_method") do
+        instrument_call("unsupported_method", server_context: { request: request }) do
           client = session&.client || @client
           add_instrumentation_data(client: client) if client
         end
@@ -385,7 +385,12 @@ module MCP
       Methods.ensure_capability!(method, capabilities)
 
       ->(params) {
-        instrument_call(method) do
+        reported_exception = nil
+        instrument_call(
+          method,
+          server_context: { request: request },
+          exception_already_reported: ->(e) { reported_exception.equal?(e) },
+        ) do
           result = case method
           when Methods::INITIALIZE
             init(params, session: session)
@@ -415,11 +420,14 @@ module MCP
         rescue RequestHandlerError => e
           report_exception(e.original_error || e, { request: request })
           add_instrumentation_data(error: e.error_type)
+          reported_exception = e
           raise e
         rescue => e
           report_exception(e, { request: request })
           add_instrumentation_data(error: :internal_error)
-          raise RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
+          wrapped = RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
+          reported_exception = wrapped
+          raise wrapped
         end
       }
     end

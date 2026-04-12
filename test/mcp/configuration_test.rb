@@ -123,6 +123,53 @@ module MCP
       refute merged.validate_tool_call_arguments
     end
 
+    test "initializes with a default pass-through around_request" do
+      config = Configuration.new
+      called = false
+      config.around_request.call({}) { called = true }
+      assert called
+    end
+
+    test "allows setting a custom around_request" do
+      config = Configuration.new
+      call_log = []
+      config.around_request = ->(_data, &request_handler) {
+        call_log << :before
+        request_handler.call
+        call_log << :after
+      }
+
+      config.around_request.call({}) { call_log << :execute }
+      assert_equal([:before, :execute, :after], call_log)
+    end
+
+    test "around_request? returns false by default" do
+      config = Configuration.new
+      refute config.around_request?
+    end
+
+    test "around_request? returns true when set" do
+      config = Configuration.new
+      config.around_request = ->(_data, &request_handler) { request_handler.call }
+      assert config.around_request?
+    end
+
+    test "merge preserves around_request from other config" do
+      custom = ->(_data, &request_handler) { request_handler.call }
+      config1 = Configuration.new
+      config2 = Configuration.new(around_request: custom)
+      merged = config1.merge(config2)
+      assert_equal custom, merged.around_request
+    end
+
+    test "merge preserves around_request from self when other not set" do
+      custom = ->(_data, &request_handler) { request_handler.call }
+      config1 = Configuration.new(around_request: custom)
+      config2 = Configuration.new
+      merged = config1.merge(config2)
+      assert_equal custom, merged.around_request
+    end
+
     test "raises ArgumentError when protocol_version is not a supported value" do
       exception = assert_raises(ArgumentError) do
         Configuration.new(protocol_version: "1999-12-31")
