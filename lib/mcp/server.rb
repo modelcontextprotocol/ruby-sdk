@@ -206,44 +206,6 @@ module MCP
       report_exception(e, { notification: "log_message" })
     end
 
-    # Sends a `sampling/createMessage` request to the client.
-    # For single-client transports (e.g., `StdioTransport`). For multi-client transports
-    # (e.g., `StreamableHTTPTransport`), use `ServerSession#create_sampling_message` instead
-    # to ensure the request is routed to the correct client.
-    def create_sampling_message(
-      messages:,
-      max_tokens:,
-      system_prompt: nil,
-      model_preferences: nil,
-      include_context: nil,
-      temperature: nil,
-      stop_sequences: nil,
-      metadata: nil,
-      tools: nil,
-      tool_choice: nil,
-      related_request_id: nil
-    )
-      unless @transport
-        raise "Cannot send sampling request without a transport."
-      end
-
-      params = build_sampling_params(
-        @client_capabilities,
-        messages: messages,
-        max_tokens: max_tokens,
-        system_prompt: system_prompt,
-        model_preferences: model_preferences,
-        include_context: include_context,
-        temperature: temperature,
-        stop_sequences: stop_sequences,
-        metadata: metadata,
-        tools: tools,
-        tool_choice: tool_choice,
-      )
-
-      @transport.send_request(Methods::SAMPLING_CREATE_MESSAGE, params)
-    end
-
     # Sets a custom handler for `resources/read` requests.
     # The block receives the parsed request params and should return resource
     # contents. The return value is set as the `contents` field of the response.
