@@ -53,6 +53,8 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/list` - Lists all registered resources and their schemas
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
+- `resources/subscribe` - Subscribes to updates for a specific resource
+- `resources/unsubscribe` - Unsubscribes from updates for a specific resource
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
 - `roots/list` - Requests filesystem roots from the client (server-to-client)
 - `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
@@ -958,6 +960,44 @@ end
 - Raises `RuntimeError` if client does not support `roots` capability
 - Raises `StandardError` if client returns an error response
 
+### Resource Subscriptions
+
+Resource subscriptions allow clients to monitor specific resources for changes.
+When a subscribed resource is updated, the server sends a notification to the client.
+
+The SDK does not track subscription state internally.
+Server developers register handlers and manage their own subscription state.
+Three methods are provided:
+
+- `Server#resources_subscribe_handler` - registers a handler for `resources/subscribe` requests
+- `Server#resources_unsubscribe_handler` - registers a handler for `resources/unsubscribe` requests
+- `ServerContext#notify_resources_updated` - sends a `notifications/resources/updated` notification to the subscribing client
+
+```ruby
+subscribed_uris = Set.new
+
+server = MCP::Server.new(
+  name: "my_server",
+  resources: [my_resource],
+  capabilities: { resources: { subscribe: true } },
+)
+
+server.resources_subscribe_handler do |params|
+  subscribed_uris.add(params[:uri].to_s)
+end
+
+server.resources_unsubscribe_handler do |params|
+  subscribed_uris.delete(params[:uri].to_s)
+end
+
+server.define_tool(name: "update_resource") do |server_context:, **args|
+  if subscribed_uris.include?("test://my-resource")
+    server_context.notify_resources_updated(uri: "test://my-resource")
+  end
+  MCP::Tool::Response.new([MCP::Content::Text.new("Resource updated").to_h])
+end
+```
+
 ### Sampling
 
 The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
@@ -1502,10 +1542,6 @@ end
 
 - Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
 - Supports the same exception reporting and instrumentation as standard methods
-
-### Unsupported Features (to be implemented in future versions)
-
-- Resource subscriptions
 
 ## Building an MCP Client
 
