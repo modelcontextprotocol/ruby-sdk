@@ -31,6 +31,15 @@ module MCP
     end
 
     # Delegates to the session so the request is scoped to the originating client.
+    def list_roots
+      if @notification_target.respond_to?(:list_roots)
+        @notification_target.list_roots(related_request_id: @related_request_id)
+      else
+        raise NoMethodError, "undefined method 'list_roots' for #{self}"
+      end
+    end
+
+    # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` (via `method_missing`) when `@notification_target`
     # does not support sampling.
     def create_sampling_message(**kwargs)

@@ -41,6 +41,15 @@ module MCP
       @client_capabilities || @server.client_capabilities
     end
 
+    # Sends a `roots/list` request scoped to this session.
+    def list_roots(related_request_id: nil)
+      unless client_capabilities&.dig(:roots)
+        raise "Client does not support roots."
+      end
+
+      send_to_transport_request(Methods::ROOTS_LIST, nil, related_request_id: related_request_id)
+    end
+
     # Sends a `sampling/createMessage` request scoped to this session.
     def create_sampling_message(related_request_id: nil, **kwargs)
       params = @server.build_sampling_params(client_capabilities, **kwargs)

@@ -41,6 +41,32 @@ module MCP
       assert_raises(NoMethodError) { server_context.nonexistent_method }
     end
 
+    test "ServerContext#list_roots delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:list_roots).with(
+        related_request_id: nil,
+      ).returns({ roots: [{ uri: "file:///project", name: "Project" }] })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.list_roots
+
+      assert_equal [{ uri: "file:///project", name: "Project" }], result[:roots]
+    end
+
+    test "ServerContext#list_roots raises NoMethodError when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      assert_raises(NoMethodError) { server_context.list_roots }
+    end
+
     test "ServerContext#create_sampling_message delegates to notification_target over context" do
       notification_target = mock
       notification_target.expects(:create_sampling_message).with(
