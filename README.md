@@ -876,8 +876,7 @@ This enables servers to leverage the client's LLM capabilities without needing d
 **Using Sampling in Tools:**
 
 Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
-The request is automatically routed to the correct client session.
-Set `server.server_context = server` so that `server_context.create_sampling_message` delegates to the server:
+The request is automatically routed to the correct client session:
 
 ```ruby
 class SummarizeTool < MCP::Tool
@@ -905,7 +904,6 @@ class SummarizeTool < MCP::Tool
 end
 
 server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
-server.server_context = server
 ```
 
 **Parameters:**
@@ -926,86 +924,8 @@ Optional:
 - `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
 - `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
 
-**Direct Usage:**
-
-`Server#create_sampling_message` can also be called directly outside of tools:
-
-```ruby
-result = server.create_sampling_message(
-  messages: [
-    { role: "user", content: { type: "text", text: "What is the capital of France?" } }
-  ],
-  max_tokens: 100,
-  system_prompt: "You are a helpful assistant.",
-  temperature: 0.7
-)
-```
-
-Result contains the LLM response:
-
-```ruby
-{
-  role: "assistant",
-  content: { type: "text", text: "The capital of France is Paris." },
-  model: "claude-3-sonnet-20240307",
-  stopReason: "endTurn"
-}
-```
-
-For multi-client transports (e.g., `StreamableHTTPTransport`), use `server_context.create_sampling_message` inside tools
-to route the request to the correct client session.
-
-**Tool Use in Sampling:**
-
-When tools are provided in a sampling request, the LLM can call them during generation.
-The server must handle tool calls and continue the conversation with tool results:
-
-```ruby
-result = server.create_sampling_message(
-  messages: [
-    { role: "user", content: { type: "text", text: "What's the weather in Paris?" } }
-  ],
-  max_tokens: 1000,
-  tools: [
-    {
-      name: "get_weather",
-      description: "Get weather for a city",
-      inputSchema: {
-        type: "object",
-        properties: { city: { type: "string" } },
-        required: ["city"]
-      }
-    }
-  ],
-  tool_choice: { mode: "auto" }
-)
-
-if result[:stopReason] == "toolUse"
-  tool_results = result[:content].map do |tool_use|
-    weather_data = get_weather(tool_use[:input][:city])
-
-    {
-      type: "tool_result",
-      toolUseId: tool_use[:id],
-      content: [{ type: "text", text: weather_data.to_json }]
-    }
-  end
-
-  final_result = server.create_sampling_message(
-    messages: [
-      { role: "user", content: { type: "text", text: "What's the weather in Paris?" } },
-      { role: "assistant", content: result[:content] },
-      { role: "user", content: tool_results }
-    ],
-    max_tokens: 1000,
-    tools: [...]
-  )
-end
-```
-
 **Error Handling:**
 
-- Raises `RuntimeError` if transport is not set
 - Raises `RuntimeError` if client does not support `sampling` capability
 - Raises `RuntimeError` if `tools` are used but client lacks `sampling.tools` capability
 - Raises `StandardError` if client returns an error response
