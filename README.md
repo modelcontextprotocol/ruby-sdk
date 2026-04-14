@@ -53,6 +53,7 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/templates/list` - Lists all registered resource templates and their schemas
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
 - `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
+- `elicitation/create` - Requests user input from the client (server-to-client)
 
 ### Usage
 
@@ -1137,6 +1138,108 @@ The SDK automatically enforces the 100-item limit per the MCP specification.
 The server validates that the referenced prompt, resource, or resource template is registered before calling the handler.
 Requests for unknown references return an error.
 
+### Elicitation
+
+The MCP Ruby SDK supports [elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation),
+which allows servers to request additional information from users through the client during tool execution.
+
+Elicitation is a **server-to-client request**. The server sends a request and blocks until the user responds via the client.
+
+#### Capabilities
+
+Clients must declare the `elicitation` capability during initialization. The server checks this before sending any elicitation request
+and raises a `RuntimeError` if the client does not support it.
+
+For URL mode support, the client must also declare `elicitation.url` capability.
+
+#### Using Elicitation in Tools
+
+Tools that accept a `server_context:` parameter can call `create_form_elicitation` on it:
+
+```ruby
+server.define_tool(name: "collect_info", description: "Collect user info") do |server_context:|
+  result = server_context.create_form_elicitation(
+    message: "Please provide your name",
+    requested_schema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    },
+  )
+
+  MCP::Tool::Response.new([{ type: "text", text: "Hello, #{result[:content][:name]}" }])
+end
+```
+
+#### Form Mode
+
+Form mode collects structured data from the user directly through the MCP client:
+
+```ruby
+server.define_tool(name: "collect_contact", description: "Collect contact info") do |server_context:|
+  result = server_context.create_form_elicitation(
+    message: "Please provide your contact information",
+    requested_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Your full name" },
+        email: { type: "string", format: "email", description: "Your email address" },
+      },
+      required: ["name", "email"],
+    },
+  )
+
+  text = case result[:action]
+  when "accept"
+    "Hello, #{result[:content][:name]} (#{result[:content][:email]})"
+  when "decline"
+    "User declined"
+  when "cancel"
+    "User cancelled"
+  end
+
+  MCP::Tool::Response.new([{ type: "text", text: text }])
+end
+```
+
+#### URL Mode
+
+URL mode directs the user to an external URL for out-of-band interactions such as OAuth flows:
+
+```ruby
+server.define_tool(name: "authorize_github", description: "Authorize GitHub") do |server_context:|
+  elicitation_id = SecureRandom.uuid
+
+  result = server_context.create_url_elicitation(
+    message: "Please authorize access to your GitHub account",
+    url: "https://example.com/oauth/authorize?elicitation_id=#{elicitation_id}",
+    elicitation_id: elicitation_id,
+  )
+
+  server_context.notify_elicitation_complete(elicitation_id: elicitation_id)
+
+  MCP::Tool::Response.new([{ type: "text", text: "Authorization complete" }])
+end
+```
+
+#### URLElicitationRequiredError
+
+When a tool cannot proceed until an out-of-band elicitation is completed, raise `MCP::Server::URLElicitationRequiredError`.
+This returns a JSON-RPC error with code `-32042` to the client:
+
+```ruby
+server.define_tool(name: "access_github", description: "Access GitHub") do |server_context:|
+  raise MCP::Server::URLElicitationRequiredError.new([
+    {
+      mode: "url",
+      elicitationId: SecureRandom.uuid,
+      url: "https://example.com/oauth/authorize",
+      message: "GitHub authorization is required.",
+    },
+  ])
+end
+```
+
 ### Logging
 
 The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
@@ -1302,7 +1405,6 @@ end
 ### Unsupported Features (to be implemented in future versions)
 
 - Resource subscriptions
-- Elicitation
 
 ## Building an MCP Client
 

@@ -43,6 +43,42 @@ module MCP
       end
     end
 
+    # Delegates to the session so the request is scoped to the originating client.
+    # Falls back to `@context` (via `method_missing`) when `@notification_target`
+    # does not support elicitation.
+    def create_form_elicitation(**kwargs)
+      if @notification_target.respond_to?(:create_form_elicitation)
+        @notification_target.create_form_elicitation(**kwargs, related_request_id: @related_request_id)
+      elsif @context.respond_to?(:create_form_elicitation)
+        @context.create_form_elicitation(**kwargs, related_request_id: @related_request_id)
+      else
+        raise NoMethodError, "undefined method 'create_form_elicitation' for #{self}"
+      end
+    end
+
+    # Delegates to the session so the request is scoped to the originating client.
+    # Falls back to `@context` when `@notification_target` does not support URL mode elicitation.
+    def create_url_elicitation(**kwargs)
+      if @notification_target.respond_to?(:create_url_elicitation)
+        @notification_target.create_url_elicitation(**kwargs, related_request_id: @related_request_id)
+      elsif @context.respond_to?(:create_url_elicitation)
+        @context.create_url_elicitation(**kwargs, related_request_id: @related_request_id)
+      else
+        raise NoMethodError, "undefined method 'create_url_elicitation' for #{self}"
+      end
+    end
+
+    # Delegates to the session so the notification is scoped to the originating client.
+    def notify_elicitation_complete(**kwargs)
+      if @notification_target.respond_to?(:notify_elicitation_complete)
+        @notification_target.notify_elicitation_complete(**kwargs)
+      elsif @context.respond_to?(:notify_elicitation_complete)
+        @context.notify_elicitation_complete(**kwargs)
+      else
+        raise NoMethodError, "undefined method 'notify_elicitation_complete' for #{self}"
+      end
+    end
+
     def method_missing(name, ...)
       if @context.respond_to?(name)
         @context.public_send(name, ...)

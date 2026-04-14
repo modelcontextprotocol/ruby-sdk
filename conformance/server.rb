@@ -178,7 +178,6 @@ module Conformance
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitation < MCP::Tool
       tool_name "test_elicitation"
       description "A tool that requests user input from the client"
@@ -188,41 +187,96 @@ module Conformance
       )
 
       class << self
-        def call(message:)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, message:)
+          result = server_context.create_form_elicitation(
+            message: message,
+            requested_schema: {
+              type: "object",
+              properties: {
+                username: { type: "string", description: "User's response" },
+                email: { type: "string", description: "User's email address" },
+              },
+              required: ["username", "email"],
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("User response: #{result}").to_h])
         end
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitationSep1034Defaults < MCP::Tool
       tool_name "test_elicitation_sep1034_defaults"
       description "A tool that tests elicitation with default values"
 
       class << self
-        def call(**_args)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, **_args)
+          result = server_context.create_form_elicitation(
+            message: "Please provide your information (with defaults)",
+            requested_schema: {
+              type: "object",
+              properties: {
+                name: { type: "string", default: "John Doe" },
+                age: { type: "integer", default: 30 },
+                score: { type: "number", default: 95.5 },
+                status: { type: "string", enum: ["active", "inactive", "pending"], default: "active" },
+                verified: { type: "boolean", default: true },
+              },
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("Elicitation result: #{result}").to_h])
         end
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitationSep1330Enums < MCP::Tool
       tool_name "test_elicitation_sep1330_enums"
       description "A tool that tests elicitation with enum schemas"
 
       class << self
-        def call(**_args)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, **_args)
+          result = server_context.create_form_elicitation(
+            message: "Please select options",
+            requested_schema: {
+              type: "object",
+              properties: {
+                untitledSingle: {
+                  type: "string",
+                  enum: ["option1", "option2", "option3"],
+                },
+                titledSingle: {
+                  type: "string",
+                  oneOf: [
+                    { const: "value1", title: "First Option" },
+                    { const: "value2", title: "Second Option" },
+                    { const: "value3", title: "Third Option" },
+                  ],
+                },
+                legacyEnum: {
+                  type: "string",
+                  enum: ["opt1", "opt2", "opt3"],
+                  enumNames: ["Option One", "Option Two", "Option Three"],
+                },
+                untitledMulti: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                    enum: ["option1", "option2", "option3"],
+                  },
+                },
+                titledMulti: {
+                  type: "array",
+                  items: {
+                    anyOf: [
+                      { const: "value1", title: "First Choice" },
+                      { const: "value2", title: "Second Choice" },
+                      { const: "value3", title: "Third Choice" },
+                    ],
+                  },
+                },
+              },
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("Elicitation result: #{result}").to_h])
         end
       end
     end

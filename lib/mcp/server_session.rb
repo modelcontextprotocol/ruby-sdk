@@ -47,6 +47,35 @@ module MCP
       send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
     end
 
+    # Sends an `elicitation/create` request (form mode) scoped to this session.
+    def create_form_elicitation(message:, requested_schema:, related_request_id: nil)
+      unless client_capabilities&.dig(:elicitation)
+        raise "Client does not support elicitation. " \
+          "The client must declare the `elicitation` capability during initialization."
+      end
+
+      params = { mode: "form", message: message, requestedSchema: requested_schema }
+      send_to_transport_request(Methods::ELICITATION_CREATE, params, related_request_id: related_request_id)
+    end
+
+    # Sends an `elicitation/create` request (URL mode) scoped to this session.
+    def create_url_elicitation(message:, url:, elicitation_id:, related_request_id: nil)
+      unless client_capabilities&.dig(:elicitation, :url)
+        raise "Client does not support URL mode elicitation. " \
+          "The client must declare the `elicitation.url` capability during initialization."
+      end
+
+      params = { mode: "url", message: message, url: url, elicitationId: elicitation_id }
+      send_to_transport_request(Methods::ELICITATION_CREATE, params, related_request_id: related_request_id)
+    end
+
+    # Sends an elicitation complete notification scoped to this session.
+    def notify_elicitation_complete(elicitation_id:)
+      send_to_transport(Methods::NOTIFICATIONS_ELICITATION_COMPLETE, { elicitationId: elicitation_id })
+    rescue => e
+      @server.report_exception(e, notification: "elicitation_complete")
+    end
+
     # Sends a progress notification to this session only.
     def notify_progress(progress_token:, progress:, total: nil, message: nil, related_request_id: nil)
       params = {

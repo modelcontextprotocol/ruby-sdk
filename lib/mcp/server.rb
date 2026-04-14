@@ -31,14 +31,27 @@ module MCP
     MAX_COMPLETION_VALUES = 100
 
     class RequestHandlerError < StandardError
-      attr_reader :error_type
-      attr_reader :original_error
+      attr_reader :error_type, :original_error, :error_code, :error_data
 
-      def initialize(message, request, error_type: :internal_error, original_error: nil)
+      def initialize(message, request, error_type: :internal_error, original_error: nil, error_code: nil, error_data: nil)
         super(message)
         @request = request
         @error_type = error_type
         @original_error = original_error
+        @error_code = error_code
+        @error_data = error_data
+      end
+    end
+
+    class URLElicitationRequiredError < RequestHandlerError
+      def initialize(elicitations)
+        super(
+          "URL elicitation required",
+          nil,
+          error_type: :url_elicitation_required,
+          error_code: -32042,
+          error_data: { elicitations: elicitations },
+        )
       end
     end
 
@@ -114,7 +127,6 @@ module MCP
         # No op handlers for currently unsupported methods
         Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
-        Methods::ELICITATION_CREATE => ->(_) {},
       }
       @transport = transport
     end
