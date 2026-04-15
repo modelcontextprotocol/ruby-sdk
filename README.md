@@ -104,7 +104,24 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
 
-#### Rails (mount)
+#### Streamable HTTP Transport
+
+`MCP::Server::Transports::StreamableHTTPTransport` is a standard Rack app, so it can be mounted in any Rack-compatible framework.
+The following examples show two common integration styles in Rails.
+
+> [!IMPORTANT]
+> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
+> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
+> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
+> do not share memory, which breaks session management and SSE connections.
+>
+> When running multiple server instances behind a load balancer, configure your load balancer to use
+> sticky sessions (session affinity) so that requests with the same `Mcp-Session-Id` header are always
+> routed to the same instance.
+>
+> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
+
+##### Rails (mount)
 
 `StreamableHTTPTransport` is a Rack app that can be mounted directly in Rails routes:
 
@@ -125,7 +142,13 @@ Rails.application.routes.draw do
 end
 ```
 
-#### Rails (controller)
+`mount` directs all HTTP methods on `/mcp` to the transport. `StreamableHTTPTransport` internally dispatches
+`POST` (client-to-server JSON-RPC messages, with responses optionally streamed via SSE),
+`GET` (optional standalone SSE stream for server-to-client messages), and `DELETE` (session termination) per
+the [MCP Streamable HTTP transport spec](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http),
+so no additional route configuration is needed.
+
+##### Rails (controller)
 
 While the mount approach creates a single server at boot time, the controller approach creates a new server per request.
 This allows you to customize tools, prompts, or configuration based on the request (e.g., different tools per route).
@@ -152,18 +175,6 @@ class McpController < ActionController::API
   end
 end
 ```
-
-> [!IMPORTANT]
-> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
-> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
-> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
-> do not share memory, which breaks session management and SSE connections.
->
-> When running multiple server instances behind a load balancer, configure your load balancer to use
-> sticky sessions (session affinity) so that requests with the same `Mcp-Session-Id` header are always
-> routed to the same instance.
->
-> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
 
 ### Configuration
 
