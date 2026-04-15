@@ -104,14 +104,33 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
 
-#### Rails Controller
+#### Rails (mount)
 
-When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
-requests.
+`StreamableHTTPTransport` is a Rack app that can be mounted directly in Rails routes:
 
-You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
-status codes (e.g., 202 Accepted for notifications).
+```ruby
+# config/routes.rb
+server = MCP::Server.new(
+  name: "my_server",
+  title: "Example Server Display Name",
+  version: "1.0.0",
+  instructions: "Use the tools of this server as a last resort",
+  tools: [SomeTool, AnotherTool],
+  prompts: [MyPrompt],
+)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+Rails.application.routes.draw do
+  mount transport => "/mcp"
+end
+```
+
+#### Rails (controller)
+
+While the mount approach creates a single server at boot time, the controller approach creates a new server per request.
+This allows you to customize tools, prompts, or configuration based on the request (e.g., different tools per route).
+
+`StreamableHTTPTransport#handle_request` returns proper HTTP status codes (e.g., 202 Accepted for notifications):
 
 ```ruby
 class McpController < ActionController::API
