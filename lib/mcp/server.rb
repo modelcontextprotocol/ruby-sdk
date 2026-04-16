@@ -6,6 +6,7 @@ require_relative "methods"
 require_relative "logging_message_notification"
 require_relative "progress"
 require_relative "server_context"
+require_relative "server/pagination"
 require_relative "server/transports"
 
 module MCP
@@ -65,9 +66,10 @@ module MCP
     end
 
     include Instrumentation
+    include Pagination
 
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :client_capabilities
+    attr_reader :page_size, :client_capabilities
 
     def initialize(
       description: nil,
@@ -84,6 +86,7 @@ module MCP
       server_context: nil,
       configuration: nil,
       capabilities: nil,
+      page_size: nil,
       transport: nil
     )
       @description = description
@@ -100,6 +103,7 @@ module MCP
       @resource_templates = resource_templates
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
+      self.page_size = page_size
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
 
@@ -181,6 +185,14 @@ module MCP
       end
 
       @handlers[method_name] = block
+    end
+
+    def page_size=(page_size)
+      unless page_size.nil? || (page_size.is_a?(Integer) && page_size > 0)
+        raise ArgumentError, "page_size must be nil or a positive integer"
+      end
+
+      @page_size = page_size
     end
 
     def notify_tools_list_changed
@@ -377,16 +389,8 @@ module MCP
           result = case method
           when Methods::INITIALIZE
             init(params, session: session)
-          when Methods::TOOLS_LIST
-            { tools: @handlers[Methods::TOOLS_LIST].call(params) }
-          when Methods::PROMPTS_LIST
-            { prompts: @handlers[Methods::PROMPTS_LIST].call(params) }
-          when Methods::RESOURCES_LIST
-            { resources: @handlers[Methods::RESOURCES_LIST].call(params) }
           when Methods::RESOURCES_READ
             { contents: @handlers[Methods::RESOURCES_READ].call(params) }
-          when Methods::RESOURCES_TEMPLATES_LIST
-            { resourceTemplates: @handlers[Methods::RESOURCES_TEMPLATES_LIST].call(params) }
           when Methods::TOOLS_CALL
             call_tool(params, session: session, related_request_id: related_request_id)
           when Methods::COMPLETION_COMPLETE
@@ -488,7 +492,9 @@ module MCP
     end
 
     def list_tools(request)
-      @tools.values.map(&:to_h)
+      page = paginate(@tools.values, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+
+      { tools: page[:items], nextCursor: page[:next_cursor] }.compact
     end
 
     def call_tool(request, session: nil, related_request_id: nil)
@@ -536,7 +542,9 @@ module MCP
     end
 
     def list_prompts(request)
-      @prompts.values.map(&:to_h)
+      page = paginate(@prompts.values, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+
+      { prompts: page[:items], nextCursor: page[:next_cursor] }.compact
     end
 
     def get_prompt(request)
@@ -556,7 +564,9 @@ module MCP
     end
 
     def list_resources(request)
-      @resources.map(&:to_h)
+      page = paginate(@resources, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+
+      { resources: page[:items], nextCursor: page[:next_cursor] }.compact
     end
 
     # Server implementation should set `resources_read_handler` to override no-op default
@@ -566,7 +576,9 @@ module MCP
     end
 
     def list_resource_templates(request)
-      @resource_templates.map(&:to_h)
+      page = paginate(@resource_templates, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+
+      { resourceTemplates: page[:items], nextCursor: page[:next_cursor] }.compact
     end
 
     def complete(params)
