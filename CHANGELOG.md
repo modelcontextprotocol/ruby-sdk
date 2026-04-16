@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-04-16
+
+### Added
+
+- Make `StreamableHTTPTransport` a Rack application (#263)
+- Support `elicitation/create` per MCP specification (#312)
+- Add `around_request` hook for request instrumentation (#309)
+- Add `_meta` field to resource, content, and result classes (#310)
+
+### Removed
+
+- Remove `Server#create_sampling_message` direct call (#311)
+
 ## [0.12.0] - 2026-04-11
 
 ### Added
