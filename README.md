@@ -38,6 +38,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports resource registration and retrieval
 - Supports stdio & Streamable HTTP (including SSE) transports
 - Supports notifications for list changes (tools, prompts, resources)
+- Supports roots (server-to-client filesystem boundary queries)
 - Supports sampling (server-to-client LLM completion requests)
 
 ### Supported Methods
@@ -52,6 +53,7 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
+- `roots/list` - Requests filesystem roots from the client (server-to-client)
 - `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
 - `elicitation/create` - Requests user input from the client (server-to-client)
 
@@ -890,6 +892,70 @@ server = MCP::Server.new(
   resource_templates: [resource_template],
 )
 ```
+
+### Roots
+
+The Model Context Protocol allows servers to request filesystem roots from clients through the `roots/list` method.
+Roots define the boundaries of where a server can operate, providing a list of directories and files the client has made available.
+
+**Key Concepts:**
+
+- **Server-to-Client Request**: Like sampling, roots listing is initiated by the server
+- **Client Capability**: Clients must declare `roots` capability during initialization
+- **Change Notifications**: Clients that support `roots.listChanged` send `notifications/roots/list_changed` when roots change
+
+**Using Roots in Tools:**
+
+Tools that accept a `server_context:` parameter can call `list_roots` on it.
+The request is automatically routed to the correct client session:
+
+```ruby
+class FileSearchTool < MCP::Tool
+  description "Search files within the client's project roots"
+  input_schema(
+    properties: {
+      query: { type: "string" }
+    },
+    required: ["query"]
+  )
+
+  def self.call(query:, server_context:)
+    roots = server_context.list_roots
+    root_uris = roots[:roots].map { |root| root[:uri] }
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: "Searching in roots: #{root_uris.join(", ")}"
+    }])
+  end
+end
+```
+
+Result contains an array of root objects:
+
+```ruby
+{
+  roots: [
+    { uri: "file:///home/user/projects/myproject", name: "My Project" },
+    { uri: "file:///home/user/repos/backend", name: "Backend Repository" }
+  ]
+}
+```
+
+**Handling Root Changes:**
+
+Register a callback to be notified when the client's roots change:
+
+```ruby
+server.roots_list_changed_handler do
+  puts "Client's roots have changed, tools will see updated roots on next call."
+end
+```
+
+**Error Handling:**
+
+- Raises `RuntimeError` if client does not support `roots` capability
+- Raises `StandardError` if client returns an error response
 
 ### Sampling
 

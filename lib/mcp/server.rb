@@ -121,6 +121,7 @@ module MCP
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
         Methods::NOTIFICATIONS_PROGRESS => ->(_) {},
+        Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED => ->(_) {},
         Methods::COMPLETION_COMPLETE => ->(_) { DEFAULT_COMPLETION_RESULT },
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
 
@@ -216,6 +217,14 @@ module MCP
       @transport.send_notification(Methods::NOTIFICATIONS_MESSAGE, params)
     rescue => e
       report_exception(e, { notification: "log_message" })
+    end
+
+    # Sets a handler for `notifications/roots/list_changed` notifications.
+    # Called when a client notifies the server that its filesystem roots have changed.
+    #
+    # @yield [params] The notification params (typically `nil`).
+    def roots_list_changed_handler(&block)
+      @handlers[Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED] = block
     end
 
     # Sets a custom handler for `resources/read` requests.

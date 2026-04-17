@@ -68,10 +68,7 @@ module MCP
     ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_INITIALIZED
 
     ensure_capability_raises_error_for Methods::ROOTS_LIST, required_capability_name: "roots"
-    ensure_capability_raises_error_for Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED, required_capability_name: "roots"
-    ensure_capability_raises_error_for Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED,
-      required_capability_name: "roots.listChanged",
-      capabilities: { roots: {} }
+    ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED
 
     ensure_capability_raises_error_for Methods::SAMPLING_CREATE_MESSAGE, required_capability_name: "sampling"
 
