@@ -269,12 +269,12 @@ module MCP
         def send_to_stream(stream, data)
           message = data.is_a?(String) ? data : data.to_json
           stream.write("data: #{message}\n\n")
-          stream.flush if stream.respond_to?(:flush)
+          stream.flush
         end
 
         def send_ping_to_stream(stream)
           stream.write(": ping #{Time.now.iso8601}\n\n")
-          stream.flush if stream.respond_to?(:flush)
+          stream.flush
         end
 
         def handle_post(request)
