@@ -369,6 +369,21 @@ module MCP
         assert_equal("Invalid request", response.dig("error", "message"))
       end
 
+      def test_send_request_returns_nil_for_202_accepted_response
+        request = {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(status: 202, body: "")
+
+        response = client.send_request(request: request)
+
+        assert_nil(response)
+      end
+
       def test_send_request_raises_error_for_sse_without_response
         request = {
           jsonrpc: "2.0",
