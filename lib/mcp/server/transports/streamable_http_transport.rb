@@ -15,6 +15,10 @@ end
 module MCP
   class Server
     module Transports
+      # TODO: Resumability and redelivery with Last-Event-ID is not yet implemented.
+      #   https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
+      # TODO: The security considerations from the spec are not yet enforced.
+      #   https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#security-warning
       class StreamableHTTPTransport < Transport
         SSE_HEADERS = {
           "Content-Type" => "text/event-stream",

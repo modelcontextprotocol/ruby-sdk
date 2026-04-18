@@ -51,16 +51,25 @@ stdio_transport.close
 
 ## HTTP Transport
 
-Use `MCP::Client::HTTP` to interact with MCP servers over HTTP. Requires the `faraday` gem:
+Use `MCP::Client::HTTP` to interact with MCP servers over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http). Requires the `faraday` gem, plus `event_stream_parser` if the server uses SSE responses:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
+gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```
+
+Call `MCP::Client#connect` explicitly to perform the MCP initialization handshake. The transport tracks the session ID and protocol version from the response and includes them on subsequent requests. Call `MCP::Client#close` to terminate the session via DELETE:
 
 ```ruby
 http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 client = MCP::Client.new(transport: http_transport)
+
+client.connect(client_info: { name: "my-client", version: "1.0" })
+
+client.session_id       # => "abc123..."
+client.protocol_version # => "2025-11-25"
+client.connected?       # => true
 
 tools = client.tools
 tools.each do |tool|
@@ -71,6 +80,8 @@ response = client.call_tool(
   tool: tools.first,
   arguments: { message: "Hello, world!" }
 )
+
+client.close
 ```
 
 ### Authorization

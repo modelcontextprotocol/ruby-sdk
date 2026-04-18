@@ -6,6 +6,9 @@ require_relative "client/tool"
 
 module MCP
   class Client
+    # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http
+    LATEST_PROTOCOL_VERSION = "2025-11-25"
+
     class ServerError < StandardError
       attr_reader :code, :data
 
@@ -27,32 +30,51 @@ module MCP
       end
     end
 
-    # Initializes a new MCP::Client instance.
-    #
-    # @param transport [Object] The transport object to use for communication with the server.
-    #   The transport should be a duck type that responds to `send_request`. See the README for more details.
-    #
-    # @example
-    #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
-    #   client = MCP::Client.new(transport: transport)
+    # Raised when the server responds 404 to a request containing an expired
+    # session ID. Inherits from `RequestHandlerError` for backward compatibility
+    # with callers that rescue the generic error.
+    class SessionExpiredError < RequestHandlerError
+      def initialize(message, request)
+        super(message, request, error_type: :not_found)
+      end
+    end
+
+    # @param transport [#send_request] Transport responding to `send_request(request:)`
+    #   and returning a `Hash` (a JSON-RPC response). `MCP::Client::HTTP` and
+    #   `MCP::Client::Stdio` both satisfy this contract.
     def initialize(transport:)
       @transport = transport
     end
 
-    # The user may want to access additional transport-specific methods/attributes
-    # So keeping it public
     attr_reader :transport
 
-    # Returns the list of tools available from the server.
-    # Each call will make a new request – the result is not cached.
-    #
-    # @return [Array<MCP::Client::Tool>] An array of available tools.
-    #
-    # @example
-    #   tools = client.tools
-    #   tools.each do |tool|
-    #     puts tool.name
-    #   end
+    # Session ID is exposed for transports that track one (HTTP); `nil` for
+    # transports that don't (Stdio).
+    def session_id
+      @transport.session_id if @transport.respond_to?(:session_id)
+    end
+
+    def protocol_version
+      @transport.protocol_version if @transport.respond_to?(:protocol_version)
+    end
+
+    def connected?
+      !protocol_version.nil?
+    end
+
+    # Performs the MCP initialization handshake. HTTP users should call this
+    # explicitly; Stdio initializes lazily on the first request.
+    def connect(client_info:, protocol_version: LATEST_PROTOCOL_VERSION, capabilities: {})
+      request(
+        method: "initialize",
+        params: {
+          protocolVersion: protocol_version,
+          capabilities: capabilities,
+          clientInfo: client_info,
+        },
+      )
+    end
+
     def tools
       response = request(method: "tools/list")
 
@@ -65,56 +87,30 @@ module MCP
       end || []
     end
 
-    # Returns the list of resources available from the server.
-    # Each call will make a new request – the result is not cached.
-    #
-    # @return [Array<Hash>] An array of available resources.
     def resources
       response = request(method: "resources/list")
 
       response.dig("result", "resources") || []
     end
 
-    # Returns the list of resource templates available from the server.
-    # Each call will make a new request – the result is not cached.
-    #
-    # @return [Array<Hash>] An array of available resource templates.
     def resource_templates
       response = request(method: "resources/templates/list")
 
       response.dig("result", "resourceTemplates") || []
     end
 
-    # Returns the list of prompts available from the server.
-    # Each call will make a new request – the result is not cached.
-    #
-    # @return [Array<Hash>] An array of available prompts.
     def prompts
       response = request(method: "prompts/list")
 
       response.dig("result", "prompts") || []
     end
 
-    # Calls a tool via the transport layer and returns the full response from the server.
-    #
     # @param name [String] The name of the tool to call.
     # @param tool [MCP::Client::Tool] The tool to be called.
     # @param arguments [Object, nil] The arguments to pass to the tool.
-    # @param progress_token [String, Integer, nil] A token to request progress notifications from the server during tool execution.
+    # @param progress_token [String, Integer, nil] A token to request progress
+    #   notifications from the server during tool execution.
     # @return [Hash] The full JSON-RPC response from the transport.
-    #
-    # @example Call by name
-    #   response = client.call_tool(name: "my_tool", arguments: { foo: "bar" })
-    #   content = response.dig("result", "content")
-    #
-    # @example Call with a tool object
-    #   tool = client.tools.first
-    #   response = client.call_tool(tool: tool, arguments: { foo: "bar" })
-    #   structured_content = response.dig("result", "structuredContent")
-    #
-    # @note
-    #   The exact requirements for `arguments` are determined by the transport layer in use.
-    #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
     def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil)
       tool_name = name || tool&.name
       raise ArgumentError, "Either `name:` or `tool:` must be provided." unless tool_name
@@ -127,33 +123,18 @@ module MCP
       request(method: "tools/call", params: params)
     end
 
-    # Reads a resource from the server by URI and returns the contents.
-    #
-    # @param uri [String] The URI of the resource to read.
-    # @return [Array<Hash>] An array of resource contents (text or blob).
     def read_resource(uri:)
       response = request(method: "resources/read", params: { uri: uri })
 
       response.dig("result", "contents") || []
     end
 
-    # Gets a prompt from the server by name and returns its details.
-    #
-    # @param name [String] The name of the prompt to get.
-    # @return [Hash] A hash containing the prompt details.
     def get_prompt(name:)
       response = request(method: "prompts/get", params: { name: name })
 
       response.fetch("result", {})
     end
 
-    # Requests completion suggestions from the server for a prompt argument or resource template URI.
-    #
-    # @param ref [Hash] The reference, e.g. `{ type: "ref/prompt", name: "my_prompt" }`
-    #   or `{ type: "ref/resource", uri: "file:///{path}" }`.
-    # @param argument [Hash] The argument being completed, e.g. `{ name: "language", value: "py" }`.
-    # @param context [Hash, nil] Optional context with previously resolved arguments.
-    # @return [Hash] The completion result with `"values"`, `"hasMore"`, and optionally `"total"`.
     def complete(ref:, argument:, context: nil)
       params = { ref: ref, argument: argument }
       params[:context] = context if context
@@ -161,6 +142,13 @@ module MCP
       response = request(method: "completion/complete", params: params)
 
       response.dig("result", "completion") || { "values" => [], "hasMore" => false }
+    end
+
+    # Closes the connection. For HTTP transport, terminates the session via
+    # DELETE (see the spec's session-termination section). No-op for transports
+    # that don't track session state.
+    def close
+      @transport.close if @transport.respond_to?(:close)
     end
 
     private
