@@ -40,6 +40,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports notifications for list changes (tools, prompts, resources)
 - Supports roots (server-to-client filesystem boundary queries)
 - Supports sampling (server-to-client LLM completion requests)
+- Supports cursor-based pagination for list operations
 
 ### Supported Methods
 
@@ -1364,6 +1365,90 @@ When configured, sessions that receive no HTTP requests for this duration are au
 # Session timeout of 30 minutes
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
 ```
+
+### Pagination
+
+The MCP Ruby SDK supports [pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
+for list operations that may return large result sets. Pagination uses string cursor tokens carrying a zero-based offset,
+treated as opaque by clients: the server decides page size, and the client follows `nextCursor` until the server omits it.
+
+Pagination applies to `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list`.
+
+#### Server-Side: Enabling Pagination
+
+Pass `page_size:` to `MCP::Server.new` to split list responses into pages. When `page_size` is omitted (the default),
+list responses contain all items in a single response, preserving the pre-pagination behavior.
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  tools: tools,
+  page_size: 50,
+)
+```
+
+When `page_size` is set, list responses include a `nextCursor` field whenever more pages are available:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      { "name": "example_tool" }
+    ],
+    "nextCursor": "50"
+  }
+}
+```
+
+Invalid cursors (e.g. non-numeric, negative, or out-of-range) are rejected with JSON-RPC error code `-32602 (Invalid params)` per the MCP specification.
+
+#### Client-Side: Iterating Pages
+
+`MCP::Client` exposes `list_tools`, `list_prompts`, `list_resources`, and `list_resource_templates`.
+**Each call issues exactly one `*/list` JSON-RPC request and returns exactly one page** — not the full collection.
+The returned result object (`MCP::Client::ListToolsResult` etc.) exposes the page items and the next cursor as method accessors:
+
+```ruby
+client = MCP::Client.new(transport: transport)
+
+cursor = nil
+loop do
+  page = client.list_tools(cursor: cursor)
+  page.tools.each { |tool| process(tool) }
+  cursor = page.next_cursor
+  break unless cursor
+end
+```
+
+The same pattern applies to `list_prompts` (`page.prompts`), `list_resources` (`page.resources`), and
+`list_resource_templates` (`page.resource_templates`). `next_cursor` is `nil` on the final page.
+
+Because a single call returns a single page, how many items come back depends on the server's `page_size` configuration:
+
+| Server `page_size` | `client.list_tools(cursor: nil)`                                    |
+|--------------------|---------------------------------------------------------------------|
+| Not set (default)  | Returns every item in one response. `next_cursor` is `nil`.         |
+| Set to `N`         | Returns the first `N` items. `next_cursor` is set for continuation. |
+
+If your application needs the complete collection regardless of how the server is configured, either loop on
+`next_cursor` as shown above, or use the whole-collection methods described below.
+
+#### Fetching the Complete Collection
+
+`client.tools`, `client.resources`, `client.resource_templates`, and `client.prompts` auto-iterate
+through all pages and return a plain array of items, guaranteeing the full collection regardless
+of the server's `page_size` setting. When a server paginates, they issue multiple JSON-RPC round
+trips per call and break out of the pagination loop if the server returns the same `nextCursor`
+twice in a row as a safety measure.
+
+```ruby
+tools = client.tools # => Array<MCP::Client::Tool> of every tool on the server.
+```
+
+Use these when you want the complete list; use `list_tools(cursor:)` etc. when you need
+fine-grained iteration (e.g. to stream-process pages without loading everything into memory).
 
 ### Advanced
 

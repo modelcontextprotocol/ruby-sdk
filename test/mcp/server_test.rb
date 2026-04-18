@@ -2331,5 +2331,166 @@ module MCP
       server.handle(request)
       assert_equal "from_accessor", received_context[:custom]
     end
+
+    test "#handle tools/list returns paginated results when page_size is set" do
+      tool_a = Tool.define(name: "tool_a", title: "Tool A", description: "Tool A")
+      tool_b = Tool.define(name: "tool_b", title: "Tool B", description: "Tool B")
+      tool_c = Tool.define(name: "tool_c", title: "Tool C", description: "Tool C")
+
+      server = Server.new(
+        name: "pagination_test",
+        tools: [tool_a, tool_b, tool_c],
+        page_size: 2,
+      )
+
+      first_request = { jsonrpc: "2.0", method: "tools/list", id: 1 }
+      first_response = server.handle(first_request)
+      first_result = first_response[:result]
+
+      assert_equal 2, first_result[:tools].size
+      assert_equal "tool_a", first_result[:tools][0][:name]
+      assert_equal "tool_b", first_result[:tools][1][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_request = { jsonrpc: "2.0", method: "tools/list", id: 2, params: { cursor: first_result[:nextCursor] } }
+      second_response = server.handle(second_request)
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:tools].size
+      assert_equal "tool_c", second_result[:tools][0][:name]
+      # Final page omits the nextCursor key entirely (not just sets it to nil).
+      refute second_result.key?(:nextCursor)
+    end
+
+    test "#handle tools/list returns all tools when page_size is not set" do
+      response = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      result = response[:result]
+
+      assert_kind_of Array, result[:tools]
+      assert_nil result[:nextCursor]
+    end
+
+    test "#handle tools/list returns error for invalid cursor" do
+      server = Server.new(name: "pagination_test", tools: [@tool], page_size: 1)
+
+      request = { jsonrpc: "2.0", method: "tools/list", id: 1, params: { cursor: "!!!invalid!!!" } }
+      response = server.handle(request)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle prompts/list returns paginated results when page_size is set" do
+      prompt_a = Prompt.define(name: "prompt_a", title: "Prompt A", description: "A") { Prompt::Result.new(description: "A", messages: []) }
+      prompt_b = Prompt.define(name: "prompt_b", title: "Prompt B", description: "B") { Prompt::Result.new(description: "B", messages: []) }
+
+      server = Server.new(name: "pagination_test", prompts: [prompt_a, prompt_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:prompts].size
+      assert_equal "prompt_a", first_result[:prompts][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:prompts].size
+      assert_equal "prompt_b", second_result[:prompts][0][:name]
+      assert_nil second_result[:nextCursor]
+    end
+
+    test "#handle resources/list returns paginated results when page_size is set" do
+      resource_a = Resource.new(uri: "https://a.invalid", name: "a", description: "A", mime_type: "text/plain")
+      resource_b = Resource.new(uri: "https://b.invalid", name: "b", description: "B", mime_type: "text/plain")
+
+      server = Server.new(name: "pagination_test", resources: [resource_a, resource_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:resources].size
+      assert_equal "a", first_result[:resources][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:resources].size
+      assert_equal "b", second_result[:resources][0][:name]
+      assert_nil second_result[:nextCursor]
+    end
+
+    test "Server.new raises ArgumentError when page_size is zero" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: 0)
+      end
+    end
+
+    test "Server.new raises ArgumentError when page_size is negative" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: -1)
+      end
+    end
+
+    test "Server.new raises ArgumentError when page_size is non-Integer" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: "10")
+      end
+    end
+
+    test "page_size= raises ArgumentError for invalid values" do
+      server = Server.new(name: "test")
+
+      assert_raises(ArgumentError) { server.page_size = 0 }
+      assert_raises(ArgumentError) { server.page_size = -1 }
+      assert_raises(ArgumentError) { server.page_size = "5" }
+
+      server.page_size = nil
+      server.page_size = 10
+      assert_equal 10, server.page_size
+    end
+
+    test "#handle tools/list returns -32602 for non-Hash params" do
+      server = Server.new(name: "test", tools: [@tool], page_size: 1)
+
+      request = { jsonrpc: "2.0", method: "tools/list", id: 1, params: [1, 2, 3] }
+      response = server.handle(request)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle_json tools/list returns -32602 for numeric cursor (spec requires string)" do
+      server = Server.new(name: "test", tools: [@tool], page_size: 1)
+
+      request_json = '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"cursor":0}}'
+      response = JSON.parse(server.handle_json(request_json), symbolize_names: true)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle resources/templates/list returns paginated results when page_size is set" do
+      template_a = ResourceTemplate.new(uri_template: "https://a.invalid/{id}", name: "a", description: "A", mime_type: "text/plain")
+      template_b = ResourceTemplate.new(uri_template: "https://b.invalid/{id}", name: "b", description: "B", mime_type: "text/plain")
+
+      server = Server.new(name: "pagination_test", resource_templates: [template_a, template_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:resourceTemplates].size
+      assert_equal "a", first_result[:resourceTemplates][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:resourceTemplates].size
+      assert_equal "b", second_result[:resourceTemplates][0][:name]
+      assert_nil second_result[:nextCursor]
+    end
   end
 end

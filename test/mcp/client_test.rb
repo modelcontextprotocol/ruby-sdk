@@ -537,5 +537,321 @@ module MCP
       assert_equal([], result["values"])
       refute(result["hasMore"])
     end
+
+    def test_tools_auto_paginates_across_multiple_pages
+      transport = mock
+
+      page1_response = {
+        "result" => {
+          "tools" => [{ "name" => "tool1", "description" => "tool1", "inputSchema" => {} }],
+          "nextCursor" => "cursor1",
+        },
+      }
+      page2_response = {
+        "result" => {
+          "tools" => [{ "name" => "tool2", "description" => "tool2", "inputSchema" => {} }],
+        },
+      }
+
+      call_count = 0
+      transport.expects(:send_request).twice.with do |args|
+        call_count += 1
+        req = args[:request]
+        if call_count == 1
+          req[:method] == "tools/list" && req[:params].nil?
+        else
+          req[:method] == "tools/list" && req[:params] == { cursor: "cursor1" }
+        end
+      end.returns(page1_response).then.returns(page2_response)
+
+      client = Client.new(transport: transport)
+      tools = client.tools
+
+      assert_equal(2, tools.size)
+      assert_equal("tool1", tools[0].name)
+      assert_equal("tool2", tools[1].name)
+    end
+
+    def test_list_tools_returns_single_page_with_cursor
+      transport = mock
+
+      mock_response = {
+        "result" => {
+          "tools" => [{ "name" => "tool1", "description" => "tool1", "inputSchema" => {} }],
+          "nextCursor" => "cursor1",
+        },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/list"
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.list_tools
+
+      assert_equal(1, result.tools.size)
+      assert_equal("tool1", result.tools[0].name)
+      assert_equal("cursor1", result.next_cursor)
+    end
+
+    def test_list_tools_with_cursor_param
+      transport = mock
+
+      mock_response = {
+        "result" => {
+          "tools" => [{ "name" => "tool2", "description" => "tool2", "inputSchema" => {} }],
+        },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :params) == { cursor: "cursor1" }
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.list_tools(cursor: "cursor1")
+
+      assert_equal(1, result.tools.size)
+      assert_equal("tool2", result.tools[0].name)
+      assert_nil(result.next_cursor)
+    end
+
+    def test_resources_auto_paginates_across_multiple_pages
+      transport = mock
+
+      page1_response = {
+        "result" => {
+          "resources" => [{ "uri" => "https://a.invalid", "name" => "a" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+      page2_response = {
+        "result" => {
+          "resources" => [{ "uri" => "https://b.invalid", "name" => "b" }],
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(page1_response).then.returns(page2_response)
+
+      client = Client.new(transport: transport)
+      resources = client.resources
+
+      assert_equal(2, resources.size)
+      assert_equal("a", resources[0]["name"])
+      assert_equal("b", resources[1]["name"])
+    end
+
+    def test_list_resources_returns_single_page_with_cursor
+      transport = mock
+
+      mock_response = {
+        "result" => {
+          "resources" => [{ "uri" => "https://a.invalid", "name" => "a" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.list_resources
+
+      assert_equal(1, result.resources.size)
+      assert_equal("cursor1", result.next_cursor)
+    end
+
+    def test_resource_templates_auto_paginates_across_multiple_pages
+      transport = mock
+
+      page1_response = {
+        "result" => {
+          "resourceTemplates" => [{ "uriTemplate" => "https://a.invalid/{id}", "name" => "a" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+      page2_response = {
+        "result" => {
+          "resourceTemplates" => [{ "uriTemplate" => "https://b.invalid/{id}", "name" => "b" }],
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(page1_response).then.returns(page2_response)
+
+      client = Client.new(transport: transport)
+      templates = client.resource_templates
+
+      assert_equal(2, templates.size)
+      assert_equal("a", templates[0]["name"])
+      assert_equal("b", templates[1]["name"])
+    end
+
+    def test_list_resource_templates_returns_single_page_with_cursor
+      transport = mock
+
+      mock_response = {
+        "result" => {
+          "resourceTemplates" => [{ "uriTemplate" => "https://a.invalid/{id}", "name" => "a" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.list_resource_templates
+
+      assert_equal(1, result.resource_templates.size)
+      assert_equal("cursor1", result.next_cursor)
+    end
+
+    def test_prompts_auto_paginates_across_multiple_pages
+      transport = mock
+
+      page1_response = {
+        "result" => {
+          "prompts" => [{ "name" => "prompt_a", "description" => "A" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+      page2_response = {
+        "result" => {
+          "prompts" => [{ "name" => "prompt_b", "description" => "B" }],
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(page1_response).then.returns(page2_response)
+
+      client = Client.new(transport: transport)
+      prompts = client.prompts
+
+      assert_equal(2, prompts.size)
+      assert_equal("prompt_a", prompts[0]["name"])
+      assert_equal("prompt_b", prompts[1]["name"])
+    end
+
+    def test_tools_breaks_when_server_returns_same_cursor_repeatedly
+      transport = mock
+
+      stuck_response = {
+        "result" => {
+          "tools" => [{ "name" => "tool1", "description" => "tool1", "inputSchema" => {} }],
+          "nextCursor" => "stuck_cursor",
+        },
+      }
+
+      # If the server keeps returning the same cursor, the client must not loop forever.
+      # Expect at most 2 calls: the initial request (cursor=nil) and one retry (cursor="stuck_cursor")
+      # that detects the repeat and breaks out.
+      transport.expects(:send_request).twice.returns(stuck_response)
+
+      client = Client.new(transport: transport)
+      tools = client.tools
+
+      assert_equal(2, tools.size)
+    end
+
+    def test_tools_breaks_when_server_cycles_between_cursors
+      transport = mock
+
+      page_a = {
+        "result" => {
+          "tools" => [{ "name" => "tool1", "description" => "tool1", "inputSchema" => {} }],
+          "nextCursor" => "A",
+        },
+      }
+      page_b = {
+        "result" => {
+          "tools" => [{ "name" => "tool2", "description" => "tool2", "inputSchema" => {} }],
+          "nextCursor" => "B",
+        },
+      }
+      # Server cycles A -> B -> A. Client must detect the revisited cursor and break.
+      page_a_again = {
+        "result" => {
+          "tools" => [{ "name" => "tool3", "description" => "tool3", "inputSchema" => {} }],
+          "nextCursor" => "A",
+        },
+      }
+
+      transport.expects(:send_request).times(3).returns(page_a, page_b, page_a_again)
+
+      client = Client.new(transport: transport)
+      tools = client.tools
+
+      assert_equal(3, tools.size)
+      assert_equal(["tool1", "tool2", "tool3"], tools.map(&:name))
+    end
+
+    def test_resources_breaks_when_server_returns_same_cursor_repeatedly
+      transport = mock
+
+      stuck_response = {
+        "result" => {
+          "resources" => [{ "uri" => "https://a.invalid", "name" => "a" }],
+          "nextCursor" => "stuck_cursor",
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(stuck_response)
+
+      client = Client.new(transport: transport)
+      resources = client.resources
+
+      assert_equal(2, resources.size)
+    end
+
+    def test_resource_templates_breaks_when_server_returns_same_cursor_repeatedly
+      transport = mock
+
+      stuck_response = {
+        "result" => {
+          "resourceTemplates" => [{ "uriTemplate" => "https://a.invalid/{id}", "name" => "a" }],
+          "nextCursor" => "stuck_cursor",
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(stuck_response)
+
+      client = Client.new(transport: transport)
+      templates = client.resource_templates
+
+      assert_equal(2, templates.size)
+    end
+
+    def test_prompts_breaks_when_server_returns_same_cursor_repeatedly
+      transport = mock
+
+      stuck_response = {
+        "result" => {
+          "prompts" => [{ "name" => "prompt_a", "description" => "A" }],
+          "nextCursor" => "stuck_cursor",
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(stuck_response)
+
+      client = Client.new(transport: transport)
+      prompts = client.prompts
+
+      assert_equal(2, prompts.size)
+    end
+
+    def test_list_prompts_returns_single_page_with_cursor
+      transport = mock
+
+      mock_response = {
+        "result" => {
+          "prompts" => [{ "name" => "prompt_a", "description" => "A" }],
+          "nextCursor" => "cursor1",
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.list_prompts
+
+      assert_equal(1, result.prompts.size)
+      assert_equal("cursor1", result.next_cursor)
+    end
   end
 end

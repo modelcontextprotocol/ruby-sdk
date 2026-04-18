@@ -2,6 +2,7 @@
 
 require_relative "client/stdio"
 require_relative "client/http"
+require_relative "client/paginated_result"
 require_relative "client/tool"
 
 module MCP
@@ -43,8 +44,41 @@ module MCP
     # So keeping it public
     attr_reader :transport
 
-    # Returns the list of tools available from the server.
-    # Each call will make a new request – the result is not cached.
+    # Returns a single page of tools from the server.
+    #
+    # @param cursor [String, nil] Cursor from a previous page response.
+    # @return [MCP::Client::ListToolsResult] Result with `tools` (Array<MCP::Client::Tool>)
+    #   and `next_cursor` (String or nil).
+    #
+    # @example Iterate all pages
+    #   cursor = nil
+    #   loop do
+    #     page = client.list_tools(cursor: cursor)
+    #     page.tools.each { |tool| puts tool.name }
+    #     cursor = page.next_cursor
+    #     break unless cursor
+    #   end
+    def list_tools(cursor: nil)
+      params = cursor ? { cursor: cursor } : nil
+      response = request(method: "tools/list", params: params)
+      result = response["result"] || {}
+
+      tools = (result["tools"] || []).map do |tool|
+        Tool.new(
+          name: tool["name"],
+          description: tool["description"],
+          input_schema: tool["inputSchema"],
+        )
+      end
+
+      ListToolsResult.new(tools: tools, next_cursor: result["nextCursor"], meta: result["_meta"])
+    end
+
+    # Returns every tool available on the server. Iterates through all pages automatically
+    # when the server paginates, so the full collection is returned regardless of the server's `page_size` setting.
+    # Use {#list_tools} when you need fine-grained cursor control.
+    #
+    # Each call will make a new request - the result is not cached.
     #
     # @return [Array<MCP::Client::Tool>] An array of available tools.
     #
@@ -54,45 +88,151 @@ module MCP
     #     puts tool.name
     #   end
     def tools
-      response = request(method: "tools/list")
+      # TODO: consider renaming to `list_all_tools`.
+      all_tools = []
+      seen = Set.new
+      cursor = nil
 
-      response.dig("result", "tools")&.map do |tool|
-        Tool.new(
-          name: tool["name"],
-          description: tool["description"],
-          input_schema: tool["inputSchema"],
-        )
-      end || []
+      loop do
+        page = list_tools(cursor: cursor)
+        all_tools.concat(page.tools)
+        next_cursor = page.next_cursor
+        break if next_cursor.nil? || seen.include?(next_cursor)
+
+        seen << next_cursor
+        cursor = next_cursor
+      end
+
+      all_tools
     end
 
-    # Returns the list of resources available from the server.
-    # Each call will make a new request – the result is not cached.
+    # Returns a single page of resources from the server.
+    #
+    # @param cursor [String, nil] Cursor from a previous page response.
+    # @return [MCP::Client::ListResourcesResult] Result with `resources` (Array<Hash>)
+    #   and `next_cursor` (String or nil).
+    def list_resources(cursor: nil)
+      params = cursor ? { cursor: cursor } : nil
+      response = request(method: "resources/list", params: params)
+      result = response["result"] || {}
+
+      ListResourcesResult.new(
+        resources: result["resources"] || [],
+        next_cursor: result["nextCursor"],
+        meta: result["_meta"],
+      )
+    end
+
+    # Returns every resource available on the server. Iterates through all pages automatically
+    # when the server paginates, so the full collection is returned regardless of the server's `page_size` setting.
+    # Use {#list_resources} when you need fine-grained cursor control.
+    #
+    # Each call will make a new request - the result is not cached.
     #
     # @return [Array<Hash>] An array of available resources.
     def resources
-      response = request(method: "resources/list")
+      # TODO: consider renaming to `list_all_resources`.
+      all_resources = []
+      seen = Set.new
+      cursor = nil
 
-      response.dig("result", "resources") || []
+      loop do
+        page = list_resources(cursor: cursor)
+        all_resources.concat(page.resources)
+        next_cursor = page.next_cursor
+        break if next_cursor.nil? || seen.include?(next_cursor)
+
+        seen << next_cursor
+        cursor = next_cursor
+      end
+
+      all_resources
     end
 
-    # Returns the list of resource templates available from the server.
-    # Each call will make a new request – the result is not cached.
+    # Returns a single page of resource templates from the server.
+    #
+    # @param cursor [String, nil] Cursor from a previous page response.
+    # @return [MCP::Client::ListResourceTemplatesResult] Result with `resource_templates`
+    #   (Array<Hash>) and `next_cursor` (String or nil).
+    def list_resource_templates(cursor: nil)
+      params = cursor ? { cursor: cursor } : nil
+      response = request(method: "resources/templates/list", params: params)
+      result = response["result"] || {}
+
+      ListResourceTemplatesResult.new(
+        resource_templates: result["resourceTemplates"] || [],
+        next_cursor: result["nextCursor"],
+        meta: result["_meta"],
+      )
+    end
+
+    # Returns every resource template available on the server. Iterates through all pages automatically
+    # when the server paginates, so the full collection is returned regardless of the server's `page_size` setting.
+    # Use {#list_resource_templates} when you need fine-grained cursor control.
+    #
+    # Each call will make a new request - the result is not cached.
     #
     # @return [Array<Hash>] An array of available resource templates.
     def resource_templates
-      response = request(method: "resources/templates/list")
+      # TODO: consider renaming to `list_all_resource_templates`.
+      all_templates = []
+      seen = Set.new
+      cursor = nil
 
-      response.dig("result", "resourceTemplates") || []
+      loop do
+        page = list_resource_templates(cursor: cursor)
+        all_templates.concat(page.resource_templates)
+        next_cursor = page.next_cursor
+        break if next_cursor.nil? || seen.include?(next_cursor)
+
+        seen << next_cursor
+        cursor = next_cursor
+      end
+
+      all_templates
     end
 
-    # Returns the list of prompts available from the server.
-    # Each call will make a new request – the result is not cached.
+    # Returns a single page of prompts from the server.
+    #
+    # @param cursor [String, nil] Cursor from a previous page response.
+    # @return [MCP::Client::ListPromptsResult] Result with `prompts` (Array<Hash>)
+    #   and `next_cursor` (String or nil).
+    def list_prompts(cursor: nil)
+      params = cursor ? { cursor: cursor } : nil
+      response = request(method: "prompts/list", params: params)
+      result = response["result"] || {}
+
+      ListPromptsResult.new(
+        prompts: result["prompts"] || [],
+        next_cursor: result["nextCursor"],
+        meta: result["_meta"],
+      )
+    end
+
+    # Returns every prompt available on the server. Iterates through all pages automatically
+    # when the server paginates, so the full collection is returned regardless of the server's `page_size` setting.
+    # Use {#list_prompts} when you need fine-grained cursor control.
+    #
+    # Each call will make a new request - the result is not cached.
     #
     # @return [Array<Hash>] An array of available prompts.
     def prompts
-      response = request(method: "prompts/list")
+      # TODO: consider renaming to `list_all_prompts`.
+      all_prompts = []
+      seen = Set.new
+      cursor = nil
 
-      response.dig("result", "prompts") || []
+      loop do
+        page = list_prompts(cursor: cursor)
+        all_prompts.concat(page.prompts)
+        next_cursor = page.next_cursor
+        break if next_cursor.nil? || seen.include?(next_cursor)
+
+        seen << next_cursor
+        cursor = next_cursor
+      end
+
+      all_prompts
     end
 
     # Calls a tool via the transport layer and returns the full response from the server.
