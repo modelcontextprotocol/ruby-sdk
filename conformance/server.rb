@@ -2,6 +2,7 @@
 
 require "rackup"
 require "json"
+require "set"
 require "uri"
 require_relative "../lib/mcp"
 
@@ -539,6 +540,7 @@ module Conformance
       server.server_context = server
 
       configure_resources_read_handler(server)
+      configure_subscription_handlers(server)
       configure_completion_handler(server)
     end
 
@@ -606,6 +608,18 @@ module Conformance
         else
           { completion: { values: [], hasMore: false } }
         end
+      end
+    end
+
+    def configure_subscription_handlers(server)
+      subscribed_uris = Set.new
+
+      server.resources_subscribe_handler do |params|
+        subscribed_uris.add(params[:uri].to_s)
+      end
+
+      server.resources_unsubscribe_handler do |params|
+        subscribed_uris.delete(params[:uri].to_s)
       end
     end
 

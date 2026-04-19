@@ -85,6 +85,13 @@ module MCP
       @server.report_exception(e, notification: "elicitation_complete")
     end
 
+    # Sends a resource updated notification to this session only.
+    def notify_resources_updated(uri:)
+      send_to_transport(Methods::NOTIFICATIONS_RESOURCES_UPDATED, { "uri" => uri })
+    rescue => e
+      @server.report_exception(e, notification: "resources_updated")
+    end
+
     # Sends a progress notification to this session only.
     def notify_progress(progress_token:, progress:, total: nil, message: nil, related_request_id: nil)
       params = {

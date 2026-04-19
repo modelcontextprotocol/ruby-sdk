@@ -192,6 +192,23 @@ module MCP
       assert_nothing_raised { server_context.notify_log_message(data: "test", level: "info") }
     end
 
+    test "ServerContext#notify_resources_updated delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:notify_resources_updated).with(uri: "test://resource-1").once
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: notification_target)
+
+      server_context.notify_resources_updated(uri: "test://resource-1")
+    end
+
+    test "ServerContext#notify_resources_updated is a no-op when notification_target is nil" do
+      progress = Progress.new(notification_target: nil, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: nil)
+
+      assert_nothing_raised { server_context.notify_resources_updated(uri: "test://resource-1") }
+    end
+
     # Tool without server_context parameter
     class SimpleToolWithoutContext < Tool
       tool_name "simple_without_context"

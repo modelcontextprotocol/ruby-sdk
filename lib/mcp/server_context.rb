@@ -30,6 +30,15 @@ module MCP
       @notification_target.notify_log_message(data: data, level: level, logger: logger, related_request_id: @related_request_id)
     end
 
+    # Sends a resource updated notification scoped to the originating session.
+    #
+    # @param uri [String] The URI of the updated resource.
+    def notify_resources_updated(uri:)
+      return unless @notification_target
+
+      @notification_target.notify_resources_updated(uri: uri)
+    end
+
     # Delegates to the session so the request is scoped to the originating client.
     def list_roots
       if @notification_target.respond_to?(:list_roots)

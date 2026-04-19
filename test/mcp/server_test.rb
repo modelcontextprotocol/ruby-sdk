@@ -2233,6 +2233,72 @@ module MCP
       )
     end
 
+    test "#handle resources/subscribe with custom handler calls the handler" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      received_params = nil
+      server.resources_subscribe_handler do |params|
+        received_params = params
+        {}
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/subscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+      assert_equal "https://example.com/resource", received_params[:uri]
+    end
+
+    test "#handle resources/unsubscribe with custom handler calls the handler" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      received_params = nil
+      server.resources_unsubscribe_handler do |params|
+        received_params = params
+        {}
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/unsubscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+      assert_equal "https://example.com/resource", received_params[:uri]
+    end
+
     test "tools/call with no args" do
       server = Server.new(tools: [@tool_with_no_args])
 

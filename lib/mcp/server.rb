@@ -117,6 +117,8 @@ module MCP
         Methods::RESOURCES_LIST => method(:list_resources),
         Methods::RESOURCES_READ => method(:read_resource_no_content),
         Methods::RESOURCES_TEMPLATES_LIST => method(:list_resource_templates),
+        Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
+        Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
         Methods::TOOLS_LIST => method(:list_tools),
         Methods::TOOLS_CALL => method(:call_tool),
         Methods::PROMPTS_LIST => method(:list_prompts),
@@ -128,10 +130,6 @@ module MCP
         Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED => ->(_) {},
         Methods::COMPLETION_COMPLETE => ->(_) { DEFAULT_COMPLETION_RESULT },
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
-
-        # No op handlers for currently unsupported methods
-        Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
-        Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
       }
       @transport = transport
     end
@@ -256,6 +254,24 @@ module MCP
     # @yieldreturn [Hash] A hash with `:completion` key containing `:values`, optional `:total`, and `:hasMore`.
     def completion_handler(&block)
       @handlers[Methods::COMPLETION_COMPLETE] = block
+    end
+
+    # Sets a custom handler for `resources/subscribe` requests.
+    # The block receives the parsed request params. The return value is
+    # ignored; the response is always an empty result `{}` per the MCP specification.
+    #
+    # @yield [params] The request params containing `:uri`.
+    def resources_subscribe_handler(&block)
+      @handlers[Methods::RESOURCES_SUBSCRIBE] = block
+    end
+
+    # Sets a custom handler for `resources/unsubscribe` requests.
+    # The block receives the parsed request params. The return value is
+    # ignored; the response is always an empty result `{}` per the MCP specification.
+    #
+    # @yield [params] The request params containing `:uri`.
+    def resources_unsubscribe_handler(&block)
+      @handlers[Methods::RESOURCES_UNSUBSCRIBE] = block
     end
 
     def build_sampling_params(
@@ -391,6 +407,9 @@ module MCP
             init(params, session: session)
           when Methods::RESOURCES_READ
             { contents: @handlers[Methods::RESOURCES_READ].call(params) }
+          when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
+            @handlers[method].call(params)
+            {}
           when Methods::TOOLS_CALL
             call_tool(params, session: session, related_request_id: related_request_id)
           when Methods::COMPLETION_COMPLETE
