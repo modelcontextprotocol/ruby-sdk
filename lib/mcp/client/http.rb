@@ -18,8 +18,7 @@ module MCP
         params = request[:params] || request["params"]
 
         response = client.post("", request)
-        validate_response_content_type!(response, method, params)
-        response.body
+        parse_response_body(response, method, params)
       rescue Faraday::BadRequestError => e
         raise RequestHandlerError.new(
           "The #{method} request is invalid",
@@ -92,14 +91,52 @@ module MCP
           "See https://rubygems.org/gems/faraday for more details."
       end
 
-      def validate_response_content_type!(response, method, params)
+      def require_event_stream_parser!
+        require "event_stream_parser"
+      rescue LoadError
+        raise LoadError, "The 'event_stream_parser' gem is required to parse SSE responses. " \
+          "Add it to your Gemfile: gem 'event_stream_parser', '>= 1.0'. " \
+          "See https://rubygems.org/gems/event_stream_parser for more details."
+      end
+
+      def parse_response_body(response, method, params)
         content_type = response.headers["Content-Type"]
-        return if content_type&.include?("application/json")
+
+        if content_type&.include?("text/event-stream")
+          parse_sse_response(response.body, method, params)
+        elsif content_type&.include?("application/json")
+          response.body
+        else
+          raise RequestHandlerError.new(
+            "Unsupported Content-Type: #{content_type.inspect}. Expected application/json or text/event-stream.",
+            { method: method, params: params },
+            error_type: :unsupported_media_type,
+          )
+        end
+      end
+
+      def parse_sse_response(body, method, params)
+        require_event_stream_parser!
+
+        json_rpc_response = nil
+        parser = EventStreamParser::Parser.new
+        parser.feed(body.to_s) do |_type, data, _id|
+          next if data.empty?
+
+          begin
+            parsed = JSON.parse(data)
+            json_rpc_response = parsed if parsed.is_a?(Hash) && (parsed.key?("result") || parsed.key?("error"))
+          rescue JSON::ParserError
+            next
+          end
+        end
+
+        return json_rpc_response if json_rpc_response
 
         raise RequestHandlerError.new(
-          "Unsupported Content-Type: #{content_type.inspect}. This client only supports JSON responses.",
+          "No valid JSON-RPC response found in SSE stream",
           { method: method, params: params },
-          error_type: :unsupported_media_type,
+          error_type: :parse_error,
         )
       end
     end
