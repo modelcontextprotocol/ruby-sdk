@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "event_stream_parser"
 require "faraday"
 require "webmock/minitest"
 require "mcp/client/http"
@@ -23,6 +24,26 @@ module MCP
 
         assert_includes(error.message, "The 'faraday' gem is required to use the MCP client HTTP transport")
         assert_includes(error.message, "Add it to your Gemfile: gem 'faraday', '>= 2.0'")
+      end
+
+      def test_raises_load_error_when_event_stream_parser_not_available
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: "data: {}\n\n",
+          )
+
+        HTTP.any_instance.stubs(:require).with("faraday").returns(true)
+        HTTP.any_instance.stubs(:require).with("event_stream_parser")
+          .raises(LoadError, "cannot load such file -- event_stream_parser")
+
+        error = assert_raises(LoadError) do
+          client.send_request(request: { method: "tools/list" })
+        end
+
+        assert_includes(error.message, "The 'event_stream_parser' gem is required to parse SSE responses")
+        assert_includes(error.message, "Add it to your Gemfile: gem 'event_stream_parser', '>= 1.0'")
       end
 
       def test_headers_are_added_to_the_request
@@ -267,7 +288,7 @@ module MCP
         custom_client.send_request(request: request)
       end
 
-      def test_send_request_raises_error_for_non_json_response
+      def test_send_request_raises_error_for_unsupported_content_type
         request = {
           jsonrpc: "2.0",
           id: "test_id",
@@ -278,8 +299,8 @@ module MCP
           .with(body: request.to_json)
           .to_return(
             status: 200,
-            headers: { "Content-Type" => "text/event-stream" },
-            body: "data: {}\n\n",
+            headers: { "Content-Type" => "text/html" },
+            body: "<html></html>",
           )
 
         error = assert_raises(RequestHandlerError) do
@@ -287,11 +308,94 @@ module MCP
         end
 
         assert_equal(
-          'Unsupported Content-Type: "text/event-stream". This client only supports JSON responses.',
+          'Unsupported Content-Type: "text/html". Expected application/json or text/event-stream.',
           error.message,
         )
         assert_equal(:unsupported_media_type, error.error_type)
         assert_equal({ method: "tools/list", params: nil }, error.request)
+      end
+
+      def test_send_request_parses_sse_response
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        sse_body = <<~SSE
+          : comment
+          data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}
+
+          data: {"jsonrpc":"2.0","id":"test_id","result":{"tools":[{"name":"echo"}]}}
+
+        SSE
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: sse_body,
+          )
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "tools" => [{ "name" => "echo" }] }, response["result"])
+      end
+
+      def test_send_request_parses_sse_error_response
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        sse_body = <<~SSE
+          data: {"jsonrpc":"2.0","id":"test_id","error":{"code":-32600,"message":"Invalid request"}}
+
+        SSE
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: sse_body,
+          )
+
+        response = client.send_request(request: request)
+
+        assert_equal(-32600, response.dig("error", "code"))
+        assert_equal("Invalid request", response.dig("error", "message"))
+      end
+
+      def test_send_request_raises_error_for_sse_without_response
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        sse_body = <<~SSE
+          : just a comment
+          data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}
+
+        SSE
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: sse_body,
+          )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_includes(error.message, "No valid JSON-RPC response found in SSE stream")
+        assert_equal(:parse_error, error.error_type)
       end
 
       private

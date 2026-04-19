@@ -51,11 +51,12 @@ stdio_transport.close
 
 ## HTTP Transport
 
-Use `MCP::Client::HTTP` to interact with MCP servers over HTTP. Requires the `faraday` gem:
+Use `MCP::Client::HTTP` to interact with MCP servers over HTTP. Requires the `faraday` gem, plus `event_stream_parser` if the server uses SSE (`text/event-stream`) responses:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
+gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```
 
 ```ruby

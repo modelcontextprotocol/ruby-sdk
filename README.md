@@ -1635,11 +1635,12 @@ The stdio transport automatically handles:
 
 Use the `MCP::Client::HTTP` transport to interact with MCP servers using simple HTTP requests.
 
-You'll need to add `faraday` as a dependency in order to use the HTTP transport layer:
+You'll need to add `faraday` as a dependency in order to use the HTTP transport layer. Add `event_stream_parser` as well if the server uses SSE (`text/event-stream`) responses:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
+gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```
 
 Example usage:
