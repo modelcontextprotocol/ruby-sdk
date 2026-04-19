@@ -67,6 +67,11 @@ module MCP
       end
     end
 
+    # Raised when a client response fails server-side validation, e.g., a success response
+    # whose `result` field is missing or has the wrong type. This is distinct from a
+    # client-returned JSON-RPC error.
+    class ValidationError < StandardError; end
+
     include Instrumentation
     include Pagination
 

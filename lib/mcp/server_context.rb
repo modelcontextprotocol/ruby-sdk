@@ -59,6 +59,28 @@ module MCP
       end
     end
 
+    # Sends a `ping` request to the originating client to verify it is still responsive.
+    # Per the MCP spec, the client MUST respond promptly with an empty result.
+    #
+    # @return [Hash] An empty hash on success.
+    # @raise [Server::ValidationError] If the response `result` is not a Hash.
+    # @raise [NoMethodError] If the session does not support sending pings.
+    #
+    # @example
+    #   def self.call(server_context:)
+    #     server_context.ping # => {}
+    #     # ...
+    #   end
+    #
+    # @see https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping
+    def ping
+      if @notification_target.respond_to?(:ping)
+        @notification_target.ping(related_request_id: @related_request_id)
+      else
+        raise NoMethodError, "undefined method 'ping' for #{self}"
+      end
+    end
+
     # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` (via `method_missing`) when `@notification_target`
     # does not support sampling.
