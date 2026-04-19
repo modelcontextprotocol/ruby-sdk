@@ -538,6 +538,67 @@ module MCP
       refute(result["hasMore"])
     end
 
+    def test_ping_sends_request_and_returns_empty_hash
+      transport = mock
+      mock_response = { "result" => {} }
+
+      transport.expects(:send_request).with do |args|
+        req = args[:request]
+        req[:method] == "ping" &&
+          req[:jsonrpc] == "2.0" &&
+          !req.key?(:params)
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.ping
+
+      assert_equal({}, result)
+    end
+
+    def test_ping_raises_server_error_on_error_response
+      transport = mock
+      mock_response = { "error" => { "code" => -32_603, "message" => "Internal error" } }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.ping }
+      assert_equal(-32_603, error.code)
+      assert_equal("Internal error", error.message)
+    end
+
+    def test_ping_raises_validation_error_when_result_is_missing
+      transport = mock
+      mock_response = {}
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ValidationError) { client.ping }
+      assert_equal("Response validation failed: missing or invalid `result`", error.message)
+    end
+
+    def test_ping_raises_validation_error_when_result_is_wrong_type
+      transport = mock
+      mock_response = { "result" => "ok" }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ValidationError) { client.ping }
+      assert_equal("Response validation failed: missing or invalid `result`", error.message)
+    end
+
+    def test_ping_propagates_transport_errors
+      transport = mock
+      transport_error = StandardError.new("read timeout")
+      transport.expects(:send_request).raises(transport_error).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(StandardError) { client.ping }
+      assert_equal("read timeout", error.message)
+    end
+
     def test_tools_auto_paginates_across_multiple_pages
       transport = mock
 
