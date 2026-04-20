@@ -5,6 +5,77 @@ require "securerandom"
 
 module MCP
   class ClientTest < Minitest::Test
+    def test_connect_delegates_to_transport_and_forwards_keyword_args
+      transport = mock
+      init_result = {
+        "protocolVersion" => "2025-11-25",
+        "capabilities" => { "tools" => {} },
+        "serverInfo" => { "name" => "test-server", "version" => "1.0" },
+      }
+      transport.expects(:connect).with(
+        client_info: { name: "my-app", version: "1.0" },
+        protocol_version: "2025-11-25",
+        capabilities: { roots: {} },
+      ).returns(init_result).once
+
+      result = Client.new(transport: transport).connect(
+        client_info: { name: "my-app", version: "1.0" },
+        protocol_version: "2025-11-25",
+        capabilities: { roots: {} },
+      )
+
+      assert_equal(init_result, result)
+    end
+
+    def test_connect_passes_nil_defaults_to_transport
+      transport = mock
+      transport.expects(:connect)
+        .with(client_info: nil, protocol_version: nil, capabilities: {})
+        .returns({ "protocolVersion" => "2025-11-25" }).once
+
+      Client.new(transport: transport).connect
+    end
+
+    def test_connect_is_noop_when_transport_does_not_respond_to_connect
+      transport = mock
+      transport.stubs(:respond_to?).with(:connect).returns(false)
+      transport.stubs(:respond_to?).with(:server_info).returns(false)
+
+      client = Client.new(transport: transport)
+
+      assert_nil(client.connect)
+      assert_nil(client.server_info)
+    end
+
+    def test_connected_delegates_to_transport_when_supported
+      transport = mock
+      transport.expects(:connected?).returns(true)
+
+      assert_predicate(Client.new(transport: transport), :connected?)
+    end
+
+    def test_connected_returns_true_when_transport_does_not_respond_to_connected
+      transport = mock
+      transport.stubs(:respond_to?).with(:connected?).returns(false)
+
+      assert_predicate(Client.new(transport: transport), :connected?)
+    end
+
+    def test_server_info_delegates_to_transport_when_supported
+      transport = mock
+      init_result = { "protocolVersion" => "2025-11-25" }
+      transport.expects(:server_info).returns(init_result)
+
+      assert_equal(init_result, Client.new(transport: transport).server_info)
+    end
+
+    def test_server_info_returns_nil_when_transport_does_not_expose_it
+      transport = mock
+      transport.stubs(:respond_to?).with(:server_info).returns(false)
+
+      assert_nil(Client.new(transport: transport).server_info)
+    end
+
     def test_tools_sends_request_to_transport_and_returns_tools_array
       transport = mock
       mock_response = {

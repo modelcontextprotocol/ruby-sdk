@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
+require "securerandom"
+require_relative "../../json_rpc_handler"
+require_relative "../configuration"
 require_relative "../methods"
+require_relative "../version"
 
 module MCP
   class Client
@@ -13,7 +17,7 @@ module MCP
       SESSION_ID_HEADER = "Mcp-Session-Id"
       PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
 
-      attr_reader :url, :session_id, :protocol_version
+      attr_reader :url, :session_id, :protocol_version, :server_info
 
       def initialize(url:, headers: {}, &block)
         @url = url
@@ -21,6 +25,78 @@ module MCP
         @faraday_customizer = block
         @session_id = nil
         @protocol_version = nil
+        @server_info = nil
+        @connected = false
+      end
+
+      # Performs the MCP `initialize` handshake: sends an `initialize` request
+      # followed by the required `notifications/initialized` notification. The
+      # server's `InitializeResult` (protocol version, capabilities, server
+      # info, instructions) is cached on the transport and returned.
+      #
+      # Idempotent: a second call returns the cached `InitializeResult` without
+      # contacting the server. After `close`, state is cleared and `connect`
+      # will handshake again.
+      #
+      # @param client_info [Hash, nil] `{ name:, version: }` identifying the client.
+      #   Defaults to `{ name: "mcp-ruby-client", version: MCP::VERSION }`.
+      # @param protocol_version [String, nil] Protocol version to offer. Defaults
+      #   to `MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION`.
+      # @param capabilities [Hash] Capabilities advertised by the client. Defaults to `{}`.
+      # @return [Hash] The server's `InitializeResult`.
+      # @raise [RequestHandlerError] If the server responds with a JSON-RPC error
+      #   or a malformed result.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
+      def connect(client_info: nil, protocol_version: nil, capabilities: {})
+        return @server_info if connected?
+
+        client_info ||= { name: "mcp-ruby-client", version: MCP::VERSION }
+        protocol_version ||= MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION
+
+        response = send_request(request: {
+          jsonrpc: JsonRpcHandler::Version::V2_0,
+          id: SecureRandom.uuid,
+          method: MCP::Methods::INITIALIZE,
+          params: {
+            protocolVersion: protocol_version,
+            capabilities: capabilities,
+            clientInfo: client_info,
+          },
+        })
+
+        if response.is_a?(Hash) && response.key?("error")
+          error = response["error"]
+          raise RequestHandlerError.new(
+            "Server initialization failed: #{error["message"]}",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        unless response.is_a?(Hash) && response["result"].is_a?(Hash)
+          raise RequestHandlerError.new(
+            "Server initialization failed: missing result in response",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        @server_info = response["result"]
+
+        send_request(request: {
+          jsonrpc: JsonRpcHandler::Version::V2_0,
+          method: MCP::Methods::NOTIFICATIONS_INITIALIZED,
+        })
+
+        @connected = true
+        @server_info
+      end
+
+      # Returns true once `connect` has completed the full handshake
+      # (`initialize` response received and `notifications/initialized` sent).
+      # Returns false before the first handshake and after `close`.
+      def connected?
+        @connected
       end
 
       # Sends a JSON-RPC request and returns the parsed response body.
@@ -159,6 +235,8 @@ module MCP
       def clear_session
         @session_id = nil
         @protocol_version = nil
+        @server_info = nil
+        @connected = false
       end
 
       def require_faraday!

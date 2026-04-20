@@ -695,6 +695,171 @@ module MCP
         assert_requested(:delete, url, times: 1)
       end
 
+      def test_connect_performs_initialize_handshake
+        init_stub = stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "s1" },
+            body: {
+              result: {
+                protocolVersion: "2025-11-25",
+                capabilities: { tools: {} },
+                serverInfo: { name: "test-server", version: "1.0" },
+              },
+            }.to_json,
+          )
+
+        notification_stub = stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "notifications/initialized" }
+          .to_return(status: 202, body: "")
+
+        result = client.connect
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+        assert_equal("2025-11-25", result["protocolVersion"])
+        assert_equal({ "tools" => {} }, result["capabilities"])
+        assert_equal({ "name" => "test-server", "version" => "1.0" }, result["serverInfo"])
+      end
+
+      def test_connect_caches_server_info
+        stub_initialize
+        stub_notification
+
+        client.connect
+
+        assert_equal("2025-11-25", client.server_info["protocolVersion"])
+      end
+
+      def test_connect_uses_default_client_info_and_protocol_version
+        notification_stub = stub_notification
+
+        init_stub = stub_request(:post, url)
+          .with do |req|
+            body = JSON.parse(req.body)
+            body["method"] == "initialize" &&
+              body["params"]["protocolVersion"] == MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION &&
+              body["params"]["clientInfo"] == { "name" => "mcp-ruby-client", "version" => MCP::VERSION } &&
+              body["params"]["capabilities"] == {}
+          end
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION } }.to_json,
+          )
+
+        client.connect
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+      end
+
+      def test_connect_accepts_custom_parameters
+        notification_stub = stub_notification
+
+        init_stub = stub_request(:post, url)
+          .with do |req|
+            body = JSON.parse(req.body)
+            body["method"] == "initialize" &&
+              body["params"]["protocolVersion"] == "2025-03-26" &&
+              body["params"]["clientInfo"] == { "name" => "my-app", "version" => "9.9" } &&
+              body["params"]["capabilities"] == { "roots" => { "listChanged" => true } }
+          end
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: "2025-03-26" } }.to_json,
+          )
+
+        client.connect(
+          client_info: { name: "my-app", version: "9.9" },
+          protocol_version: "2025-03-26",
+          capabilities: { roots: { listChanged: true } },
+        )
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+      end
+
+      def test_connect_is_idempotent
+        init_stub = stub_initialize
+        notification_stub = stub_notification
+
+        first_result = client.connect
+        second_result = client.connect
+
+        assert_same(first_result, second_result)
+        assert_requested(init_stub, times: 1)
+        assert_requested(notification_stub, times: 1)
+      end
+
+      def test_connect_raises_on_jsonrpc_error_response
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { error: { code: -32602, message: "Unsupported protocol version" } }.to_json,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.connect
+        end
+
+        assert_includes(error.message, "Unsupported protocol version")
+        refute_predicate(client, :connected?)
+      end
+
+      def test_connect_raises_on_missing_result
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { jsonrpc: "2.0", id: "x" }.to_json,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.connect
+        end
+
+        assert_includes(error.message, "missing result in response")
+        refute_predicate(client, :connected?)
+      end
+
+      def test_connected_lifecycle
+        refute_predicate(client, :connected?)
+
+        stub_initialize
+        stub_notification
+        client.connect
+
+        assert_predicate(client, :connected?)
+
+        stub_request(:delete, url).to_return(status: 200)
+        client.close
+
+        refute_predicate(client, :connected?)
+      end
+
+      def test_reconnect_after_close
+        stub_initialize
+        stub_notification
+        client.connect
+        stub_request(:delete, url).to_return(status: 200)
+        client.close
+
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "s2" },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.connect
+
+        assert_predicate(client, :connected?)
+        assert_equal("s2", client.session_id)
+      end
+
       def test_close_allows_reinitializing_a_fresh_session
         initialize_session
         stub_request(:delete, url).to_return(status: 200)
@@ -730,6 +895,22 @@ module MCP
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+      end
+
+      def stub_initialize
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+      end
+
+      def stub_notification
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "notifications/initialized" }
+          .to_return(status: 202, body: "")
       end
 
       def stub_request(method, url)
