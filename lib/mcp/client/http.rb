@@ -94,6 +94,28 @@ module MCP
         )
       end
 
+      # Terminates the session by sending an HTTP DELETE to the MCP endpoint
+      # with the current `Mcp-Session-Id` header, and clears locally tracked
+      # session state afterward. No-op when no session has been established.
+      #
+      # Per spec, the server MAY respond with HTTP 405 Method Not Allowed when
+      # it does not support client-initiated termination, and returns 404 for
+      # a session it has already terminated. Both mean the session is gone —
+      # the desired end state. Other errors surface to the caller; local
+      # session state is cleared either way.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management
+      def close
+        return unless @session_id
+
+        begin
+          client.delete("", nil, session_headers)
+        rescue Faraday::ClientError => e
+          raise unless [404, 405].include?(e.response&.dig(:status))
+        ensure
+          clear_session
+        end
+      end
+
       private
 
       attr_reader :headers
