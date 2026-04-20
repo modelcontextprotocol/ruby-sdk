@@ -203,7 +203,7 @@ module MCP
         assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
-      def test_send_request_raises_not_found_error
+      def test_send_request_raises_not_found_error_on_404_without_session
         request = {
           jsonrpc: "2.0",
           id: "test_id",
@@ -218,9 +218,54 @@ module MCP
           client.send_request(request: request)
         end
 
+        refute_kind_of(SessionExpiredError, error)
         assert_equal("The tools/list request is not found", error.message)
         assert_equal(:not_found, error.error_type)
         assert_equal({ method: "tools/list", params: nil }, error.request)
+      end
+
+      def test_send_request_raises_session_expired_error_on_404_with_session
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        stub_request(:post, url).to_return(status: 404)
+
+        error = assert_raises(SessionExpiredError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+        end
+
+        assert_equal(:not_found, error.error_type)
+      end
+
+      def test_session_expired_error_is_a_request_handler_error
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        stub_request(:post, url).to_return(status: 404)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+        end
+
+        assert_kind_of(SessionExpiredError, error)
       end
 
       def test_send_request_raises_unprocessable_entity_error
@@ -411,6 +456,149 @@ module MCP
 
         assert_includes(error.message, "No valid JSON-RPC response found in SSE stream")
         assert_equal(:parse_error, error.error_type)
+      end
+
+      def test_captures_session_id_and_protocol_version_on_initialize
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        assert_equal("session-abc", client.session_id)
+        assert_equal("2025-11-25", client.protocol_version)
+      end
+
+      def test_includes_session_and_protocol_version_headers_after_initialize
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        stub_request(:post, url)
+          .with(
+            headers: {
+              "Mcp-Session-Id" => "session-abc",
+              "MCP-Protocol-Version" => "2025-11-25",
+            },
+          )
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+      end
+
+      def test_does_not_send_protocol_version_header_before_initialize
+        stub_request(:post, url)
+          .with { |req| !req.headers.keys.map(&:downcase).include?("mcp-protocol-version") }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+      end
+
+      def test_ignores_empty_session_id_header
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        assert_nil(client.session_id)
+      end
+
+      def test_session_id_not_overwritten_by_subsequent_responses
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "original-session",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        assert_equal("original-session", client.session_id)
+
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "different-session",
+            },
+            body: { result: { tools: [] } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+
+        assert_equal("original-session", client.session_id)
+      end
+
+      def test_stateless_server_without_session_id_header
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        assert_nil(client.session_id)
+        assert_equal("2025-11-25", client.protocol_version)
+      end
+
+      def test_clears_session_state_on_404
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        assert_equal("session-abc", client.session_id)
+
+        stub_request(:post, url).to_return(status: 404)
+
+        assert_raises(SessionExpiredError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+        end
+
+        assert_nil(client.session_id)
+        assert_nil(client.protocol_version)
       end
 
       private
