@@ -74,6 +74,17 @@ response = client.call_tool(
 )
 ```
 
+### Sessions
+
+After a successful `initialize` request, the transport captures the `Mcp-Session-Id` header and `protocolVersion` from the response and includes the session ID on subsequent requests. Both are exposed on the transport:
+
+```ruby
+http_transport.session_id       # => "abc123..."
+http_transport.protocol_version # => "2025-11-25"
+```
+
+If the server terminates the session, subsequent requests return HTTP 404 and the transport raises `MCP::Client::SessionExpiredError` (a subclass of `RequestHandlerError`). Session state is cleared automatically; callers should start a new session by sending a fresh `initialize` request.
+
 ### Authorization
 
 Provide custom headers for authentication:

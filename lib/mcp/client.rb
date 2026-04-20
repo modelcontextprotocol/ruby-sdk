@@ -33,6 +33,16 @@ module MCP
     # server-returned JSON-RPC error, which is raised as `ServerError`.
     class ValidationError < StandardError; end
 
+    # Raised when the server responds 404 to a request containing a session ID,
+    # indicating the session has expired. Inherits from `RequestHandlerError` for
+    # backward compatibility with callers that rescue the generic error. Per spec,
+    # clients MUST start a new session with a fresh `initialize` request in response.
+    class SessionExpiredError < RequestHandlerError
+      def initialize(message, request, original_error: nil)
+        super(message, request, error_type: :not_found, original_error: original_error)
+      end
+    end
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
