@@ -1099,6 +1099,33 @@ Notifications follow the JSON-RPC 2.0 specification and use these method names:
 - `notifications/progress`
 - `notifications/message`
 
+### Ping
+
+The MCP Ruby SDK supports the
+[MCP `ping` utility](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping),
+which allows either side of the connection to verify that the peer is still responsive.
+A `ping` request has no parameters, and the receiver MUST respond promptly with an empty result.
+
+#### Server-Side
+
+Servers respond to incoming `ping` requests automatically - no setup is required.
+Any `MCP::Server` instance replies with an empty result.
+
+#### Client-Side
+
+`MCP::Client` exposes `ping` to send a ping to the server:
+
+```ruby
+client = MCP::Client.new(transport: transport)
+client.ping # => {} on success
+```
+
+`#ping` raises `MCP::Client::ServerError` when the server returns a JSON-RPC error.
+It raises `MCP::Client::ValidationError` when the response `result` is missing or
+is not a Hash (matching the spec requirement that `result` be an object).
+Transport-level errors (for example, `MCP::Client::Stdio`'s `read_timeout:` firing)
+propagate as exceptions raised by the transport layer.
+
 ### Progress
 
 The MCP Ruby SDK supports progress tracking for long-running tool operations,
@@ -1549,6 +1576,7 @@ The `MCP::Client` class provides an interface for interacting with MCP servers.
 
 This class supports:
 
+- Liveness check via the `ping` method (`MCP::Client#ping`)
 - Tool listing via the `tools/list` method (`MCP::Client#tools`)
 - Tool invocation via the `tools/call` method (`MCP::Client#call_tools`)
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)

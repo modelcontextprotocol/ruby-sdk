@@ -28,6 +28,11 @@ module MCP
       end
     end
 
+    # Raised when a server response fails client-side validation, e.g., a success response
+    # whose `result` field is missing or has the wrong type. This is distinct from a
+    # server-returned JSON-RPC error, which is raised as `ServerError`.
+    class ValidationError < StandardError; end
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
@@ -301,6 +306,24 @@ module MCP
       response = request(method: "completion/complete", params: params)
 
       response.dig("result", "completion") || { "values" => [], "hasMore" => false }
+    end
+
+    # Sends a `ping` request to the server to verify the connection is alive.
+    # Per the MCP spec, the server responds with an empty result.
+    #
+    # @return [Hash] An empty hash on success.
+    # @raise [ServerError] If the server returns a JSON-RPC error.
+    # @raise [ValidationError] If the response `result` is missing or not a Hash.
+    #
+    # @example
+    #   client.ping # => {}
+    #
+    # @see https://modelcontextprotocol.io/specification/latest/basic/utilities/ping
+    def ping
+      result = request(method: Methods::PING)["result"]
+      raise ValidationError, "Response validation failed: missing or invalid `result`" unless result.is_a?(Hash)
+
+      result
     end
 
     private
