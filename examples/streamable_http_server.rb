@@ -171,7 +171,7 @@ puts <<~MESSAGE
      curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\
        --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!", "delay": 2}}}'
 
-  Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return {"accepted": true}
+  Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return 202 Accepted with no body.
 
   Press Ctrl+C to stop the server
 MESSAGE

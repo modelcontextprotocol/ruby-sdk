@@ -100,6 +100,10 @@ module MCP
       end
 
       def parse_response_body(response, method, params)
+        # 202 Accepted is the server's ACK for a JSON-RPC notification or response; no body is expected.
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
+        return if response.status == 202
+
         content_type = response.headers["Content-Type"]
 
         if content_type&.include?("text/event-stream")
