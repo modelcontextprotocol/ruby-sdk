@@ -601,7 +601,136 @@ module MCP
         assert_nil(client.protocol_version)
       end
 
+      def test_close_sends_delete_with_session_headers
+        initialize_session
+
+        stub_request(:delete, url)
+          .with(
+            headers: {
+              "Mcp-Session-Id" => "session-abc",
+              "MCP-Protocol-Version" => "2025-11-25",
+            },
+          )
+          .to_return(status: 200)
+
+        client.close
+      end
+
+      def test_close_clears_session_state
+        initialize_session
+        stub_request(:delete, url).to_return(status: 200)
+
+        client.close
+
+        assert_nil(client.session_id)
+        assert_nil(client.protocol_version)
+      end
+
+      def test_close_without_session_is_noop
+        client.close
+
+        assert_not_requested(:delete, url)
+        assert_nil(client.session_id)
+      end
+
+      def test_close_tolerates_405_response
+        initialize_session
+        stub_request(:delete, url).to_return(status: 405)
+
+        client.close
+
+        assert_nil(client.session_id)
+      end
+
+      def test_close_tolerates_404_response
+        initialize_session
+        stub_request(:delete, url).to_return(status: 404)
+
+        client.close
+
+        assert_nil(client.session_id)
+      end
+
+      def test_close_propagates_server_error_and_still_clears_state
+        initialize_session
+        stub_request(:delete, url).to_return(status: 500)
+
+        assert_raises(Faraday::ServerError) do
+          client.close
+        end
+
+        assert_nil(client.session_id)
+        assert_nil(client.protocol_version)
+      end
+
+      def test_close_propagates_unauthorized_and_still_clears_state
+        initialize_session
+        stub_request(:delete, url).to_return(status: 401)
+
+        assert_raises(Faraday::UnauthorizedError) do
+          client.close
+        end
+
+        assert_nil(client.session_id)
+      end
+
+      def test_close_propagates_connection_failure_and_still_clears_state
+        initialize_session
+        stub_request(:delete, url).to_raise(Faraday::ConnectionFailed.new("connection refused"))
+
+        assert_raises(Faraday::ConnectionFailed) do
+          client.close
+        end
+
+        assert_nil(client.session_id)
+      end
+
+      def test_close_is_idempotent
+        initialize_session
+        stub_request(:delete, url).to_return(status: 200)
+
+        client.close
+        client.close
+
+        assert_requested(:delete, url, times: 1)
+      end
+
+      def test_close_allows_reinitializing_a_fresh_session
+        initialize_session
+        stub_request(:delete, url).to_return(status: 200)
+        client.close
+
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-xyz",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "2", method: "initialize" })
+
+        assert_equal("session-xyz", client.session_id)
+        assert_equal("2025-11-25", client.protocol_version)
+      end
+
       private
+
+      def initialize_session
+        stub_request(:post, url)
+          .to_return(
+            status: 200,
+            headers: {
+              "Content-Type" => "application/json",
+              "Mcp-Session-Id" => "session-abc",
+            },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+      end
 
       def stub_request(method, url)
         WebMock.stub_request(method, url)
