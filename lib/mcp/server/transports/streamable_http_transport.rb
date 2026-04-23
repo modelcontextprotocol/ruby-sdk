@@ -22,13 +22,14 @@ module MCP
           "Connection" => "keep-alive",
         }.freeze
 
-        def initialize(server, stateless: false, session_idle_timeout: nil)
+        def initialize(server, stateless: false, enable_json_response: false, session_idle_timeout: nil)
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
           @mutex = Mutex.new
 
           @stateless = stateless
+          @enable_json_response = enable_json_response
           @session_idle_timeout = session_idle_timeout
           @pending_responses = {}
 
@@ -43,7 +44,8 @@ module MCP
           start_reaper_thread if @session_idle_timeout
         end
 
-        REQUIRED_POST_ACCEPT_TYPES = ["application/json", "text/event-stream"].freeze
+        REQUIRED_POST_ACCEPT_TYPES_SSE = ["application/json", "text/event-stream"].freeze
+        REQUIRED_POST_ACCEPT_TYPES_JSON = ["application/json"].freeze
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
         SESSION_REAP_INTERVAL = 60
@@ -94,6 +96,12 @@ module MCP
 
           result = @mutex.synchronize do
             if session_id
+              # JSON response mode returns a single JSON object as the POST response,
+              # so request-scoped notifications (e.g. progress, log) cannot be delivered
+              # alongside it. Session-scoped standalone notifications
+              # (e.g. `resources/updated`, `elicitation/complete`) still flow via GET SSE.
+              next false if @enable_json_response && related_request_id
+
               # Send to specific session
               if (session = @sessions[session_id])
                 stream = active_stream(session, related_request_id: related_request_id)
@@ -170,6 +178,10 @@ module MCP
         def send_request(method, params = nil, session_id: nil, related_request_id: nil)
           if @stateless
             raise "Stateless mode does not support server-to-client requests."
+          end
+
+          if @enable_json_response
+            raise "JSON response mode does not support server-to-client requests."
           end
 
           unless session_id
@@ -278,7 +290,8 @@ module MCP
         end
 
         def handle_post(request)
-          accept_error = validate_accept_header(request, REQUIRED_POST_ACCEPT_TYPES)
+          required_types = @enable_json_response ? REQUIRED_POST_ACCEPT_TYPES_JSON : REQUIRED_POST_ACCEPT_TYPES_SSE
+          accept_error = validate_accept_header(request, required_types)
           return accept_error if accept_error
 
           content_type_error = validate_content_type(request)
@@ -519,7 +532,7 @@ module MCP
             end
           end
 
-          if session_id && !@stateless
+          if session_id && !@stateless && !@enable_json_response
             handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id)
           else
             response = dispatch_handle_json(body_string, server_session)

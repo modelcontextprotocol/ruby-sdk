@@ -1425,6 +1425,22 @@ Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
 ```
 
+You can enable JSON response mode, where the server returns `application/json` instead of `text/event-stream`.
+Set `enable_json_response: true` in `MCP::Server::Transports::StreamableHTTPTransport.new`:
+
+```ruby
+# JSON response mode
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, enable_json_response: true)
+```
+
+In JSON response mode, the POST response is a single JSON object, so server-to-client messages
+that need to arrive during request processing are not supported:
+request-scoped notifications (`progress`, `log`) are silently dropped, and all server-to-client requests
+(`sampling/createMessage`, `roots/list`, `elicitation/create`) raise an error.
+Session-scoped standalone notifications (`resources/updated`, `elicitation/complete`) and
+broadcast notifications (`tools/list_changed`, etc.) still flow to clients connected to the GET SSE stream.
+This mode is suitable for simple tool servers that do not need server-initiated requests.
+
 By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
 When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
 
