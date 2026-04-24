@@ -15,22 +15,22 @@ Validates the Ruby SDK's conformance to the MCP specification using [`@modelcont
 bundle exec rake conformance
 ```
 
-Starts the conformance server, runs all active scenarios against it, prints a pass/fail
-summary for each scenario, and exits with a non-zero status code if any unexpected failures
-are detected. Scenarios listed in `expected_failures.yml` are allowed to fail without
-affecting the exit code.
+Runs both server and client conformance tests in sequence. Server conformance starts the
+conformance server and tests it. Client conformance spawns test servers for each scenario
+and invokes `conformance/client.rb` against them. Scenarios listed in `expected_failures.yml`
+are allowed to fail without affecting the exit code.
 
 ### Environment variables
 
-| Variable       | Description                          | Default |
-|----------------|--------------------------------------|---------|
-| `PORT`         | Server port                          | `9292`  |
-| `SCENARIO`     | Run a single scenario by name        | (all)   |
-| `SPEC_VERSION` | Filter scenarios by spec version     | (all)   |
-| `VERBOSE`      | Show raw JSON output when set        | (off)   |
+| Variable       | Description                           | Default |
+|----------------|---------------------------------------|---------|
+| `PORT`         | Server port (server conformance only) | `9292`  |
+| `SCENARIO`     | Run a single scenario by name         | (all)   |
+| `SPEC_VERSION` | Filter scenarios by spec version      | (all)   |
+| `VERBOSE`      | Show raw JSON output when set         | (off)   |
 
 ```bash
-# Run a single scenario
+# Run a single server scenario
 bundle exec rake conformance SCENARIO=ping
 
 # Use a different port with verbose output
@@ -91,8 +91,10 @@ submissions.
 ```
 conformance/
   server.rb              # Conformance server (Rack + Puma, default port 9292)
-  runner.rb              # Starts the server, runs npx conformance, exits with result code
-  expected_failures.yml  # Baseline of known-failing scenarios
+  server_runner.rb       # Starts the server, runs npx conformance server, exits with result code
+  client.rb              # Conformance client (invoked by npx conformance client)
+  client_runner.rb       # Runs npx conformance client, exits with result code
+  expected_failures.yml  # Baseline of known-failing scenarios (server and client)
   README.md              # This file
 ```
 
