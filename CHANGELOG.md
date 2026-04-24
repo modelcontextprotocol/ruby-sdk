@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-24
+
+### Added
+
+- Support pagination per MCP specification (#320)
+- Support resource subscriptions per MCP specification (#313)
+- Add `roots/list` and `notifications/roots/list_changed` support (#315)
+- Support JSON response mode for `StreamableHTTPTransport` (#328)
+- Add HTTP client close for explicit session termination (#326)
+- Track `Mcp-Session-Id` and protocol version in HTTP client (#325)
+- Support `ping` client API per MCP specification (#324)
+
+### Fixed
+
+- Handle 202 Accepted response in HTTP client (#323)
+
+### Changed
+
+- Parse SSE responses in HTTP client via `event_stream_parser` (#322)
+
 ## [0.13.0] - 2026-04-16
 
 ### Added
