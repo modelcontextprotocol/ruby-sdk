@@ -51,11 +51,12 @@ stdio_transport.close
 
 ## HTTP Transport
 
-Use `MCP::Client::HTTP` to interact with MCP servers over HTTP. Requires the `faraday` gem:
+Use `MCP::Client::HTTP` to interact with MCP servers over HTTP. Requires the `faraday` gem, plus `event_stream_parser` if the server uses SSE (`text/event-stream`) responses:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
+gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```
 
 ```ruby
@@ -71,6 +72,23 @@ response = client.call_tool(
   tool: tools.first,
   arguments: { message: "Hello, world!" }
 )
+```
+
+### Sessions
+
+After a successful `initialize` request, the transport captures the `Mcp-Session-Id` header and `protocolVersion` from the response and includes the session ID on subsequent requests. Both are exposed on the transport:
+
+```ruby
+http_transport.session_id       # => "abc123..."
+http_transport.protocol_version # => "2025-11-25"
+```
+
+If the server terminates the session, subsequent requests return HTTP 404 and the transport raises `MCP::Client::SessionExpiredError` (a subclass of `RequestHandlerError`). Session state is cleared automatically; callers should start a new session by sending a fresh `initialize` request.
+
+To explicitly terminate a session (e.g., when the client application is shutting down), call `close`. The transport sends an HTTP DELETE to the MCP endpoint with the session header and clears local session state. A `405 Method Not Allowed` response (server doesn't support client-initiated termination) or `404 Not Found` (session already terminated server-side) is treated as success. Other errors — 5xx, authentication failures, connection errors — propagate to the caller. Local session state is cleared either way. Calling `close` without an active session is a no-op.
+
+```ruby
+http_transport.close
 ```
 
 ### Authorization
