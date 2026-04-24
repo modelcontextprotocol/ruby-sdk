@@ -1384,10 +1384,15 @@ module MCP
         name: "defined_tool",
         description: "Defined tool",
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+        output_schema: { type: "object", properties: { response: { type: "string" } }, required: ["response"] },
         meta: { foo: "bar" },
       ) do |message:|
-        Tool::Response.new(message)
+        Tool::Response.new({ "response" => message })
       end
+
+      stored_tool = @server.instance_variable_get(:@tools)["defined_tool"]
+      assert_not_nil(stored_tool)
+      assert_equal(MCP::Tool::OutputSchema.new({ type: "object", properties: { response: { type: "string" } }, required: ["response"] }), stored_tool.output_schema)
 
       response = @server.handle({
         jsonrpc: "2.0",
@@ -1396,7 +1401,7 @@ module MCP
         id: 1,
       })
 
-      assert_equal({ content: "success", isError: false }, response[:result])
+      assert_equal({ content: { "response" => "success" }, isError: false }, response[:result])
     end
 
     test "#define_tool adds a tool with duplicated tool name to the server" do
