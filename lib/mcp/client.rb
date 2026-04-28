@@ -59,6 +59,48 @@ module MCP
     # So keeping it public
     attr_reader :transport
 
+    # The server's `InitializeResult` (protocol version, capabilities, server info,
+    # instructions), as reported by the transport after a successful `connect`.
+    # Returns `nil` before `connect`, after `close`, or when the transport manages
+    # the handshake implicitly and does not expose it (e.g. stdio).
+    def server_info
+      transport.server_info if transport.respond_to?(:server_info)
+    end
+
+    # Performs the MCP `initialize` handshake by delegating to the transport when
+    # it exposes a `connect` method (e.g. `MCP::Client::HTTP`). Returns the
+    # server's `InitializeResult`.
+    #
+    # When the transport does not respond to `:connect` (e.g. `MCP::Client::Stdio`
+    # manages the handshake implicitly on the first request), this is a no-op and
+    # returns `nil`.
+    #
+    # @param client_info [Hash, nil] `{ name:, version: }` identifying the client.
+    # @param protocol_version [String, nil] Protocol version to offer.
+    # @param capabilities [Hash] Capabilities advertised by the client.
+    # @return [Hash, nil] The server's `InitializeResult`, or `nil` when the transport
+    #   does not expose an explicit handshake.
+    # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
+    def connect(client_info: nil, protocol_version: nil, capabilities: {})
+      return unless transport.respond_to?(:connect)
+
+      transport.connect(
+        client_info: client_info,
+        protocol_version: protocol_version,
+        capabilities: capabilities,
+      )
+    end
+
+    # Returns true once `connect` has completed the handshake on transports that
+    # expose connection state. Transports that manage the handshake implicitly
+    # (e.g. stdio) always report `true`, since the first request will initialize
+    # on demand.
+    def connected?
+      return transport.connected? if transport.respond_to?(:connected?)
+
+      true
+    end
+
     # Returns a single page of tools from the server.
     #
     # @param cursor [String, nil] Cursor from a previous page response.
