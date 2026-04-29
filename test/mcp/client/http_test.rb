@@ -942,6 +942,37 @@ module MCP
         assert_equal("2025-11-25", client.protocol_version)
       end
 
+      def test_send_notification_posts_body_and_accepts_202
+        notification = {
+          jsonrpc: "2.0",
+          method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+          params: { requestId: "req-1", reason: "user cancel" },
+        }
+
+        stub_request(:post, url).with(body: notification.to_json).to_return(status: 202, body: "")
+
+        result = client.send_notification(notification: notification)
+
+        assert_nil(result, "send_notification must return nil")
+      end
+
+      def test_send_notification_surfaces_faraday_errors
+        notification = {
+          jsonrpc: "2.0",
+          method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+          params: { requestId: "req-1" },
+        }
+
+        stub_request(:post, url).to_return(status: 500)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_notification(notification: notification)
+        end
+
+        assert_equal(:internal_error, error.error_type)
+        assert_match(%r{notifications/cancelled}, error.message)
+      end
+
       private
 
       def initialize_session

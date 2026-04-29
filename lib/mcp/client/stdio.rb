@@ -34,6 +34,9 @@ module MCP
         @started = false
         @initialized = false
         @server_info = nil
+        # Serializes writes to `@stdin` so a request line and a notification line emitted from
+        # different threads (e.g. cancellation) cannot interleave on the wire.
+        @write_mutex = Mutex.new
       end
 
       # Performs the MCP `initialize` handshake: sends an `initialize` request
@@ -132,6 +135,10 @@ module MCP
         @initialized
       end
 
+      # Transports may yield once the request line has been written to `@stdin`.
+      # `MCP::Client#dispatch_with_cancellation` uses this signal to ensure a `notifications/cancelled`
+      # write does not race ahead of the request write on the wire. The yield happens inside `@write_mutex`,
+      # so any subsequent `send_notification` write waits for the mutex and is guaranteed to land after the request.
       def send_request(request:)
         start unless @started
         unless @initialized
@@ -139,8 +146,21 @@ module MCP
           connect
         end
 
-        write_message(request)
+        @write_mutex.synchronize do
+          write_message(request)
+          yield if block_given?
+        end
         read_response(request)
+      end
+
+      # Sends a JSON-RPC notification (no response expected). Used by `Client#cancel` to deliver
+      # `notifications/cancelled` for an in-flight request.
+      def send_notification(notification:)
+        start unless @started
+        connect unless @initialized
+
+        @write_mutex.synchronize { write_message(notification) }
+        nil
       end
 
       def start

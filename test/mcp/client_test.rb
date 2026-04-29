@@ -1142,5 +1142,336 @@ module MCP
       assert_equal(1, result.prompts.size)
       assert_equal("cursor1", result.next_cursor)
     end
+
+    def test_cancellation_without_reason_omits_reason_in_notification
+      # The token-driven cancel path must omit `reason` from the `notifications/cancelled` params
+      # when the token is cancelled without one.
+      sent = Queue.new
+      cancellation = MCP::Cancellation.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**|
+        cancellation.cancel # no reason
+        { "result" => {} }
+      end
+      transport.define_singleton_method(:send_notification) do |notification:|
+        sent.push(notification)
+        nil
+      end
+
+      client = Client.new(transport: transport)
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "slow", arguments: {}, cancellation: cancellation)
+      end
+
+      notification = sent.pop
+      assert_equal(Methods::NOTIFICATIONS_CANCELLED, notification[:method])
+      refute(notification[:params].key?(:reason))
+    end
+
+    def test_call_tool_with_cancellation_returns_response_when_no_cancel
+      transport = mock
+      transport.expects(:send_request).returns({ "result" => { "content" => [{ "type" => "text", "text" => "ok" }] } }).once
+      transport.stubs(:send_notification) # required for `cancellation:` capability check
+
+      cancellation = MCP::Cancellation.new
+      client = Client.new(transport: transport)
+
+      response = client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+
+      assert_equal("ok", response.dig("result", "content", 0, "text"))
+    end
+
+    def test_call_tool_with_cancellation_already_cancelled_raises_without_sending
+      transport = mock
+      transport.expects(:send_request).never
+      transport.expects(:send_notification).never
+
+      cancellation = MCP::Cancellation.new
+      cancellation.cancel(reason: "pre-cancelled")
+
+      client = Client.new(transport: transport)
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+      end
+    end
+
+    def test_call_tool_with_cancellation_mid_flight_raises_and_sends_notification
+      cancellation = MCP::Cancellation.new
+      notification_queue = Queue.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**|
+        # Cancel while the request is "in flight".
+        cancellation.cancel(reason: "user abort")
+        sleep(0.05)
+        { "result" => {} }
+      end
+      transport.define_singleton_method(:send_notification) do |notification:|
+        notification_queue.push(notification)
+        nil
+      end
+
+      client = Client.new(transport: transport)
+
+      error = assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "slow", arguments: {}, cancellation: cancellation)
+      end
+
+      assert_equal("user abort", error.reason)
+
+      # Cancel notification is dispatched fire-and-forget on a separate thread;
+      # block here until it reaches the transport.
+      notification = notification_queue.pop
+      assert_equal(Methods::NOTIFICATIONS_CANCELLED, notification[:method])
+      assert_equal("user abort", notification[:params][:reason])
+    end
+
+    def test_loop_methods_accept_cancellation_keyword
+      # Regression: `tools` / `resources` / `resource_templates` / `prompts` are the high-level pagination loops.
+      # They must accept `cancellation:` so the README's "all request methods accept the cancellation: keyword"
+      # claim holds. The token is propagated to each underlying `list_*` page.
+      cancellation = MCP::Cancellation.new
+
+      transport = mock
+      transport.stubs(:send_request).returns({ "result" => { "tools" => [] } })
+      transport.stubs(:send_notification) # required for `cancellation:` capability check
+
+      client = Client.new(transport: transport)
+
+      [
+        -> { client.tools(cancellation: cancellation) },
+        -> { client.resources(cancellation: cancellation) },
+        -> { client.resource_templates(cancellation: cancellation) },
+        -> { client.prompts(cancellation: cancellation) },
+      ].each do |loop_call|
+        transport.stubs(:send_request).returns({ "result" => {} })
+        loop_call.call
+      end
+    end
+
+    def test_cancel_callback_does_not_deadlock_when_transport_holds_a_mutex
+      # Regression: when the cancellation callback fires on the same thread that is currently inside
+      # `transport.send_request` (and therefore holds a transport-level mutex), a synchronous `send_notification`
+      # from the callback would deadlock by re-entering the same mutex. The fix wakes the calling thread first
+      # and dispatches the notification on a separate thread.
+      transport_mutex = Mutex.new
+      cancellation = MCP::Cancellation.new
+
+      # Custom transport class so we can model a mutex held during send_request.
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**|
+        transport_mutex.synchronize do
+          # Trigger cancel while we hold the mutex. The callback must NOT try to synchronously acquire
+          # the same mutex via send_notification.
+          cancellation.cancel(reason: "mid-flight")
+          # Hold the mutex briefly to give the callback time to (incorrectly) try to re-enter.
+          sleep(0.05)
+          { "result" => {} }
+        end
+      end
+
+      # send_notification also needs the mutex - this is the path that would deadlock under synchronous dispatch.
+      send_notification_called = Queue.new
+      transport.define_singleton_method(:send_notification) do |notification:|
+        transport_mutex.synchronize do
+          send_notification_called.push(notification)
+        end
+      end
+
+      client = Client.new(transport: transport)
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+      end
+
+      # The notification must reach the transport eventually (after the mutex is released by the now-finished send_request).
+      notification = send_notification_called.pop
+      assert_equal(Methods::NOTIFICATIONS_CANCELLED, notification[:method])
+      assert_equal("mid-flight", notification[:params][:reason])
+    end
+
+    def test_late_cancel_after_response_does_not_send_stray_notification
+      # Regression: between the worker thread pushing `:response` and the main thread leaving `dispatch_with_cancellation`,
+      # a cancellation firing in that gap must not emit a stray `notifications/cancelled` for the already-completed request.
+      # The completion-mutex gate makes the worker and the on_cancel callback fight for a single slot; whichever sets
+      # `completed` first wins, the loser bails.
+      cancellation = MCP::Cancellation.new
+      notification_count = 0
+      notification_count_mutex = Mutex.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**, &on_sent|
+        on_sent&.call
+        { "result" => {} }
+      end
+      transport.define_singleton_method(:send_notification) do |**|
+        notification_count_mutex.synchronize { notification_count += 1 }
+        nil
+      end
+
+      client = Client.new(transport: transport)
+      response = client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+
+      assert_equal({}, response["result"])
+
+      # Cancel after the call returned. The on_cancel hook was deregistered in the `ensure` block;
+      # even if a callback raced with the response handoff, `completed` would already be true and
+      # `queue.push :cancelled` plus the cancel-dispatch thread would not run.
+      cancellation.cancel(reason: "late")
+
+      sleep(0.05) # let any erroneous cancel-dispatch thread complete.
+
+      count = notification_count_mutex.synchronize { notification_count }
+      assert_equal(0, count, "no stray notifications/cancelled for an already-completed request")
+    end
+
+    def test_call_tool_with_cancellation_raises_NoMethodError_when_transport_lacks_send_notification
+      # Regression: a transport that only implements `send_request` cannot deliver `notifications/cancelled`.
+      # We must surface this upfront with a clear `NoMethodError` rather than silently swallow
+      # the failure inside the cancel-dispatch thread - otherwise the user sees `CancelledError` but
+      # the server never receives the notification.
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**|
+        { "result" => {} }
+      end
+      # NOTE: no send_notification.
+
+      cancellation = MCP::Cancellation.new
+      client = Client.new(transport: transport)
+
+      error = assert_raises(NoMethodError) do
+        client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+      end
+
+      assert_match(/send_notification/, error.message)
+    end
+
+    def test_cancel_notification_is_dispatched_after_request_write_via_on_sent_block
+      # Regression for the wire-order race: a transport that yields from `send_request` after writing
+      # the request must see `:request` recorded before `:cancel` even when the cancel signal arrives concurrently.
+      recorded = []
+      recorded_mutex = Mutex.new
+      cancellation = MCP::Cancellation.new
+      cancel_complete = Queue.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |request:, &on_sent|
+        # Trigger cancel BEFORE the simulated wire-write so the cancel-dispatch thread starts racing immediately.
+        # The `on_sent` block is yielded only after we have recorded the request - so any cancel-write that obeys
+        # the block must land afterwards.
+        cancellation.cancel(reason: "race")
+        sleep(0.02) # give cancel-dispatch thread time to spawn and start waiting
+        recorded_mutex.synchronize { recorded << [:request, request[:id]] }
+        on_sent&.call
+        { "result" => {} }
+      end
+      transport.define_singleton_method(:send_notification) do |notification:|
+        recorded_mutex.synchronize { recorded << [:cancel, notification[:params][:requestId]] }
+        cancel_complete.push(:done)
+        nil
+      end
+
+      client = Client.new(transport: transport)
+      client.stubs(:generate_request_id).returns("req-A")
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "slow", arguments: {}, cancellation: cancellation)
+      end
+
+      cancel_complete.pop # wait for the fire-and-forget cancel dispatch
+
+      # Wire-order must be: request first, then cancel.
+      assert_equal([[:request, "req-A"], [:cancel, "req-A"]], recorded)
+    end
+
+    def test_cancel_notification_waits_for_delayed_on_sent_signal
+      # Regression: the cancel-dispatch thread must wait for `&on_sent` no matter how long it takes -
+      # it cannot fall back to wall-clock-based timeout. An earlier 100 ms fixed-duration fallback
+      # could release the cancel thread before the worker reached its send-boundary at all, allowing
+      # the cancel to be issued without any prior request commitment - which the spec only covers under
+      # the receiver's MAY-ignore-unknown-id clause. The wait is now bounded by worker termination
+      # (via `ensure -> signal_sent.call`), not by elapsed time.
+      recorded = []
+      recorded_mutex = Mutex.new
+      cancellation = MCP::Cancellation.new
+      cancel_complete = Queue.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |request:, &on_sent|
+        cancellation.cancel(reason: "race")
+        # Delay well beyond any plausible fixed-duration fallback (200 ms).
+        # If cancel-dispatch fires on a timer rather than waiting for on_sent,
+        # the recorded order will be [:cancel, :request] and the assertion below will fail.
+        sleep(0.2)
+        recorded_mutex.synchronize { recorded << [:request, request[:id]] }
+        on_sent&.call
+        { "result" => {} }
+      end
+      transport.define_singleton_method(:send_notification) do |notification:|
+        recorded_mutex.synchronize { recorded << [:cancel, notification[:params][:requestId]] }
+        cancel_complete.push(:done)
+        nil
+      end
+
+      client = Client.new(transport: transport)
+      client.stubs(:generate_request_id).returns("req-D")
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "slow", arguments: {}, cancellation: cancellation)
+      end
+
+      cancel_complete.pop
+
+      assert_equal([[:request, "req-D"], [:cancel, "req-D"]], recorded)
+    end
+
+    def test_cancel_notification_dispatches_when_worker_raises_before_on_sent
+      # Regression: if the worker raises before `&on_sent` is called - which can happen if a transport rejects
+      # a malformed request synchronously - the cancel-dispatch thread must still terminate AND deliver the notification.
+      # The worker's `ensure` block invokes `signal_sent.call`, which broadcasts to the condition variable and unblocks
+      # the `until request_sent` wait. Without the ensure-driven unblock, the dispatch thread would leak.
+      cancellation = MCP::Cancellation.new
+      send_notification_called = Queue.new
+
+      transport = Object.new
+      transport.define_singleton_method(:send_request) do |**|
+        # Trigger cancel before raising so the cancel hook fires while the worker is mid-flight,
+        # then bail out without ever calling on_sent.
+        cancellation.cancel(reason: "race")
+        raise StandardError, "transport boom"
+      end
+      transport.define_singleton_method(:send_notification) do |notification:|
+        send_notification_called.push(notification)
+        nil
+      end
+
+      client = Client.new(transport: transport)
+      client.stubs(:generate_request_id).returns("req-E")
+
+      assert_raises(MCP::CancelledError) do
+        client.call_tool(name: "slow", arguments: {}, cancellation: cancellation)
+      end
+
+      # The cancel-dispatch thread should still send the notification because the worker's `ensure` triggers `signal_sent.call`.
+      notification = send_notification_called.pop
+      assert_equal("req-E", notification[:params][:requestId])
+    end
+
+    def test_call_tool_with_cancellation_normal_completion_does_not_send_notification
+      transport = mock
+      transport.expects(:send_request).returns({ "result" => {} }).once
+      transport.expects(:send_notification).never
+
+      cancellation = MCP::Cancellation.new
+      client = Client.new(transport: transport)
+
+      client.call_tool(name: "noop", arguments: {}, cancellation: cancellation)
+
+      # Late cancel after normal completion: hook should already be deregistered.
+      cancellation.cancel(reason: "late")
+    end
   end
 end
