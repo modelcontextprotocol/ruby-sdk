@@ -4328,6 +4328,306 @@ module MCP
           refute headers.frozen?, "SSE response headers should not be frozen"
         end
 
+        test "handle_request returns 403 for POST when Origin is not in allowed_origins" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ORIGIN" => "https://evil.example.com",
+            },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          status, headers, body = transport.handle_request(request)
+          assert_equal(403, status)
+          assert_equal("application/json", headers["Content-Type"])
+          parsed = JSON.parse(body.first)
+          assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"])
+          assert_equal("Forbidden: Invalid Origin header", parsed["error"]["message"])
+        ensure
+          transport&.close
+        end
+
+        test "handle_request returns 403 for GET when Origin is not in allowed_origins" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
+
+          request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_ORIGIN" => "https://evil.example.com" },
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(403, status)
+        ensure
+          transport&.close
+        end
+
+        test "handle_request returns 403 for DELETE when Origin is not in allowed_origins" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
+
+          request = create_rack_request(
+            "DELETE",
+            "/",
+            {
+              "HTTP_ORIGIN" => "https://evil.example.com",
+              "HTTP_MCP_SESSION_ID" => "any",
+            },
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(403, status)
+        ensure
+          transport&.close
+        end
+
+        test "handle_request allows POST when Origin is in allowed_origins" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ORIGIN" => "https://app.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(200, status)
+        ensure
+          transport&.close
+        end
+
+        test "handle_request allows POST when Origin header is absent (e.g. non-browser client)" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(200, status)
+        ensure
+          transport&.close
+        end
+
+        test "handle_request rejects a cross-origin request by default (secure-by-default)" do
+          # No allowed_origins configured: a browser cross-origin Origin is still rejected.
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ORIGIN" => "https://anywhere.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = @transport.handle_request(request)
+          assert_equal 403, status
+        end
+
+        test "handle_request allows a same-origin browser request" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "localhost:3000",
+              "HTTP_ORIGIN" => "http://localhost:3000",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = @transport.handle_request(request)
+          assert_equal 200, status
+        end
+
+        test "handle_request rejects a rebound Host by default" do
+          # DNS rebinding: a foreign Host re-pointed at the loopback server is rejected.
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "evil.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, headers, body = @transport.handle_request(request)
+          assert_equal(403, status)
+          assert_equal("application/json", headers["Content-Type"])
+          parsed = JSON.parse(body.first)
+          assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"])
+          assert_equal("Forbidden: Invalid Host header", parsed["error"]["message"])
+        end
+
+        test "handle_request allows loopback Host values by default" do
+          ["127.0.0.1:8080", "localhost:3000", "[::1]:8080"].each do |host|
+            transport = StreamableHTTPTransport.new(@server)
+            request = create_rack_request(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_HOST" => host,
+              },
+              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            )
+
+            status, = transport.handle_request(request)
+            assert_equal(200, status, "expected #{host} to be allowed")
+          ensure
+            transport.close
+          end
+        end
+
+        test "handle_request matches Host case-insensitively" do
+          # Host names are case-insensitive, so an upper-cased loopback Host is allowed.
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "LOCALHOST:3000",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = @transport.handle_request(request)
+          assert_equal(200, status)
+        end
+
+        test "handle_request allows a non-loopback Host listed in allowed_hosts" do
+          transport = StreamableHTTPTransport.new(@server, allowed_hosts: ["app.example.com"])
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "app.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(200, status)
+        ensure
+          transport.close
+        end
+
+        test "handle_request matches a host:port entry in allowed_hosts exactly" do
+          transport = StreamableHTTPTransport.new(@server, allowed_hosts: ["app.example.com:8443"])
+
+          allowed = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "app.example.com:8443" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          rejected = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "app.example.com:9000" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          assert_equal(200, transport.handle_request(allowed).first)
+          assert_equal(403, transport.handle_request(rejected).first)
+        ensure
+          transport.close
+        end
+
+        test "handle_request treats a default port as same-origin" do
+          # `Origin: http://localhost` (no port) is same-origin with `Host: localhost:80`.
+          [
+            ["http://localhost", "localhost:80"],
+            ["https://localhost", "localhost:443"],
+          ].each do |origin, host|
+            transport = StreamableHTTPTransport.new(@server)
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => host, "HTTP_ORIGIN" => origin },
+              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            )
+
+            assert_equal(200, transport.handle_request(request).first, "expected #{origin} / #{host} to match")
+          ensure
+            transport.close
+          end
+        end
+
+        test "handle_request rejects opaque and malformed Origins" do
+          ["null", "file:///etc/passwd", "http://localhost:3000/path"].each do |origin|
+            transport = StreamableHTTPTransport.new(@server)
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "localhost:3000", "HTTP_ORIGIN" => origin },
+              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            )
+
+            assert_equal(403, transport.handle_request(request).first, "expected #{origin} to be rejected")
+          ensure
+            transport.close
+          end
+        end
+
+        test "handle_request enforces Host validation on GET requests" do
+          request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_HOST" => "evil.example.com" },
+          )
+
+          status, = @transport.handle_request(request)
+          assert_equal(403, status)
+        end
+
+        test "handle_request allows a request with no Host header" do
+          # Non-browser clients may omit Host; the rebinding vector always carries one.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = @transport.handle_request(request)
+          assert_equal(200, status)
+        end
+
+        test "handle_request skips DNS rebinding checks when protection is disabled" do
+          transport = StreamableHTTPTransport.new(@server, dns_rebinding_protection: false)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "evil.example.com",
+              "HTTP_ORIGIN" => "https://evil.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          status, = transport.handle_request(request)
+          assert_equal(200, status)
+        ensure
+          transport.close
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)

@@ -128,6 +128,27 @@ The following examples show two common integration styles in Rails.
 >
 > Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
 
+> [!IMPORTANT]
+> Per MCP 2025-11-25, `StreamableHTTPTransport` validates the `Host` and `Origin` headers by default to
+> prevent DNS rebinding attacks against locally bound servers, rejecting unauthorized values with HTTP 403.
+> `Host` is allowed for the loopback defaults (`127.0.0.1`, `::1`, `localhost`), and an `Origin` header,
+> when present, must be same-origin or explicitly allow-listed. Non-browser clients that send no `Origin`
+> header are unaffected.
+>
+> Deployments behind a reverse proxy or bound to a non-loopback interface must widen the allow lists:
+>
+> ```ruby
+> transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+>   server,
+>   allowed_hosts: ["mcp.example.com"],
+>   allowed_origins: ["https://app.example.com"],
+> )
+> ```
+>
+> An `allowed_hosts:` entry matches either the bare host name (any port) or the full `host:port` value,
+> so both `"mcp.example.com"` and `"mcp.example.com:8443"` work. Pass `dns_rebinding_protection: false`
+> to disable the check entirely (e.g., when an upstream proxy or middleware already validates `Host`/`Origin`).
+
 ##### Rails (mount)
 
 `StreamableHTTPTransport` is a Rack app that can be mounted directly in Rails routes:
