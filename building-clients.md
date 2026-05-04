@@ -16,6 +16,22 @@ The `MCP::Client` class provides an interface for interacting with MCP servers.
 - Prompt listing (`MCP::Client#prompts`) and retrieval (`MCP::Client#get_prompt`)
 - Completion requests (`MCP::Client#complete`)
 
+## Handshake
+
+Call `MCP::Client#connect` to perform the MCP [initialization handshake](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization) before sending any other requests. The client sends an `initialize` request through the transport, followed by the required `notifications/initialized` notification, and caches the server's `InitializeResult` (protocol version, capabilities, server info, instructions):
+
+```ruby
+client.connect
+# => { "protocolVersion" => "2025-11-25", "capabilities" => {...}, "serverInfo" => {...} }
+
+client.connected?  # => true
+client.server_info # => cached InitializeResult
+```
+
+`connect` accepts optional `client_info:`, `protocol_version:`, and `capabilities:` keyword arguments. It is idempotent: a second call returns the cached result without contacting the server. After `close`, state is cleared and `connect` will handshake again.
+
+This applies to both the Stdio and HTTP transports below.
+
 ## Stdio Transport
 
 Use `MCP::Client::Stdio` to interact with MCP servers running as subprocesses:
@@ -28,6 +44,7 @@ stdio_transport = MCP::Client::Stdio.new(
   read_timeout: 30
 )
 client = MCP::Client.new(transport: stdio_transport)
+client.connect
 
 tools = client.tools
 tools.each do |tool|
@@ -62,6 +79,7 @@ gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```ruby
 http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 client = MCP::Client.new(transport: http_transport)
+client.connect
 
 tools = client.tools
 tools.each do |tool|
@@ -76,14 +94,14 @@ response = client.call_tool(
 
 ### Sessions
 
-After a successful `initialize` request, the transport captures the `Mcp-Session-Id` header and `protocolVersion` from the response and includes the session ID on subsequent requests. Both are exposed on the transport:
+After `connect` succeeds, the HTTP transport captures the `Mcp-Session-Id` header and `protocolVersion` from the response and includes them on subsequent requests. Both are exposed on the transport as transport-specific state:
 
 ```ruby
 http_transport.session_id       # => "abc123..."
 http_transport.protocol_version # => "2025-11-25"
 ```
 
-If the server terminates the session, subsequent requests return HTTP 404 and the transport raises `MCP::Client::SessionExpiredError` (a subclass of `RequestHandlerError`). Session state is cleared automatically; callers should start a new session by sending a fresh `initialize` request.
+If the server terminates the session, subsequent requests return HTTP 404 and the transport raises `MCP::Client::SessionExpiredError` (a subclass of `RequestHandlerError`). Session state is cleared automatically; callers should start a new session by calling `connect` again.
 
 To explicitly terminate a session (e.g., when the client application is shutting down), call `close`. The transport sends an HTTP DELETE to the MCP endpoint with the session header and clears local session state. A `405 Method Not Allowed` response (server doesn't support client-initiated termination) or `404 Not Found` (session already terminated server-side) is treated as success. Other errors — 5xx, authentication failures, connection errors — propagate to the caller. Local session state is cleared either way. Calling `close` without an active session is a no-op.
 
