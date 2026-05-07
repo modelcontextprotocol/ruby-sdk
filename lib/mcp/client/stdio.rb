@@ -134,7 +134,10 @@ module MCP
 
       def send_request(request:)
         start unless @started
-        connect unless @initialized
+        unless @initialized
+          warn("Calling `MCP::Client::Stdio#send_request` without calling `MCP::Client#connect` is deprecated. Use `MCP::Client#connect` before sending requests instead.", uplevel: 1)
+          connect
+        end
 
         write_message(request)
         read_response(request)
