@@ -1885,6 +1885,113 @@ client.tools # will make the call using Bearer auth
 
 You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every request.
 
+#### OAuth 2.1 Authorization
+
+When an MCP server enforces the [MCP Authorization spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
+pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Authorization` header. The transport will:
+
+- Send `Authorization: Bearer <access_token>` on every request when a token is available.
+- On a `401 Unauthorized`, parse the `WWW-Authenticate` header, discover the authorization server (Protected Resource Metadata + RFC 8414 Authorization Server Metadata),
+  perform Dynamic Client Registration if needed, run the OAuth 2.1 Authorization Code flow with PKCE (S256), and retry the failed request with the acquired token.
+- On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
+
+```ruby
+require "mcp"
+
+provider = MCP::Client::OAuth::Provider.new(
+  client_metadata: {
+    client_name: "My MCP App",
+    redirect_uris: ["http://localhost:3030/callback"],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  },
+  redirect_uri: "http://localhost:3030/callback",
+  redirect_handler: ->(authorization_url) {
+    # Send the user to the authorization URL - typically `Launchy.open(authorization_url)`
+    # or a manual `puts authorization_url` in CLI tools.
+  },
+  callback_handler: -> {
+    # Capture the redirect (for example, by running a small HTTP listener on
+    # `redirect_uri`) and return [code, state] from the query string.
+  },
+)
+
+transport = MCP::Client::HTTP.new(
+  url: "https://api.example.com/mcp",
+  oauth: provider,
+)
+client = MCP::Client.new(transport: transport)
+client.connect # `initialize` is sent here; if the server replies 401 the OAuth flow runs and the handshake is retried with the acquired token
+client.tools
+```
+
+Required keyword arguments to `Provider.new`:
+
+- `client_metadata`: Hash sent to the authorization server's Dynamic Client Registration endpoint. Must include `redirect_uris`, `grant_types`, `response_types`,
+  `token_endpoint_auth_method`. `redirect_uri` (below) must appear in this list, otherwise the constructor raises `Provider::UnregisteredRedirectURIError`.
+- `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
+- `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
+- `callback_handler`: Callable that returns `[code, state]` after the user is redirected back to `redirect_uri`.
+
+Optional keyword arguments:
+
+- `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
+- `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
+  which keeps credentials in process memory only.
+
+To persist credentials across restarts, supply your own storage:
+
+```ruby
+class FileTokenStorage
+  def initialize(path)
+    @path = path
+  end
+
+  def tokens
+    read["tokens"]
+  end
+
+  def save_tokens(value)
+    write("tokens" => value)
+  end
+
+  def client_information
+    read["client"]
+  end
+
+  def save_client_information(value)
+    write("client" => value)
+  end
+
+  private
+
+  def read
+    File.exist?(@path) ? JSON.parse(File.read(@path)) : {}
+  end
+
+  def write(updates)
+    File.write(@path, JSON.dump(read.merge(updates)))
+  end
+end
+
+provider = MCP::Client::OAuth::Provider.new(
+  # ... required keywords ...
+  storage: FileTokenStorage.new(File.expand_path("~/.config/my-app/oauth.json")),
+)
+```
+
+##### Communication Security
+
+When `oauth:` is set, the MCP transport URL and every OAuth-facing URL (PRM, Authorization Server metadata, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`,
+`redirect_uri`) must use HTTPS or a loopback host. Non-loopback `http://` URLs are rejected at the SDK boundary so a bearer token is never sent over plain HTTP to a remote host.
+
+The transport also snapshots the canonicalized origin, path, and query string of the MCP URL at `initialize` time and re-checks them on every outgoing request through
+a Faraday middleware that runs after any user-supplied customizer. That means any URL swap raises `MCP::Client::HTTP::InsecureURLError` before the request reaches the adapter,
+whether the swap was triggered by
+`instance_variable_set(:@url, ...)`, by a Faraday customizer rewriting `url_prefix`, or by a custom middleware rewriting `env.url` (including just `env.url.query`) at request time,
+and whether the new URL is `http://` *or* `https://` to a different host or tenant.
+
 #### Customizing the Faraday Connection
 
 You can pass a block to `MCP::Client::HTTP.new` to customize the underlying Faraday connection.
