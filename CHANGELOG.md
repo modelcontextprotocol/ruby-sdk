@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- Warn when stdio clients rely on implicit initialization instead of `MCP::Client#connect` (#334)
+
 ## [0.15.0] - 2026-05-05
 
 ### Added
