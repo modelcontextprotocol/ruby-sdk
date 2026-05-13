@@ -31,8 +31,11 @@ module MCP
 
       private
 
-      def fully_validate(data)
-        JSON::Validator.fully_validate(schema_for_validation, data)
+      def fully_validate!(payload, label)
+        errors = JSON::Validator.fully_validate(schema_for_validation, payload)
+        if errors.any?
+          raise self.class::ValidationError, "Invalid #{label}: #{errors.join(", ")}"
+        end
       end
 
       def validate_schema!

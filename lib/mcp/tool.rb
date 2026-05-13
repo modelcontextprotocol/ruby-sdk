@@ -93,22 +93,29 @@ module MCP
       def input_schema(value = NOT_SET)
         if value == NOT_SET
           input_schema_value
-        elsif value.is_a?(Hash)
-          @input_schema_value = InputSchema.new(value)
-        elsif value.is_a?(InputSchema)
-          @input_schema_value = value
+        elsif (schema = coerce_schema(value, InputSchema))
+          @input_schema_value = schema
         end
       end
 
       def output_schema(value = NOT_SET)
         if value == NOT_SET
           output_schema_value
-        elsif value.is_a?(Hash)
-          @output_schema_value = OutputSchema.new(value)
-        elsif value.is_a?(OutputSchema)
-          @output_schema_value = value
+        elsif (schema = coerce_schema(value, OutputSchema))
+          @output_schema_value = schema
         end
       end
+
+      def coerce_schema(value, schema_class)
+        case value
+        when Hash
+          schema_class.new(value)
+        when schema_class
+          value
+        end
+      end
+
+      private :coerce_schema
 
       def meta(value = NOT_SET)
         if value == NOT_SET

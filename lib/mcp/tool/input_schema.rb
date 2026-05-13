@@ -18,10 +18,7 @@ module MCP
       end
 
       def validate_arguments(arguments)
-        errors = fully_validate(arguments)
-        if errors.any?
-          raise ValidationError, "Invalid arguments: #{errors.join(", ")}"
-        end
+        fully_validate!(arguments, "arguments")
       end
     end
   end
