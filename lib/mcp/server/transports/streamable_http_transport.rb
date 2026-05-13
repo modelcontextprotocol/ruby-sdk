@@ -16,6 +16,8 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransport < Transport
+        class InvalidJsonError < StandardError; end
+
         SSE_HEADERS = {
           "Content-Type" => "text/event-stream",
           "Cache-Control" => "no-cache",
@@ -339,8 +341,11 @@ module MCP
           body_string = request.body.read
           session_id = extract_session_id(request)
 
-          body = parse_request_body(body_string)
-          return body if parse_error_tuple?(body)
+          begin
+            body = parse_request_body(body_string)
+          rescue InvalidJsonError
+            return invalid_json_response
+          end
 
           unless initialize_request?(body)
             return missing_session_id_response if !@stateless && !session_id
@@ -349,7 +354,8 @@ module MCP
             return protocol_version_error if protocol_version_error
           end
 
-          return body unless body.is_a?(Hash) # Non-Hash JSON-RPC bodies are not supported in 2025-11-25.
+          # MCP 2025-11-25 does not support JSON-RPC batch, so the body must be a single message object.
+          return non_hash_body_response unless body.is_a?(Hash)
 
           if initialize_request?(body)
             handle_initialization(body_string, body)
@@ -507,11 +513,19 @@ module MCP
         def parse_request_body(body_string)
           JSON.parse(body_string, symbolize_names: true)
         rescue JSON::ParserError, TypeError
+          raise InvalidJsonError
+        end
+
+        def invalid_json_response
           [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
         end
 
-        def parse_error_tuple?(body)
-          body.is_a?(Array) && body.size == 3 && body[0] == 400
+        def non_hash_body_response
+          [
+            400,
+            { "Content-Type" => "application/json" },
+            [{ error: "Bad Request: request body must be a single JSON-RPC message object" }.to_json],
+          ]
         end
 
         def initialize_request?(body)
