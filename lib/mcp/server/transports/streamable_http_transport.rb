@@ -389,7 +389,11 @@ module MCP
           end
         rescue StandardError => e
           MCP.configuration.exception_reporter.call(e, { request: body_string })
-          [500, { "Content-Type" => "application/json" }, [{ error: "Internal server error" }.to_json]]
+          json_rpc_error_response(
+            status: 500,
+            code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+            message: "Internal server error",
+          )
         end
 
         def handle_get(request)
@@ -513,19 +517,19 @@ module MCP
           media_type = content_type&.split(";")&.first&.strip&.downcase
           return if media_type == "application/json"
 
-          [
-            415,
-            { "Content-Type" => "application/json" },
-            [{ error: "Unsupported Media Type: Content-Type must be application/json" }.to_json],
-          ]
+          json_rpc_error_response(
+            status: 415,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Unsupported Media Type: Content-Type must be application/json",
+          )
         end
 
         def not_acceptable_response(required_types)
-          [
-            406,
-            { "Content-Type" => "application/json" },
-            [{ error: "Not Acceptable: Accept header must include #{required_types.join(" and ")}" }.to_json],
-          ]
+          json_rpc_error_response(
+            status: 406,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Not Acceptable: Accept header must include #{required_types.join(" and ")}",
+          )
         end
 
         def parse_request_body(body_string)
@@ -535,7 +539,11 @@ module MCP
         end
 
         def invalid_json_response
-          [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::PARSE_ERROR,
+            message: "Parse error: Invalid JSON",
+          )
         end
 
         def initialize_request?(body)
@@ -548,15 +556,16 @@ module MCP
           return if MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(header_value)
 
           supported = MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.join(", ")
-          body = {
-            jsonrpc: "2.0",
-            id: nil,
-            error: {
-              code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
-              message: "Bad Request: Unsupported protocol version: #{header_value}. Supported versions: #{supported}",
-            },
-          }
-          [400, { "Content-Type" => "application/json" }, [body.to_json]]
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Bad Request: Unsupported protocol version: #{header_value}. Supported versions: #{supported}",
+          )
+        end
+
+        def json_rpc_error_response(status:, code:, message:)
+          body = { jsonrpc: "2.0", id: nil, error: { code: code, message: message } }
+          [status, { "Content-Type" => "application/json" }, [body.to_json]]
         end
 
         def notification?(body)
@@ -793,15 +802,27 @@ module MCP
         end
 
         def method_not_allowed_response
-          [405, { "Content-Type" => "application/json" }, [{ error: "Method not allowed" }.to_json]]
+          json_rpc_error_response(
+            status: 405,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Method not allowed",
+          )
         end
 
         def missing_session_id_response
-          [400, { "Content-Type" => "application/json" }, [{ error: "Missing session ID" }.to_json]]
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Missing session ID",
+          )
         end
 
         def session_not_found_response
-          [404, { "Content-Type" => "application/json" }, [{ error: "Session not found" }.to_json]]
+          json_rpc_error_response(
+            status: 404,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Session not found",
+          )
         end
 
         def already_initialized_response(request_id)
@@ -821,11 +842,11 @@ module MCP
         end
 
         def session_already_connected_response
-          [
-            409,
-            { "Content-Type" => "application/json" },
-            [{ error: "Conflict: Only one SSE stream is allowed per session" }.to_json],
-          ]
+          json_rpc_error_response(
+            status: 409,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Conflict: Only one SSE stream is allowed per session",
+          )
         end
 
         def setup_sse_stream(session_id)
