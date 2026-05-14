@@ -1,0 +1,67 @@
+.docs-header-controls {
+  display: flex;
+  height: 3.75rem;
+  align-items: stretch;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+@media (min-width: 50rem) {
+  .docs-header-controls {
+    height: 100%;
+    padding-right: 1rem;
+  }
+}
+
+.docs-icon-button.site-button {
+  width: 3.75rem;
+  justify-content: center;
+  padding: 0;
+  color: inherit;
+  background-color: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+
+.docs-icon {
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.docs-icon--github {
+  -webkit-mask-image: url("/assets/images/icons/github.svg");
+  mask-image: url("/assets/images/icons/github.svg");
+}
+
+.docs-icon--theme {
+  -webkit-mask-image: url("/assets/images/icons/theme-system.svg");
+  mask-image: url("/assets/images/icons/theme-system.svg");
+}
+
+:root[data-theme-preference="light"] .docs-icon--theme {
+  -webkit-mask-image: url("/assets/images/icons/theme-light.svg");
+  mask-image: url("/assets/images/icons/theme-light.svg");
+}
+
+:root[data-theme-preference="dark"] .docs-icon--theme {
+  -webkit-mask-image: url("/assets/images/icons/theme-dark.svg");
+  mask-image: url("/assets/images/icons/theme-dark.svg");
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}

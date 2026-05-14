@@ -7,10 +7,6 @@ remote_theme: just-the-docs/just-the-docs
 include:
   - "_*"
 
-# Header links
-aux_links:
-  GitHub: https://github.com/modelcontextprotocol/ruby-sdk
-
 # Search
 search_enabled: true
 
