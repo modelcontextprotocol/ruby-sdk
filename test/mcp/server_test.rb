@@ -195,6 +195,31 @@ module MCP
       assert_instrumentation_data({ method: "ping", client: client_info })
     end
 
+    test "#handle rejects duplicate initialize on an already-initialized session with -32600" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      first_request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: { clientInfo: { name: "original", version: "1.0" } },
+      }
+      first_response = @server.handle(first_request, session: session)
+      refute_nil first_response[:result]
+
+      second_request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 2,
+        params: { clientInfo: { name: "intruder", version: "9.9" }, protocolVersion: "2024-11-05" },
+      }
+      second_response = @server.handle(second_request, session: session)
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, second_response[:error][:code]
+      assert_equal "Invalid Request", second_response[:error][:message]
+      assert_equal({ name: "original", version: "1.0" }, session.client)
+    end
+
     test "instrumentation data does not include client key when no clientInfo provided" do
       request = {
         jsonrpc: "2.0",

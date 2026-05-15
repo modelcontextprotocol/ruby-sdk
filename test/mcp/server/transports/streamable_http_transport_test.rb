@@ -120,7 +120,8 @@ module MCP
           assert_equal 400, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_includes body["error"], "single JSON-RPC message object"
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_match(/single request object/i, body["error"]["message"])
         end
 
         test "POST request with non-object JSON body returns 400" do
@@ -147,7 +148,8 @@ module MCP
           assert_equal 400, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_includes body["error"], "single JSON-RPC message object"
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_match(/single request object/i, body["error"]["message"])
         end
 
         test "handles POST request with initialize method" do
@@ -167,6 +169,127 @@ module MCP
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
           assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
+        end
+
+        test "rejects duplicate initialize with existing Mcp-Session-Id and preserves session" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "first" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+          assert session_id
+
+          duplicate_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "initialize", id: "second" }.to_json,
+          )
+          duplicate_response = @transport.handle_request(duplicate_request)
+
+          assert_equal 400, duplicate_response[0]
+          body = JSON.parse(duplicate_response[2][0])
+          assert_equal "2.0", body["jsonrpc"]
+          assert_equal "second", body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_match(/already initialized/i, body["error"]["message"])
+
+          # Original session should still be usable.
+          ping_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "ping", id: "ping-1" }.to_json,
+          )
+          ping_response = @transport.handle_request(ping_request)
+          assert_equal 200, ping_response[0]
+        end
+
+        test "rejects initialize with stale Mcp-Session-Id with 404" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => "unknown-session" },
+            { jsonrpc: "2.0", method: "initialize", id: "1" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 404, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]
+        end
+
+        test "rejects duplicate initialize against an idle-expired session with 404 and evicts it" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.05)
+          begin
+            init_request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              { jsonrpc: "2.0", method: "initialize", id: "first" }.to_json,
+            )
+            init_response = transport.handle_request(init_request)
+            session_id = init_response[1]["Mcp-Session-Id"]
+            assert(session_id)
+
+            sleep(0.1)
+
+            duplicate_request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+              { jsonrpc: "2.0", method: "initialize", id: "second" }.to_json,
+            )
+            duplicate_response = transport.handle_request(duplicate_request)
+
+            assert_equal(404, duplicate_response[0])
+            body = JSON.parse(duplicate_response[2][0])
+            assert_equal("Session not found", body["error"])
+
+            refute(transport.send(:session_exists?, session_id), "expired session must be evicted")
+          ensure
+            transport.close
+          end
+        end
+
+        test "evicts session and omits Mcp-Session-Id when initialize fails" do
+          # An `initialize` whose JSON-RPC envelope is rejected (e.g. wrong `jsonrpc` version)
+          # never reaches `Server#init`, so `mark_initialized!` is never called. The transport
+          # must drop the registered-but-uninitialized session to keep retries clean.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "1.0", method: "initialize", id: "broken" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          refute response[1].key?("Mcp-Session-Id"), "no session id should leak from a failed init"
+
+          body = JSON.parse(response[2][0])
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal({}, @transport.instance_variable_get(:@sessions))
+        end
+
+        test "rejects non-Hash JSON-RPC body with HTTP 400 and -32600" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            [{ jsonrpc: "2.0", method: "initialize", id: "batched" }].to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_match(/single request object/i, body["error"]["message"])
         end
 
         test "handles GET request with valid session ID" do
