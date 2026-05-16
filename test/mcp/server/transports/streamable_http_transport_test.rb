@@ -1400,6 +1400,58 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "POST initialize request negotiates body protocolVersion when header is an older supported version" do
+          older_version = "2025-06-18"
+          assert_includes Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, older_version
+          refute_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, older_version
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_PROTOCOL_VERSION" => older_version,
+            },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: Configuration::LATEST_STABLE_PROTOCOL_VERSION },
+            }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
+        end
+
+        test "POST initialize request negotiates body protocolVersion when header is a newer supported version" do
+          older_version = "2025-06-18"
+          assert_includes Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, older_version
+          refute_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, older_version
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_PROTOCOL_VERSION" => Configuration::LATEST_STABLE_PROTOCOL_VERSION,
+            },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: "init",
+              params: { protocolVersion: older_version },
+            }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal older_version, body["result"]["protocolVersion"]
+        end
+
         test "POST request with unsupported MCP-Protocol-Version returns 400" do
           init_request = create_rack_request(
             "POST",
