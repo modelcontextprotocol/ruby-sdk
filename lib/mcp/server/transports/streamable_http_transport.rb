@@ -347,6 +347,13 @@ module MCP
             return invalid_json_response
           end
 
+          # Streamable HTTP (2025-11-25) requires a single JSON-RPC message object per POST.
+          # Batched/array bodies are not supported; reject with `-32600` instead of falling through to
+          # a malformed Rack response.
+          unless body.is_a?(Hash)
+            return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
+          end
+
           # The `MCP-Protocol-Version` header is only meaningful after negotiation, so on `initialize`
           # the JSON-RPC body `params.protocolVersion` is authoritative and the header (if any) is ignored.
           # This matches the TypeScript and Python SDKs.
@@ -357,10 +364,18 @@ module MCP
             return protocol_version_error if protocol_version_error
           end
 
-          # MCP 2025-11-25 does not support JSON-RPC batch, so the body must be a single message object.
-          return non_hash_body_response unless body.is_a?(Hash)
-
           if initialize_request?(body)
+            if !@stateless && session_id
+              # An `initialize` request carrying an `Mcp-Session-Id` header is either a duplicate
+              # initialization attempt against a live session, or a retry against an unknown/expired
+              # one. In the live case, reject with `-32600` so the original session is not abandoned.
+              # In the unknown/expired case, return 404 so the client retries from scratch instead
+              # of silently inheriting a fresh session under the old ID.
+              return already_initialized_response(body[:id]) if session_active?(session_id)
+
+              return session_not_found_response
+            end
+
             handle_initialization(body_string, body)
           elsif notification?(body)
             dispatch_notification(body_string, session_id)
@@ -523,14 +538,6 @@ module MCP
           [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
         end
 
-        def non_hash_body_response
-          [
-            400,
-            { "Content-Type" => "application/json" },
-            [{ error: "Bad Request: request body must be a single JSON-RPC message object" }.to_json],
-          ]
-        end
-
         def initialize_request?(body)
           body.is_a?(Hash) && body[:method] == Methods::INITIALIZE
         end
@@ -615,6 +622,15 @@ module MCP
             server_session.handle_json(body_string)
           else
             @server.handle_json(body_string)
+          end
+
+          # If `Server#init` produced an error response (e.g., malformed JSON-RPC envelope),
+          # `mark_initialized!` was never called. Discard the orphaned session and omit
+          # the `Mcp-Session-Id` header so the client retries from a clean state instead of
+          # reusing a never-initialized ID that would later look like a duplicate `initialize`.
+          if server_session && !server_session.initialized?
+            cleanup_session(session_id)
+            session_id = nil
           end
 
           headers = {
@@ -751,6 +767,31 @@ module MCP
           @mutex.synchronize { @sessions.key?(session_id) }
         end
 
+        # Returns true iff a session exists and is not past its idle timeout. Expired sessions
+        # are evicted as a side effect so a live request never observes a zombie session that
+        # the reaper hasn't yet pruned. Does NOT update `last_active_at`; callers that are
+        # rejecting a request must not extend the session's lifetime.
+        def session_active?(session_id)
+          removed = nil
+          active = @mutex.synchronize do
+            next false unless (session = @sessions[session_id])
+
+            if session_expired?(session)
+              removed = cleanup_session_unsafe(session_id)
+              next false
+            end
+
+            true
+          end
+
+          if removed
+            close_stream_safely(removed[:get_sse_stream])
+            close_post_request_streams(removed)
+          end
+
+          active
+        end
+
         def method_not_allowed_response
           [405, { "Content-Type" => "application/json" }, [{ error: "Method not allowed" }.to_json]]
         end
@@ -761,6 +802,22 @@ module MCP
 
         def session_not_found_response
           [404, { "Content-Type" => "application/json" }, [{ error: "Session not found" }.to_json]]
+        end
+
+        def already_initialized_response(request_id)
+          invalid_request_response("Invalid Request: Server already initialized", request_id: request_id)
+        end
+
+        def invalid_request_response(message, request_id: nil)
+          body = {
+            jsonrpc: "2.0",
+            id: request_id,
+            error: {
+              code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+              message: message,
+            },
+          }
+          [400, { "Content-Type" => "application/json" }, [body.to_json]]
         end
 
         def session_already_connected_response

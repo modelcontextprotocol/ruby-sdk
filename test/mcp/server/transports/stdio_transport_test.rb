@@ -133,6 +133,55 @@ module MCP
           end
         end
 
+        test "rejects duplicate initialize on the same stdio session with -32600" do
+          first = {
+            jsonrpc: "2.0",
+            method: "initialize",
+            id: "first",
+            params: {
+              protocolVersion: "2025-11-25",
+              clientInfo: { name: "original", version: "1.0" },
+            },
+          }
+          second = {
+            jsonrpc: "2.0",
+            method: "initialize",
+            id: "second",
+            params: {
+              protocolVersion: "2024-11-05",
+              clientInfo: { name: "intruder", version: "9.9" },
+            },
+          }
+          input = StringIO.new("#{JSON.generate(first)}\n#{JSON.generate(second)}\n")
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            lines = output.string.lines
+            assert_equal(2, lines.length)
+            first_response = JSON.parse(lines[0], symbolize_names: true)
+            second_response = JSON.parse(lines[1], symbolize_names: true)
+
+            assert_equal("first", first_response[:id])
+            refute_nil(first_response[:result])
+
+            assert_equal("second", second_response[:id])
+            assert_equal(-32600, second_response[:error][:code])
+            assert_equal("Invalid Request", second_response[:error][:message])
+
+            session = @transport.instance_variable_get(:@session)
+            assert_equal({ name: "original", version: "1.0" }, session.client)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
         test "handles invalid JSON requests" do
           invalid_json = "invalid json"
           output = StringIO.new

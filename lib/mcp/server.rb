@@ -497,6 +497,13 @@ module MCP
     end
 
     def init(params, session: nil)
+      # MCP spec: the initialization phase MUST be the first interaction between client and server.
+      # Reject duplicate `initialize` on an already-initialized session so the negotiated
+      # client identity and capabilities cannot be silently overwritten.
+      if session&.initialized?
+        raise RequestHandlerError.new("Invalid Request: Server already initialized", params, error_type: :invalid_request)
+      end
+
       if params
         if session
           session.store_client_info(client: params[:clientInfo], capabilities: params[:capabilities])
@@ -523,6 +530,8 @@ module MCP
       if negotiated_version == "2024-11-05"
         response_instructions = nil
       end
+
+      session&.mark_initialized!
 
       {
         protocolVersion: negotiated_version,

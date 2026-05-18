@@ -18,6 +18,19 @@ module MCP
       @logging_message_notification = nil
       @in_flight = {}
       @in_flight_mutex = Mutex.new
+      @initialized = false
+    end
+
+    # Whether `initialize` has already completed for this session.
+    def initialized?
+      @initialized
+    end
+
+    # Called by `Server#init` after a successful `initialize` response, so subsequent
+    # `initialize` requests on the same session can be rejected per MCP spec
+    # (the initialization phase MUST be the first interaction).
+    def mark_initialized!
+      @initialized = true
     end
 
     # Registers a `Cancellation` token for an in-flight request.
