@@ -342,6 +342,9 @@ module MCP
           body = parse_request_body(body_string)
           return body if parse_error_tuple?(body)
 
+          # The `MCP-Protocol-Version` header is only meaningful after negotiation, so on `initialize`
+          # the JSON-RPC body `params.protocolVersion` is authoritative and the header (if any) is ignored.
+          # This matches the TypeScript and Python SDKs.
           unless initialize_request?(body)
             return missing_session_id_response if !@stateless && !session_id
 
