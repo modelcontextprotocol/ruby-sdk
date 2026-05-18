@@ -96,6 +96,60 @@ module MCP
           assert_equal "Invalid JSON", body["error"]
         end
 
+        test "POST request with JSON array body returns 400" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            [{ jsonrpc: "2.0", method: "tools/list", id: "list" }].to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_includes body["error"], "single JSON-RPC message object"
+        end
+
+        test "POST request with non-object JSON body returns 400" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            "\"foo\"",
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_includes body["error"], "single JSON-RPC message object"
+        end
+
         test "handles POST request with initialize method" do
           request = create_rack_request(
             "POST",
