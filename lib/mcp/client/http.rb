@@ -17,12 +17,74 @@ module MCP
       SESSION_ID_HEADER = "Mcp-Session-Id"
       PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
 
-      attr_reader :url, :session_id, :protocol_version, :server_info
+      # Raised when an `oauth:` provider is paired with an MCP URL that is neither HTTPS nor
+      # a loopback `http://` URL, since a bearer token sent over plain HTTP to a remote host
+      # is trivially observed and stolen.
+      class InsecureURLError < ArgumentError; end
 
-      def initialize(url:, headers: {}, &block)
+      # Faraday request middleware that compares the outgoing request URL
+      # against the URL snapshotted at `MCP::Client::HTTP#initialize` time.
+      # Registered after the user's customizer so it sees `env.url` *after*
+      # any custom middleware has had a chance to rewrite it - closing
+      # the `Faraday env.url = URI("https://attacker...")` bypass that a plain
+      # `client.url_prefix` check would miss. The comparison includes
+      # the query string, so a middleware that rewrites `env.url.query` to
+      # a different tenant (e.g. `?tenant=evil`) is rejected as well; otherwise
+      # the audience-binding check on the OAuth side could be bypassed at
+      # the send step.
+      class OAuthURLGuard
+        def initialize(app, expected_url:)
+          @app = app
+          @expected_url = expected_url
+        end
+
+        def call(env)
+          effective = MCP::Client::OAuth::Discovery.canonicalize_url(env.url.to_s)
+          unless effective == @expected_url
+            # Surface the *canonicalized* form (no userinfo, no fragment) so
+            # credentials like `user:pass@` cannot leak into logs, stack
+            # traces, or exception reporters.
+            raise InsecureURLError,
+              "Effective request URL #{effective.inspect} does not match the URL " \
+                "validated at initialize time (#{@expected_url.inspect}); refusing to send a bearer token."
+          end
+          @app.call(env)
+        end
+      end
+
+      attr_reader :url, :session_id, :protocol_version, :server_info, :oauth
+
+      def initialize(url:, headers: {}, oauth: nil, &block)
+        if oauth && !MCP::Client::OAuth::Discovery.secure_url?(url)
+          # Mask credentials (userinfo) and query parameters before quoting the URL in the error message
+          # so they cannot leak into logs.
+          safe_url = MCP::Client::OAuth::Discovery.canonicalize_origin_and_path(url)
+          raise InsecureURLError,
+            "MCP URL #{safe_url.inspect} must use https or be a loopback http URL when an oauth provider is set; " \
+              "sending bearer tokens over plain http to a remote host would leak them on the wire."
+        end
+
         @url = url
         @headers = headers
         @faraday_customizer = block
+        @oauth = oauth
+        # Snapshot the canonical URL at construction time. This single value
+        # serves two related roles, both of which need to see the query string:
+        #
+        # - As the RFC 8707 `resource` claim sent on the authorization and
+        #   token requests (and as the base for PRM discovery URLs) -
+        #   matching the TS / Python SDKs' `resourceUrlFromServerUrl` /
+        #   `resource_url_from_server_url` so multi-tenant servers that scope
+        #   by `?tenant=...` round-trip correctly.
+        # - As the comparison value for the URL guard middleware. Comparing
+        #   query strings as well as origin + path is required so a Faraday
+        #   middleware that rewrites `env.url.query` to a different tenant
+        #   cannot send the bearer token to the wrong audience while
+        #   the resource binding on the OAuth side stays correct.
+        #
+        # Saved only when `oauth:` is set so non-OAuth transports keep their
+        # existing behavior.
+        @oauth_server_url = oauth ? MCP::Client::OAuth::Discovery.canonicalize_url(url) : nil
         @session_id = nil
         @protocol_version = nil
         @server_info = nil
@@ -30,8 +92,8 @@ module MCP
       end
 
       # Performs the MCP `initialize` handshake: sends an `initialize` request
-      # followed by the required `notifications/initialized` notification. The
-      # server's `InitializeResult` (protocol version, capabilities, server
+      # followed by the required `notifications/initialized` notification.
+      # The server's `InitializeResult` (protocol version, capabilities, server
       # info, instructions) is cached on the transport and returned.
       #
       # Idempotent: a second call returns the cached `InitializeResult` without
@@ -122,68 +184,80 @@ module MCP
       def send_request(request:)
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
+        oauth_retried = false
 
-        response = client.post("", request, session_headers)
-        body = parse_response_body(response, method, params)
+        begin
+          response = client.post("", request, session_headers)
+          body = parse_response_body(response, method, params)
 
-        capture_session_info(method, response, body)
+          capture_session_info(method, response, body)
 
-        body
-      rescue Faraday::BadRequestError => e
-        raise RequestHandlerError.new(
-          "The #{method} request is invalid",
-          { method: method, params: params },
-          error_type: :bad_request,
-          original_error: e,
-        )
-      rescue Faraday::UnauthorizedError => e
-        raise RequestHandlerError.new(
-          "You are unauthorized to make #{method} requests",
-          { method: method, params: params },
-          error_type: :unauthorized,
-          original_error: e,
-        )
-      rescue Faraday::ForbiddenError => e
-        raise RequestHandlerError.new(
-          "You are forbidden to make #{method} requests",
-          { method: method, params: params },
-          error_type: :forbidden,
-          original_error: e,
-        )
-      rescue Faraday::ResourceNotFound => e
-        # Per spec, 404 is the session-expired signal only when the request
-        # actually carried an `Mcp-Session-Id`. A 404 without a session attached
-        # (e.g. wrong URL or a stateless server) surfaces as a generic not-found.
-        # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management
-        if @session_id
-          clear_session
-          raise SessionExpiredError.new(
-            "The #{method} request is not found",
+          body
+        rescue Faraday::BadRequestError => e
+          raise RequestHandlerError.new(
+            "The #{method} request is invalid",
             { method: method, params: params },
+            error_type: :bad_request,
             original_error: e,
           )
-        else
+        rescue Faraday::UnauthorizedError => e
+          # Run the OAuth flow at most once per `send_request` invocation.
+          # The `oauth_retried` flag lives outside the `begin` so it survives `retry`,
+          # ensuring a server returning 401 indefinitely raises rather than loops.
+          if @oauth && !oauth_retried
+            oauth_retried = true
+            run_oauth_flow!(unauthorized_error: e)
+            retry
+          end
+
           raise RequestHandlerError.new(
-            "The #{method} request is not found",
+            "You are unauthorized to make #{method} requests",
             { method: method, params: params },
-            error_type: :not_found,
+            error_type: :unauthorized,
+            original_error: e,
+          )
+        rescue Faraday::ForbiddenError => e
+          raise RequestHandlerError.new(
+            "You are forbidden to make #{method} requests",
+            { method: method, params: params },
+            error_type: :forbidden,
+            original_error: e,
+          )
+        rescue Faraday::ResourceNotFound => e
+          # Per spec, 404 is the session-expired signal only when the request
+          # actually carried an `Mcp-Session-Id`. A 404 without a session attached
+          # (e.g. wrong URL or a stateless server) surfaces as a generic not-found.
+          # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management
+          if @session_id
+            clear_session
+            raise SessionExpiredError.new(
+              "The #{method} request is not found",
+              { method: method, params: params },
+              original_error: e,
+            )
+          else
+            raise RequestHandlerError.new(
+              "The #{method} request is not found",
+              { method: method, params: params },
+              error_type: :not_found,
+              original_error: e,
+            )
+          end
+        rescue Faraday::UnprocessableEntityError => e
+          raise RequestHandlerError.new(
+            "The #{method} request is unprocessable",
+            { method: method, params: params },
+            error_type: :unprocessable_entity,
+            original_error: e,
+          )
+        rescue Faraday::Error => e
+          raise RequestHandlerError.new(
+            "Internal error handling #{method} request",
+            { method: method, params: params },
+            error_type: :internal_error,
             original_error: e,
           )
         end
-      rescue Faraday::UnprocessableEntityError => e
-        raise RequestHandlerError.new(
-          "The #{method} request is unprocessable",
-          { method: method, params: params },
-          error_type: :unprocessable_entity,
-          original_error: e,
-        )
-      rescue Faraday::Error => e # Catch-all
-        raise RequestHandlerError.new(
-          "Internal error handling #{method} request",
-          { method: method, params: params },
-          error_type: :internal_error,
-          original_error: e,
-        )
       end
 
       # Terminates the session by sending an HTTP DELETE to the MCP endpoint
@@ -228,18 +302,91 @@ module MCP
           end
 
           @faraday_customizer&.call(faraday)
+
+          # Register the URL identity guard *after* the user's customizer
+          # so it sits closest to the adapter in the request stack. That way
+          # the guard sees `env.url` after any customizer-added middleware has had
+          # a chance to rewrite it, closing the `env.url = URI("https://...")`
+          # bypass that a `Faraday::Connection#url_prefix` check cannot detect.
+          faraday.use(OAuthURLGuard, expected_url: @oauth_server_url) if @oauth_server_url
         end
       end
 
       # Per spec, the client MUST include `MCP-Session-Id` (when the server assigned one)
       # and `MCP-Protocol-Version` on all requests after `initialize`.
+      #
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#protocol-version-header
       def session_headers
         request_headers = {}
         request_headers[SESSION_ID_HEADER] = @session_id if @session_id
         request_headers[PROTOCOL_VERSION_HEADER] = @protocol_version if @protocol_version
+        if @oauth && (token = @oauth.access_token)
+          request_headers["Authorization"] = "Bearer #{token}"
+        end
         request_headers
+      end
+
+      # Drives the OAuth orchestrator on a 401 from the MCP endpoint.
+      # The `WWW-Authenticate` header (when present) supplies the `resource_metadata`
+      # URL and an optional `scope` challenge per RFC 9728 Section 5.1.
+      #
+      # If the provider already holds a refresh token, we try to exchange it
+      # for a fresh access token first; only when that fails (e.g., the refresh token was revoked)
+      # do we fall back to the full Authorization Code + PKCE + DCR flow.
+      #
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#error-handling
+      def run_oauth_flow!(unauthorized_error:)
+        response = unauthorized_error.response || {}
+        response_headers = response[:headers] || {}
+        www_authenticate = response_headers["www-authenticate"] || response_headers["WWW-Authenticate"]
+        params = MCP::Client::OAuth::Discovery.parse_www_authenticate(www_authenticate)
+
+        flow = MCP::Client::OAuth::Flow.new(provider: @oauth)
+        if attempt_refresh(flow: flow, resource_metadata_url: params["resource_metadata"])
+          return
+        end
+
+        # Use the URL snapshotted at `initialize` time so a post-construction
+        # mutation of `@url` cannot redirect PRM/AS discovery and the authorize
+        # URL to an attacker-controlled host.
+        flow.run!(
+          server_url: @oauth_server_url,
+          resource_metadata_url: params["resource_metadata"],
+          scope: params["scope"],
+        )
+      end
+
+      # Tries to swap a saved `refresh_token` for a fresh access token. Returns truthy
+      # on success and falsy on either "no refresh token available" or "refresh attempt failed"
+      # (in which case the caller should run the full interactive flow).
+      def attempt_refresh(flow:, resource_metadata_url:)
+        return false unless refresh_token_available?
+
+        # Use the snapshotted URL for the same reason as `run_oauth_flow!` above:
+        # post-construction `@url` mutation must not redirect token-refresh
+        # discovery to an attacker-controlled host. Use the query-bearing form
+        # so the refresh request's RFC 8707 `resource` claim matches
+        # the original authorization request.
+        flow.refresh!(server_url: @oauth_server_url, resource_metadata_url: resource_metadata_url)
+        true
+      rescue MCP::Client::OAuth::Flow::InvalidGrantError
+        # The refresh token has been revoked or expired by the AS. Wipe it so
+        # the full interactive flow runs fresh on the retry.
+        @oauth.clear_tokens!
+        false
+      rescue MCP::Client::OAuth::Flow::AuthorizationError
+        # Transient failure (network, 5xx, AS metadata, etc.). Leave the refresh
+        # token in place; the next attempt may succeed and we avoid forcing
+        # the user through an interactive reauth for a recoverable error.
+        false
+      end
+
+      def refresh_token_available?
+        tokens = @oauth.tokens
+        return false unless tokens.is_a?(Hash)
+
+        !(tokens["refresh_token"] || tokens[:refresh_token]).to_s.empty?
       end
 
       def capture_session_info(method, response, body)

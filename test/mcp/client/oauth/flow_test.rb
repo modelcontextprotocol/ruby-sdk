@@ -1,0 +1,1318 @@
+# frozen_string_literal: true
+
+require "test_helper"
+require "base64"
+require "json"
+require "webmock/minitest"
+require "faraday"
+require "mcp/client/oauth"
+
+module MCP
+  class Client
+    module OAuth
+      class FlowTest < Minitest::Test
+        def setup
+          WebMock.enable!
+          @server_url = "https://srv.example.com/mcp"
+          @prm_url = "https://srv.example.com/.well-known/oauth-protected-resource/mcp"
+          @auth_base = "https://auth.example.com"
+          @as_metadata_url = "#{@auth_base}/.well-known/oauth-authorization-server"
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: [@auth_base],
+            ),
+          )
+
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "test-client", client_name: "ruby-sdk-test"),
+          )
+
+          stub_request(:post, "#{@auth_base}/token").to_return do |req|
+            form = URI.decode_www_form(req.body).to_h
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(
+                access_token: "test-token-from-flow",
+                token_type: "Bearer",
+                expires_in: 3600,
+                grant_type_received: form["grant_type"],
+                code_verifier_received: form["code_verifier"],
+              ),
+            }
+          end
+        end
+
+        def teardown
+          WebMock.reset!
+        end
+
+        def test_run_completes_full_authorization_flow
+          captured_authorization_url = nil
+          state_value = nil
+
+          provider = Provider.new(
+            client_metadata: {
+              client_name: "ruby-sdk-test",
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              captured_authorization_url = url
+              state_value = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_value] },
+          )
+
+          flow = Flow.new(provider: provider)
+          result = flow.run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+
+          query = URI.decode_www_form(captured_authorization_url.query).to_h
+          assert_equal("code", query["response_type"])
+          assert_equal("test-client", query["client_id"])
+          assert_equal("S256", query["code_challenge_method"])
+          assert_equal("http://localhost:0/callback", query["redirect_uri"])
+          assert_equal("https://srv.example.com/mcp", query["resource"])
+
+          assert_requested(:get, @prm_url)
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            form["grant_type"] == "authorization_code" &&
+              form["code"] == "test-auth-code" &&
+              !form["code_verifier"].to_s.empty? &&
+              form["resource"] == "https://srv.example.com/mcp"
+          end
+        end
+
+        def test_run_raises_on_state_mismatch
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "wrong-state"] },
+          )
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+        end
+
+        def test_run_raises_when_pkce_unsupported
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["plain"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/S256/, error.message)
+        end
+
+        def test_run_raises_when_authorization_endpoint_is_missing
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              # NB: no `authorization_endpoint`.
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/authorization_endpoint/i, error.message)
+        end
+
+        def test_run_raises_when_authorization_endpoint_is_malformed_uri
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "ht!tp:bad uri",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/authorization_endpoint/i, error.message)
+        end
+
+        def test_run_raises_when_prm_resource_is_malformed_uri
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "ht!tp:bad uri",
+              authorization_servers: [@auth_base],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/PRM `resource`|not a valid URI/i, error.message)
+        end
+
+        def test_run_raises_when_prm_is_not_a_json_object
+          # Valid JSON but the wrong shape: indexing into a top-level array
+          # would otherwise raise `TypeError` and leak out of the SDK.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: "[]",
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/not a JSON object/i, error.message)
+        end
+
+        def test_run_raises_when_prm_authorization_servers_is_not_an_array
+          # `authorization_servers` MUST be an Array per RFC 9728. A misbehaving
+          # PRM that returns a String would otherwise reach `.first` and raise
+          # raw `NoMethodError` out of the SDK.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: "https://auth.example.com",
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/authorization_servers/i, error.message)
+        end
+
+        def test_run_raises_when_token_response_is_not_a_json_object
+          # The token endpoint MUST return a JSON object per RFC 6749 §5.1.
+          # A non-object body would otherwise be persisted into the provider
+          # and raise raw exceptions the next time `provider.access_token`
+          # is read.
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: "[]",
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/Token endpoint response is not a JSON object/i, error.message)
+        end
+
+        def test_run_treats_whitespace_only_stored_client_id_as_unregistered
+          # `"   "` (whitespace only) is just as meaningless as `""`.
+          # The check on stored client_information must trigger DCR rather than
+          # passing the blank value through to the token endpoint.
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "registered-after-whitespace"),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          provider.save_client_information("client_id" => "   ")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_equal("registered-after-whitespace", provider.client_information.fetch("client_id"))
+        end
+
+        def test_run_raises_when_as_metadata_is_not_a_json_object
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: "null",
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/not a JSON object/i, error.message)
+        end
+
+        def test_run_raises_when_dcr_response_has_blank_client_id
+          # A blank `client_id` is just as invalid as a missing one: peer SDKs
+          # (TS / Python) require a non-empty string, and treating `""` as
+          # truthy would let a misbehaving AS register a "client" the SDK can
+          # never authenticate as.
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "", client_name: "blank-id"),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/client_id/i, error.message)
+        end
+
+        def test_run_treats_blank_stored_client_id_as_unregistered
+          # Pre-stored `client_information` with a blank `client_id` must
+          # trigger DCR rather than skipping registration; otherwise
+          # the token endpoint receives `client_id=""` which the AS will reject.
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "registered-after-blank"),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          provider.save_client_information("client_id" => "")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_equal("registered-after-blank", provider.client_information.fetch("client_id"))
+        end
+
+        def test_run_raises_when_dcr_response_lacks_client_id
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_name: "test-but-no-id"),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/client_id/i, error.message)
+        end
+
+        def test_run_skips_dcr_when_client_information_already_stored
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          provider.save_client_information("client_id" => "preregistered-client")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_not_requested(:post, "#{@auth_base}/register")
+        end
+
+        def test_run_accepts_symbol_keys_in_preregistered_client_information
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          provider.save_client_information(client_id: "preregistered-symbol")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_not_requested(:post, "#{@auth_base}/register")
+        end
+
+        def test_run_uses_basic_auth_when_token_endpoint_auth_method_is_client_secret_basic
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "client_secret_basic",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          provider.save_client_information(
+            "client_id" => "pre-registered-client",
+            "client_secret" => "pre-registered-secret",
+            "token_endpoint_auth_method" => "client_secret_basic",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          expected = "Basic " + Base64.strict_encode64("pre-registered-client:pre-registered-secret")
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            req.headers["Authorization"] == expected &&
+              !URI.decode_www_form(req.body).to_h.key?("client_secret")
+          end
+        end
+
+        def test_run_form_urlencodes_basic_auth_credentials_with_special_characters
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "client_secret_basic",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          # Per RFC 6749 Section 2.3.1, credentials must be `application/x-www-form-urlencoded`
+          # before being joined with ":" and base64-encoded. A `:` in the secret would
+          # otherwise be ambiguous with the username/password separator.
+          provider.save_client_information(
+            "client_id" => "client:with colon",
+            "client_secret" => "secret:with:colons and spaces",
+            "token_endpoint_auth_method" => "client_secret_basic",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          encoded_id = URI.encode_www_form_component("client:with colon")
+          encoded_secret = URI.encode_www_form_component("secret:with:colons and spaces")
+          expected = "Basic " + Base64.strict_encode64("#{encoded_id}:#{encoded_secret}")
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            req.headers["Authorization"] == expected
+          end
+        end
+
+        def test_run_rejects_non_https_resource_metadata_url
+          # `WWW-Authenticate` may carry a `resource_metadata=` URL we have never
+          # seen before; if it isn't HTTPS-or-loopback, an attacker could lure us
+          # into fetching a doctored PRM document over plain HTTP.
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(
+              server_url: @server_url,
+              resource_metadata_url: "http://attacker.example.com/.well-known/oauth-protected-resource",
+            )
+          end
+
+          assert_match(/resource_metadata|HTTPS|Communication Security/i, error.message)
+        end
+
+        def test_run_rejects_when_as_metadata_issuer_does_not_match
+          # RFC 8414 Section 3.3: the AS metadata's `issuer` value MUST equal
+          # the discovery URL. A metadata document advertising a different issuer
+          # than the one PRM pointed at is treated as a confused-deputy attempt.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: "https://other-auth.example.com",
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issuer/i, error.message)
+        end
+
+        def test_run_rejects_when_as_metadata_issuer_differs_by_trailing_slash
+          # RFC 8414 Section 3.3 requires the issuer to be identical, not "equivalent
+          # after normalization". `https://auth.example.com` and
+          # `https://auth.example.com/` are different strings and MUST NOT match.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: "#{@auth_base}/",
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issuer/i, error.message)
+        end
+
+        def test_run_rejects_when_as_metadata_issuer_differs_by_case
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base.upcase,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issuer/i, error.message)
+        end
+
+        def test_run_rejects_when_as_metadata_lacks_issuer
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issuer/i, error.message)
+        end
+
+        def test_run_rejects_non_https_authorization_server
+          # Communication Security: an `http://` authorization server URL (other
+          # than loopback) MUST be refused. Returning a non-HTTPS auth server
+          # from a hijacked PRM would let the attacker steer the client at
+          # an endpoint they control to harvest tokens.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: ["http://auth.example.com"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/HTTPS|Communication Security/i, error.message)
+        end
+
+        def test_run_rejects_non_https_token_endpoint
+          # Even when PRM and AS metadata discovery happen over HTTPS, the AS
+          # metadata document itself can advertise an `http://` token endpoint.
+          # That endpoint is where the bearer token lands, so it MUST be rejected.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "http://insecure.example.com/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/HTTPS|Communication Security|token_endpoint/i, error.message)
+        end
+
+        def test_refresh_swaps_refresh_token_for_new_access_token
+          # Refresh should NOT hit /register (no DCR) and SHOULD post
+          # grant_type=refresh_token with the saved refresh_token.
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          stub_request(:post, "#{@auth_base}/token")
+            .with(body: hash_including("grant_type" => "refresh_token", "refresh_token" => "saved-rt"))
+            .to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(access_token: "fresh-at", token_type: "Bearer", expires_in: 3600),
+            )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          result = Flow.new(provider: provider).refresh!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+          )
+
+          assert_equal(:refreshed, result)
+          assert_equal("fresh-at", provider.access_token)
+          # New response did not include a refresh_token, so the old one is preserved (RFC 6749 Section 6).
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_raises_when_no_refresh_token
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "only-at")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+        end
+
+        def test_refresh_raises_when_token_endpoint_rejects_refresh
+          stub_request(:post, "#{@auth_base}/token").to_return(status: 401, body: "")
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "revoked-rt")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+        end
+
+        def test_refresh_raises_invalid_grant_error_when_token_endpoint_says_invalid_grant
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 400,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(error: "invalid_grant", error_description: "refresh token expired"),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "revoked-rt")
+
+          assert_raises(Flow::InvalidGrantError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+        end
+
+        def test_refresh_raises_generic_authorization_error_on_5xx
+          stub_request(:post, "#{@auth_base}/token").to_return(status: 503, body: "")
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "live-rt")
+
+          err = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+          refute_kind_of(
+            Flow::InvalidGrantError,
+            err,
+            "5xx must not be classified as invalid_grant; transient failures must preserve the refresh token",
+          )
+        end
+
+        def test_resolve_scope_prefers_prm_scopes_supported_over_provider_scope
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: [@auth_base],
+              scopes_supported: ["mcp:read", "mcp:write"],
+            ),
+          )
+
+          captured = nil
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            scope: "provider-supplied-scope",
+            redirect_handler: ->(url) { captured = url },
+            callback_handler: -> {
+              [
+                "code-1",
+                URI.decode_www_form(captured.query).to_h["state"],
+              ]
+            },
+          )
+
+          Flow.new(provider: provider).run!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+            scope: nil,
+          )
+
+          authorized_params = URI.decode_www_form(captured.query).to_h
+          assert_equal(
+            "mcp:read mcp:write",
+            authorized_params["scope"],
+            "PRM scopes_supported must win over provider.scope when challenge scope is absent",
+          )
+        end
+
+        def test_resolve_scope_falls_back_to_provider_scope_when_prm_omits_scopes_supported
+          captured = nil
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            scope: "provider-fallback",
+            redirect_handler: ->(url) { captured = url },
+            callback_handler: -> {
+              [
+                "code-1",
+                URI.decode_www_form(captured.query).to_h["state"],
+              ]
+            },
+          )
+
+          Flow.new(provider: provider).run!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+            scope: nil,
+          )
+
+          authorized_params = URI.decode_www_form(captured.query).to_h
+          assert_equal(
+            "provider-fallback",
+            authorized_params["scope"],
+            "provider.scope is the last-resort fallback when neither challenge nor PRM supplies one",
+          )
+        end
+
+        def test_token_endpoint_defaults_to_client_secret_basic_for_confidential_clients
+          captured_authorization = nil
+          captured_form = nil
+          stub_request(:post, "#{@auth_base}/token").to_return do |req|
+            captured_authorization = req.headers["Authorization"]
+            captured_form = URI.decode_www_form(req.body).to_h
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(access_token: "tok", token_type: "Bearer"),
+            }
+          end
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          # Confidential pre-registered client without `token_endpoint_auth_method`.
+          provider.save_client_information(
+            "client_id" => "preregistered",
+            "client_secret" => "s3cret",
+          )
+          provider.save_tokens("access_token" => "stale", "refresh_token" => "live-rt")
+
+          Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          expected = Base64.strict_encode64("preregistered:s3cret")
+          assert_equal(
+            "Basic #{expected}",
+            captured_authorization,
+            "default to client_secret_basic per RFC 6749 §2.3.1 and TS/Python SDK convention",
+          )
+          refute(
+            captured_form.key?("client_secret"),
+            "client_secret must not be duplicated in the form when sent via Basic auth",
+          )
+        end
+
+        def test_run_blocks_percent_encoded_dot_segment_bypass_in_server_url
+          # Same audience-binding bypass as the literal `..` case, but using
+          # the percent-encoded form `%2e%2e`. RFC 3986 Section 6.2.2.2 normalization must
+          # decode `%2e`/`%2E` before resolving dot-segments.
+          stub_request(:get, "https://srv.example.com/api/%2e%2e/evil/.well-known/oauth-protected-resource")
+            .to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(
+                resource: "https://srv.example.com/api",
+                authorization_servers: [@auth_base],
+              ),
+            )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(
+              server_url: "https://srv.example.com/api/%2e%2e/evil",
+              resource_metadata_url: "https://srv.example.com/api/%2e%2e/evil/.well-known/oauth-protected-resource",
+            )
+          end
+
+          assert_match(/resource/i, error.message)
+        end
+
+        def test_run_blocks_dot_segment_bypass_in_server_url
+          # An attacker-supplied server URL like "/api/../evil" must not be
+          # treated as covered by a PRM whose resource is the more privileged
+          # "/api". Canonicalization resolves the dot-segments so the bypass
+          # is detected.
+          stub_request(:get, "https://srv.example.com/api/../evil/.well-known/oauth-protected-resource")
+            .to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(
+                resource: "https://srv.example.com/api",
+                authorization_servers: [@auth_base],
+              ),
+            )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(
+              server_url: "https://srv.example.com/api/../evil",
+              resource_metadata_url: "https://srv.example.com/api/../evil/.well-known/oauth-protected-resource",
+            )
+          end
+
+          assert_match(/resource/i, error.message)
+        end
+
+        def test_run_strips_userinfo_from_resource_parameter_when_server_url_carries_credentials
+          # `Discovery.canonicalize_url` drops `user:pass@`, so the RFC 8707
+          # `resource` parameter sent on both the authorization request and
+          # the token exchange must contain only the origin + path: shipping
+          # the raw URL would hand the user's credentials to the authorization
+          # server.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(authorization_servers: [@auth_base]),
+          )
+
+          captured_url = nil
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { captured_url = url },
+            callback_handler: -> {
+              [
+                "test-auth-code",
+                URI.decode_www_form(captured_url.query).to_h.fetch("state"),
+              ]
+            },
+          )
+
+          Flow.new(provider: provider).run!(
+            server_url: "https://hunter2:t0psecret@srv.example.com/mcp",
+            resource_metadata_url: @prm_url,
+          )
+
+          query = URI.decode_www_form(captured_url.query).to_h
+          assert_equal("https://srv.example.com/mcp", query["resource"])
+          refute_includes(query["resource"], "hunter2")
+          refute_includes(query["resource"], "t0psecret")
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            form["resource"] == "https://srv.example.com/mcp"
+          end
+        end
+
+        def test_run_resource_mismatch_error_does_not_leak_userinfo
+          # When PRM advertises a `resource` that does not cover the MCP server
+          # URL, the mismatch error message MUST cite the canonicalized URLs so
+          # that `user:pass@` cannot reach logs, stack traces, or exception
+          # reporters.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://hunter2:t0psecret@evil.example.com/mcp",
+              authorization_servers: [@auth_base],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(
+              server_url: "https://hunter2:t0psecret@srv.example.com/mcp",
+              resource_metadata_url: @prm_url,
+            )
+          end
+
+          refute_includes(error.message, "hunter2")
+          refute_includes(error.message, "t0psecret")
+        end
+
+        def test_run_blocks_cross_tenant_query_bypass
+          # A hijacked PRM that advertises a different tenant's `resource`
+          # MUST cause an audience-binding failure rather than allowing
+          # the client to mint a token bound to the attacker's tenant for
+          # the victim's MCP server.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp?tenant=evil",
+              authorization_servers: [@auth_base],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(
+              server_url: "https://srv.example.com/mcp?tenant=victim",
+              resource_metadata_url: @prm_url,
+            )
+          end
+
+          assert_match(/resource/i, error.message)
+        end
+
+        def test_run_raises_on_resource_mismatch
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://evil.example.com/mcp",
+              authorization_servers: [@auth_base],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/resource/i, error.message)
+        end
+
+        def test_run_sends_server_url_as_resource_when_prm_omits_it
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(authorization_servers: [@auth_base]),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:url] = url
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          query = URI.decode_www_form(state_holder[:url].query).to_h
+          assert_equal("https://srv.example.com/mcp", query["resource"])
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["resource"] == "https://srv.example.com/mcp"
+          end
+        end
+      end
+    end
+  end
+end
