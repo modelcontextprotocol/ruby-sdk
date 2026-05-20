@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-19
+
+### Added
+
+- Add OAuth 2.1 client support for MCP authorization flow (#353)
+
+### Fixed
+
+- Validate `MCP-Protocol-Version` header in `StreamableHTTPTransport` (#347)
+- Reject duplicate `initialize` requests (#350)
+- Reject non-Hash JSON-RPC bodies in `StreamableHTTPTransport` (#354)
+
 ## [0.16.0] - 2026-05-14
 
 ### Added
