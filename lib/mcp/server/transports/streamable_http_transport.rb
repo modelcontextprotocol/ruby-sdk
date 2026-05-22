@@ -426,7 +426,7 @@ module MCP
             return success_response
           end
 
-          return missing_session_id_response unless (session_id = request.env["HTTP_MCP_SESSION_ID"])
+          return missing_session_id_response unless (session_id = extract_session_id(request))
           return session_not_found_response unless session_exists?(session_id)
 
           protocol_version_error = validate_protocol_version_header(request)
