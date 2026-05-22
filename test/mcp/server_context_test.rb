@@ -67,6 +67,30 @@ module MCP
       assert_raises(NoMethodError) { server_context.list_roots }
     end
 
+    test "ServerContext#ping delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:ping).with(related_request_id: nil).returns({})
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.ping
+
+      assert_equal({}, result)
+    end
+
+    test "ServerContext#ping raises NoMethodError when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      assert_raises(NoMethodError) { server_context.ping }
+    end
+
     test "ServerContext#create_sampling_message delegates to notification_target over context" do
       notification_target = mock
       notification_target.expects(:create_sampling_message).with(

@@ -106,6 +106,14 @@ module MCP
       send_to_transport_request(Methods::ROOTS_LIST, nil, related_request_id: related_request_id)
     end
 
+    # Sends a `ping` request scoped to this session.
+    def ping(related_request_id: nil)
+      result = send_to_transport_request(Methods::PING, nil, related_request_id: related_request_id)
+      raise Server::ValidationError, "Response validation failed: invalid `result`" unless result.is_a?(Hash)
+
+      result
+    end
+
     # Sends a `sampling/createMessage` request scoped to this session.
     def create_sampling_message(related_request_id: nil, **kwargs)
       params = @server.build_sampling_params(client_capabilities, **kwargs)

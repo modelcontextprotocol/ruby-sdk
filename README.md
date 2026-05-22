@@ -1253,6 +1253,25 @@ A `ping` request has no parameters, and the receiver MUST respond promptly with 
 Servers respond to incoming `ping` requests automatically - no setup is required.
 Any `MCP::Server` instance replies with an empty result.
 
+Servers can also send `ping` requests to the client via `ServerSession#ping`.
+Inside a tool handler that receives `server_context:`, call `ping` on it:
+
+```ruby
+class HealthCheckTool < MCP::Tool
+  description "Verifies the client is still responsive"
+
+  def self.call(server_context:)
+    server_context.ping # => {} on success
+
+    MCP::Tool::Response.new([{ type: "text", text: "client is alive" }])
+  end
+end
+```
+
+`#ping` raises `MCP::Server::ValidationError` when the client returns a `result`
+that is not a Hash. Transport-level errors (e.g., the client returning a JSON-RPC error)
+propagate as exceptions raised by the transport layer.
+
 #### Client-Side
 
 `MCP::Client` exposes `ping` to send a ping to the server:
