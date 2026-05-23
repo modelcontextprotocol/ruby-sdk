@@ -504,7 +504,7 @@ module MCP
 
         def parse_accept_header(header)
           header.split(",").map do |part|
-            part.split(";").first.strip
+            part.split(";").first.strip.downcase
           end
         end
 
