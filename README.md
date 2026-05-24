@@ -1755,7 +1755,7 @@ This class supports:
 
 - Liveness check via the `ping` method (`MCP::Client#ping`)
 - Tool listing via the `tools/list` method (`MCP::Client#tools`)
-- Tool invocation via the `tools/call` method (`MCP::Client#call_tools`)
+- Tool invocation via the `tools/call` method (`MCP::Client#call_tool`)
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
 - Resource template listing via the `resources/templates/list` method (`MCP::Client#resource_templates`)
 - Resource reading via the `resources/read` method (`MCP::Client#read_resource`)
