@@ -104,8 +104,16 @@ module MCP
           refresh_token = read_token("refresh_token")
           raise AuthorizationError, "Cannot refresh: no refresh_token in provider storage." unless refresh_token
 
-          client_info = @provider.client_information
-          unless client_info.is_a?(Hash) && client_info_required_value(client_info, "client_id")
+          stored_client_info = @provider.client_information
+          have_stored_client_info = stored_client_info.is_a?(Hash) && client_info_required_value(stored_client_info, "client_id")
+
+          # A CIMD-configured provider stores no `client_information` on purpose
+          # (the CIMD URL is re-resolved against the live AS metadata on every flow).
+          # Allow refresh to proceed in that case so the `refresh_token` obtained via
+          # the CIMD flow remains usable.
+          have_cimd_url = !@provider.client_id_metadata_document_url.nil?
+
+          unless have_stored_client_info || have_cimd_url
             raise AuthorizationError, "Cannot refresh: no client_information in provider storage."
           end
 
@@ -125,6 +133,18 @@ module MCP
           as_metadata = fetch_authorization_server_metadata(issuer_url: authorization_server)
           ensure_issuer_matches!(expected: authorization_server, returned: as_metadata["issuer"])
           ensure_secure_endpoints!(as_metadata)
+
+          client_info = if have_stored_client_info
+            # Pre-registered / DCR-issued `client_information` always wins: if the user picked an explicit identity,
+            # do not silently swap it for the CIMD URL even when the AS also advertises CIMD support.
+            stored_client_info
+          elsif as_metadata["client_id_metadata_document_supported"] == true
+            { "client_id" => @provider.client_id_metadata_document_url }
+          else
+            raise AuthorizationError,
+              "Cannot refresh: provider has a CIMD URL but the authorization server no longer advertises " \
+                "`client_id_metadata_document_supported: true`."
+          end
 
           new_tokens = exchange_refresh_token(
             as_metadata: as_metadata,
@@ -284,6 +304,24 @@ module MCP
         def ensure_client_registered(as_metadata:)
           existing = @provider.client_information
           return existing if existing.is_a?(Hash) && client_info_required_value(existing, "client_id")
+
+          # Per the MCP authorization specification and `draft-ietf-oauth-client-id-metadata-document`,
+          # if the authorization server advertises Client ID Metadata Document support and the provider has
+          # a CIMD URL configured, use the URL as the OAuth `client_id` and skip Dynamic Client Registration.
+          #
+          # The `== true` comparison is intentional: only a JSON `boolean` `true` opts the flow in.
+          # A string `"false"`, an empty Hash, or any other truthy value MUST NOT be treated as CIMD support,
+          # otherwise a misconfigured AS could trick the client into using the CIMD `client_id` against
+          # a server that has not actually adopted it.
+          #
+          # The CIMD `client_id` is NOT persisted to storage. The AS may later stop advertising CIMD support
+          # (or the operator may rotate the CIMD URL), and a stale `client_information` entry would otherwise
+          # keep sending the old CIMD URL forever. Re-evaluating on every flow re-reads the current AS metadata
+          # and the current `provider.client_id_metadata_document_url`.
+          cimd_url = @provider.client_id_metadata_document_url
+          if cimd_url && as_metadata["client_id_metadata_document_supported"] == true
+            return { "client_id" => cimd_url }
+          end
 
           registration_endpoint = as_metadata["registration_endpoint"]
           unless registration_endpoint

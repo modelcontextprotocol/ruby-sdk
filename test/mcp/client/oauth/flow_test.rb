@@ -547,6 +547,276 @@ module MCP
           assert_not_requested(:post, "#{@auth_base}/register")
         end
 
+        def test_run_skips_dcr_when_as_supports_cimd_and_provider_has_cimd_url
+          # When the AS advertises Client ID Metadata Document support and the provider was configured with a CIMD URL,
+          # the SDK uses the URL as the OAuth `client_id` and does not call /register.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: true,
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          captured_authorization_url = nil
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              captured_authorization_url = url
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_not_requested(:post, "#{@auth_base}/register")
+          query = URI.decode_www_form(captured_authorization_url.query).to_h
+          assert_equal("https://app.example.com/client-metadata.json", query["client_id"])
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["client_id"] == "https://app.example.com/client-metadata.json"
+          end
+          # The CIMD URL is NOT persisted to storage: AS metadata is re-read on every flow,
+          # so a later AS that no longer advertises CIMD will not be sent a stale CIMD `client_id`.
+          assert_nil(provider.client_information)
+        end
+
+        def test_run_falls_back_to_dcr_when_provider_has_cimd_url_but_as_does_not_advertise_support
+          # The provider may carry a CIMD URL across multiple servers; if a particular AS does not advertise CIMD support,
+          # the SDK must still register via DCR rather than send an unsupported `client_id`.
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_equal("test-client", provider.client_information["client_id"])
+        end
+
+        def test_run_does_not_enter_cimd_branch_when_support_advertised_as_string_false
+          # A misconfigured AS that ships `"client_id_metadata_document_supported": "false"`
+          # is truthy in Ruby. The SDK must NOT route through CIMD on truthy non-boolean values;
+          # only a JSON `boolean true` opts in.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: "false",
+            ),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_equal("test-client", provider.client_information["client_id"])
+        end
+
+        def test_run_does_not_enter_cimd_branch_when_support_advertised_as_string_true
+          # Mirror of the previous test for the other truthy non-boolean value:
+          # `"true"` is also a string, not the JSON boolean the spec requires.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: "true",
+            ),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+        end
+
+        def test_run_does_not_persist_cimd_client_id_so_later_flow_recovers_when_as_drops_support
+          # Regression for the storage side-effect: if the SDK persisted the CIMD URL on the first flow,
+          # a second flow against an AS that no longer advertises CIMD support would still send the URL as
+          # the `client_id` and skip DCR. Re-running with the same provider must honour the updated AS metadata.
+          shared_storage = InMemoryStorage.new
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            storage: shared_storage,
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+
+          # First flow: AS supports CIMD, so DCR is skipped.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: true,
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "test-client"),
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          assert_nil(shared_storage.client_information, "CIMD client_id must not be persisted")
+
+          # Second flow: AS no longer advertises CIMD. The SDK must register via DCR rather than reuse a stale CIMD URL.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          assert_equal("test-client", shared_storage.client_information["client_id"])
+        end
+
+        def test_run_skips_cimd_when_pre_registered_client_information_exists
+          # Pre-registered `client_information` wins over CIMD: the user explicitly chose a DCR-style identity,
+          # so neither DCR nor the CIMD URL should overwrite it.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: true,
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          captured_authorization_url = nil
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              captured_authorization_url = url
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+          provider.save_client_information("client_id" => "preregistered-client")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          query = URI.decode_www_form(captured_authorization_url.query).to_h
+          assert_equal("preregistered-client", query["client_id"])
+        end
+
         def test_run_uses_basic_auth_when_token_endpoint_auth_method_is_client_secret_basic
           state_holder = {}
           provider = Provider.new(
@@ -874,6 +1144,170 @@ module MCP
           assert_equal("fresh-at", provider.access_token)
           # New response did not include a refresh_token, so the old one is preserved (RFC 6749 Section 6).
           assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_uses_cimd_url_as_client_id_when_provider_has_cimd_and_as_supports_it
+          # Regression: the CIMD branch in `ensure_client_registered` does not persist `client_information`,
+          # so a refresh call that requires stored client info would always fail after a CIMD-only flow.
+          # `refresh!` must reconstruct the CIMD `client_id` from live AS metadata + the provider URL on every call.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: true,
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+          stub_request(:post, "#{@auth_base}/token").with(
+            body: hash_including(
+              "grant_type" => "refresh_token",
+              "refresh_token" => "saved-rt",
+              "client_id" => "https://app.example.com/client-metadata.json",
+            ),
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "fresh-at", token_type: "Bearer", expires_in: 3600),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          result = Flow.new(provider: provider).refresh!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+          )
+
+          assert_equal(:refreshed, result)
+          assert_equal("fresh-at", provider.access_token)
+          assert_nil(provider.client_information, "refresh must not persist a CIMD client_information entry")
+        end
+
+        def test_refresh_raises_when_provider_has_cimd_url_but_as_no_longer_advertises_support
+          # If the AS later drops CIMD support and the provider has neither a stored `client_information` nor
+          # an alternative identity, refresh has no way to authenticate. Fail loudly rather than send a CIMD
+          # `client_id` the AS no longer recognises.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+          assert_match(/client_id_metadata_document_supported/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_refresh_prefers_stored_client_information_over_cimd_url
+          # Even when both are available, an explicitly stored `client_information` wins.
+          # CIMD MUST NOT silently override it.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: true,
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/token").with(
+            body: hash_including(
+              "grant_type" => "refresh_token",
+              "client_id" => "preregistered-client",
+            ),
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "fresh-at", token_type: "Bearer", expires_in: 3600),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+          provider.save_client_information("client_id" => "preregistered-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal("fresh-at", provider.access_token)
+        end
+
+        def test_refresh_raises_when_cimd_support_advertised_as_string_true
+          # Mirror of the `run!` strict-boolean tests on the refresh path: a truthy non-boolean value
+          # such as the string `"true"` must NOT be treated as CIMD support. With no stored `client_information`
+          # and no genuine CIMD support, refresh has no identity to authenticate with.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              client_id_metadata_document_supported: "true",
+            ),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+            client_id_metadata_document_url: "https://app.example.com/client-metadata.json",
+          )
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+          assert_match(/client_id_metadata_document_supported/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
         end
 
         def test_refresh_raises_when_no_refresh_token

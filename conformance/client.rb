@@ -19,6 +19,11 @@ unless scenario && server_url
   abort("Usage: MCP_CONFORMANCE_SCENARIO=<scenario> ruby conformance/client.rb <server-url>")
 end
 
+# URL the conformance harness expects to see as the OAuth `client_id` for the `auth/basic-cimd` scenario
+# when the AS advertises `client_id_metadata_document_supported`. The harness does not fetch the document,
+# only matches the value, so the URL does not need to resolve.
+CONFORMANCE_CIMD_URL = "https://conformance-test.local/client-metadata.json"
+
 # The conformance harness optionally injects scenario-specific data via
 # the `MCP_CONFORMANCE_CONTEXT` environment variable as a JSON document. The shape is
 # defined by the harness, not the MCP spec, and has varied between versions:
@@ -50,7 +55,7 @@ end
 # non-interactively against the conformance test's auth server. The conformance
 # `/authorize` endpoint redirects synchronously to `redirect_uri` with
 # `code=test-auth-code`, so we follow it manually instead of opening a browser.
-def build_oauth_provider(context)
+def build_oauth_provider(context, scenario:)
   callback_holder = {}
   redirect_uri = "http://localhost:0/callback"
 
@@ -90,10 +95,11 @@ def build_oauth_provider(context)
     redirect_handler: redirect_handler,
     callback_handler: callback_handler,
     storage: storage,
+    client_id_metadata_document_url: (scenario == "auth/basic-cimd" ? CONFORMANCE_CIMD_URL : nil),
   )
 end
 
-oauth = scenario.start_with?("auth/") ? build_oauth_provider(conformance_context) : nil
+oauth = scenario.start_with?("auth/") ? build_oauth_provider(conformance_context, scenario: scenario) : nil
 transport = MCP::Client::HTTP.new(url: server_url, oauth: oauth)
 client = MCP::Client.new(transport: transport)
 client.connect(client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION })

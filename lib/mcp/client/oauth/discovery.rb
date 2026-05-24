@@ -183,6 +183,50 @@ module MCP
             false
           end
 
+          # Returns true when `url` satisfies the structural requirements for
+          # a Client ID Metadata Document URL per the MCP 2025-11-25
+          # authorization specification and `draft-ietf-oauth-client-id-metadata-document-00`.
+          #
+          # Spec-required:
+          #
+          # - scheme MUST be `https` (the loopback-`http` carve-out used for discovery does not apply:
+          #   the document URL is sent verbatim to the authorization server as the OAuth `client_id`
+          #   and travels off-loopback)
+          # - host MUST be present
+          # - path MUST be non-empty and MUST NOT be the root (`/`); the document is a discrete resource,
+          #   not the origin
+          # - URL MUST NOT carry a fragment or userinfo: a fragment is not sent to the server, and userinfo
+          #   would leak credentials into every `client_id` log line
+          # - path MUST be already free of `.` / `..` dot segments after percent-decoding, so two URLs with
+          #   the same effective path do not produce different `client_id` strings
+          #
+          # SDK policy (stricter than the draft):
+          #
+          # - URL MUST NOT carry a query string. The draft marks query components only SHOULD NOT include,
+          #   but different encodings of the same query (`?a=1&b=2` vs `?b=2&a=1`) would yield distinct
+          #   `client_id` values for the same logical document.
+          def client_id_metadata_document_url?(url)
+            return false if url.nil? || url.to_s.empty?
+
+            uri = URI.parse(url.to_s)
+            return false unless uri.scheme&.downcase == "https"
+            return false if uri.host.nil? || uri.host.empty?
+            return false unless uri.fragment.nil?
+            return false unless uri.query.nil?
+            return false if uri.respond_to?(:user) && (uri.user || uri.password)
+
+            path = uri.path.to_s
+            return false if path.empty? || path == "/"
+
+            decoded = path.gsub(/%2[eE]/, ".")
+            segments = decoded.split("/", -1)
+            return false if segments.any? { |segment| segment == "." || segment == ".." }
+
+            true
+          rescue URI::InvalidURIError
+            false
+          end
+
           # Like `canonicalize_url` but also strips query string, fragment, and
           # userinfo. This variant is used for identity comparison against
           # the request URL Faraday actually sends, which differs from the value

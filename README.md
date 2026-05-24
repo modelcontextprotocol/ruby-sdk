@@ -1958,6 +1958,17 @@ Optional keyword arguments:
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
 - `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
   which keeps credentials in process memory only.
+- `client_id_metadata_document_url`: URL where you publish a Client ID Metadata Document
+  (`draft-ietf-oauth-client-id-metadata-document` and the MCP authorization specification).
+  When the authorization server advertises `client_id_metadata_document_supported: true`,
+  the SDK uses this URL as the OAuth `client_id` and skips Dynamic Client Registration.
+  Spec-required: the URL MUST be `https://` with a non-root path and MUST NOT include a fragment,
+  userinfo, or `.`/`..` segments. The SDK additionally rejects query strings (the draft only marks
+  them SHOULD NOT include, but the SDK refuses to send any) for `client_id` stability.
+  Any of these failures raise `Provider::InvalidClientIDMetadataDocumentURLError`. The CIMD document
+  served at the URL is a separate JSON artifact from the `client_metadata` keyword above:
+  the DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include
+  `client_id` set to the document URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
 
 To persist credentials across restarts, supply your own storage:
 
