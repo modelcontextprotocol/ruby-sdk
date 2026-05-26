@@ -1,10 +1,41 @@
 # frozen_string_literal: true
 
+require "digest"
 require "json-schema"
 
 module MCP
   class Tool
     class Schema
+      # Metaschema validation depends only on schema content, so a given schema
+      # never needs to be validated more than once. Caching the result lets repeated
+      # (e.g. dynamically rebuilt) schemas skip the costly traversal.
+      class ValidationCache
+        DEFAULT_MAX_SIZE = 1000
+
+        def initialize(max_size: DEFAULT_MAX_SIZE)
+          @max_size = max_size
+          @entries = {}
+          @mutex = Mutex.new
+        end
+
+        def validated?(key)
+          @mutex.synchronize { @entries.key?(key) }
+        end
+
+        def store(key)
+          @mutex.synchronize do
+            @entries.delete(key)
+            @entries[key] = true
+            @entries.shift while @entries.size > @max_size
+          end
+        end
+
+        def clear
+          @mutex.synchronize { @entries.clear }
+        end
+      end
+      VALIDATION_CACHE = ValidationCache.new
+
       # JSON Schema 2020-12 is the default dialect for MCP schema definitions
       # per MCP 2025-11-25 (SEP-1613). Note: emission only — runtime validation
       # is still performed against the JSON Schema draft-04 metaschema because
@@ -36,6 +67,14 @@ module MCP
       end
 
       def validate_schema!
+        target = schema_for_validation
+
+        # `max_nesting: false` because normalization uses `JSON.dump` (no nesting limit),
+        # so the default `JSON.generate` limit would raise on a deeply nested schema that
+        # the initializer already accepted.
+        key = Digest::SHA256.hexdigest(JSON.generate(target, max_nesting: false))
+        return if VALIDATION_CACHE.validated?(key)
+
         gem_path = File.realpath(Gem.loaded_specs["json-schema"].full_gem_path)
         schema_reader = JSON::Schema::Reader.new(
           accept_uri: false,
@@ -45,10 +84,12 @@ module MCP
         # Converts metaschema to a file URI for cross-platform compatibility
         metaschema_uri = JSON::Util::URI.file_uri(metaschema_path.expand_path.cleanpath.to_s.tr("\\", "/"))
         metaschema = metaschema_uri.to_s
-        errors = JSON::Validator.fully_validate(metaschema, schema_for_validation, schema_reader: schema_reader)
+        errors = JSON::Validator.fully_validate(metaschema, target, schema_reader: schema_reader)
         if errors.any?
           raise ArgumentError, "Invalid JSON Schema: #{errors.join(", ")}"
         end
+
+        VALIDATION_CACHE.store(key)
       end
 
       # The `json-schema` gem's draft-04 validator cannot resolve newer or unknown `$schema`
