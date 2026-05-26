@@ -13,10 +13,14 @@ module MCP
 
       attr_reader :schema
 
-      def initialize(schema = {})
-        @schema = JSON.parse(JSON.dump(schema), symbolize_names: true)
-        @schema[:type] ||= "object"
-        validate_schema!
+      def initialize(schema = {}, validate = true)
+        if validate
+          @schema = JSON.parse(JSON.dump(schema), symbolize_names: true)
+          @schema[:type] ||= "object"
+          validate_schema!
+        else
+          @schema = schema
+        end
       end
 
       def ==(other)
