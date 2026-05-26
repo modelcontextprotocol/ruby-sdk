@@ -12,4 +12,3 @@ client:
   - auth/client-credentials-jwt
   - auth/client-credentials-basic
   - auth/cross-app-access-complete-flow
-  - auth/offline-access-scope

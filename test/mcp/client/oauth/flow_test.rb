@@ -68,6 +68,34 @@ module MCP
           WebMock.reset!
         end
 
+        # Runs the full authorization flow and returns the `scope` query parameter
+        # sent on the authorization request. The caller stubs the AS metadata;
+        # this helper supplies a provider whose `grant_types` and optional pre-set
+        # `scope` drive the SEP-2207 offline_access decision.
+        def capture_authorization_scope(grant_types:, provider_scope: nil)
+          captured_scope = nil
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: grant_types,
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              query = URI.decode_www_form(url.query).to_h
+              captured_scope = query["scope"]
+              state_holder[:state] = query.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            scope: provider_scope,
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          captured_scope
+        end
+
         def test_run_completes_full_authorization_flow
           captured_authorization_url = nil
           state_value = nil
@@ -110,6 +138,160 @@ module MCP
               !form["code_verifier"].to_s.empty? &&
               form["resource"] == "https://srv.example.com/mcp"
           end
+        end
+
+        def test_run_requests_offline_access_when_advertised_and_refresh_token_grant_declared
+          # SEP-2207: a client that declares the `refresh_token` grant type requests `offline_access`
+          # when the AS advertises it, so it can obtain a refresh token.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic", "offline_access"],
+            ),
+          )
+
+          captured = capture_authorization_scope(grant_types: ["authorization_code", "refresh_token"])
+
+          assert_includes(captured.split, "offline_access")
+        end
+
+        def test_run_does_not_request_offline_access_when_refresh_token_grant_not_declared
+          # The AS advertises offline_access, but the client did not opt into refresh tokens,
+          # so the scope is not requested.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic", "offline_access"],
+            ),
+          )
+
+          captured = capture_authorization_scope(grant_types: ["authorization_code"])
+
+          refute_includes(captured.to_s.split, "offline_access")
+        end
+
+        def test_run_does_not_request_offline_access_when_server_does_not_advertise_it
+          # SEP-2207 forbids requesting offline_access when the AS does not list it,
+          # even if the client declared the refresh_token grant type.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic", "mcp:read"],
+            ),
+          )
+
+          captured = capture_authorization_scope(grant_types: ["authorization_code", "refresh_token"])
+
+          refute_includes(captured.to_s.split, "offline_access")
+        end
+
+        def test_run_strips_offline_access_from_provider_scope_when_server_does_not_advertise_it
+          # SDK policy: even when `offline_access` reaches the resolved scope from a provider-supplied scope
+          # (or a challenge / PRM scope), do not propagate it to the AS when the AS does not advertise the scope.
+          # SEP-2207 itself only says clients should not request unsupported scopes; this strip is the SDK's
+          # defensive layer against misbehaving resource servers and misconfigured PRMs that surface `offline_access`
+          # even though the AS has not opted in.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic"],
+            ),
+          )
+
+          captured = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            provider_scope: "mcp:basic offline_access",
+          )
+
+          refute_includes(captured.to_s.split, "offline_access")
+          assert_includes(captured.to_s.split, "mcp:basic")
+        end
+
+        def test_run_strips_sole_offline_access_scope_when_server_does_not_advertise_it
+          # When stripping leaves an empty scope, no `scope` parameter is sent.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic"],
+            ),
+          )
+
+          captured = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            provider_scope: "offline_access",
+          )
+
+          assert_nil(captured)
+        end
+
+        def test_run_does_not_duplicate_offline_access_already_in_scope
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:basic", "offline_access"],
+            ),
+          )
+
+          captured = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            provider_scope: "mcp:basic offline_access",
+          )
+
+          assert_equal(1, captured.split.count("offline_access"))
         end
 
         def test_run_raises_on_state_mismatch

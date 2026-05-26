@@ -59,6 +59,7 @@ module MCP
           client_info = ensure_client_registered(as_metadata: as_metadata)
 
           effective_scope = resolve_scope(scope: scope, prm: prm)
+          effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
           pkce = PKCE.generate
           state = SecureRandom.urlsafe_base64(32)
 
@@ -401,6 +402,48 @@ module MCP
           return @provider.scope if @provider.scope && !@provider.scope.empty?
 
           nil
+        end
+
+        # Applies the SDK's `offline_access` policy to the resolved scope. The policy has two halves:
+        #
+        # - Spec (SEP-2207): a client that wants a refresh token (signalled here by listing
+        #   `refresh_token` in its registered `grant_types`) MAY request `offline_access`
+        #   when the authorization server advertises it in metadata `scopes_supported`.
+        #   When the server advertises it and the client opted in, add it if absent.
+        #
+        # - SDK policy (defensive hardening): when the server does NOT advertise `offline_access`,
+        #   strip it from the resolved scope no matter where it came from (the `WWW-Authenticate` challenge,
+        #   PRM `scopes_supported`, or the provider-supplied scope). SEP-2207 only says clients SHOULD NOT
+        #   request unsupported scopes, but a misbehaving RS that includes `offline_access` in its challenge,
+        #   or a misconfigured PRM that lists it under `scopes_supported`, would otherwise propagate into
+        #   the authorization request even though the AS will not honour it. Stripping here keeps the SDK's
+        #   own request consistent with the AS's advertisement.
+        #
+        # Returns `nil` when the result is empty so `build_authorization_url` omits the `scope` parameter entirely.
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2207
+        def normalize_offline_access_scope(scope, as_metadata:)
+          scopes = scope.to_s.split
+
+          if server_supports_offline_access?(as_metadata)
+            scopes << "offline_access" if wants_refresh_token? && !scopes.include?("offline_access")
+          else
+            scopes.delete("offline_access")
+          end
+
+          scopes.empty? ? nil : scopes.join(" ")
+        end
+
+        def server_supports_offline_access?(as_metadata)
+          supported = as_metadata["scopes_supported"]
+
+          supported.is_a?(Array) && supported.include?("offline_access")
+        end
+
+        def wants_refresh_token?
+          metadata = @provider.client_metadata
+          grant_types = metadata[:grant_types] || metadata["grant_types"]
+
+          Array(grant_types).include?("refresh_token")
         end
 
         def build_authorization_url(as_metadata:, client_id:, scope:, state:, code_challenge:, resource:)
