@@ -185,6 +185,7 @@ module MCP
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
         oauth_retried = false
+        step_up_retried = false
 
         begin
           response = client.post("", request, session_headers)
@@ -217,6 +218,19 @@ module MCP
             original_error: e,
           )
         rescue Faraday::ForbiddenError => e
+          # OAuth 2.0 step-up: a 403 carrying `error="insufficient_scope"` in
+          # the Bearer challenge means the existing access token is valid
+          # but lacks scopes the server now requires for this operation.
+          # Re-run the full authorization flow with the escalated scope from
+          # the challenge and retry once. A plain 403 without the challenge is
+          # surfaced unchanged.
+          if @oauth && !step_up_retried && insufficient_scope_challenge?(e)
+            step_up_retried = true
+            run_step_up_flow!(forbidden_error: e)
+
+            retry
+          end
+
           raise RequestHandlerError.new(
             "You are forbidden to make #{method} requests",
             { method: method, params: params },
@@ -337,16 +351,63 @@ module MCP
       #
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#error-handling
       def run_oauth_flow!(unauthorized_error:)
-        response = unauthorized_error.response || {}
-        response_headers = response[:headers] || {}
-        www_authenticate = response_headers["www-authenticate"] || response_headers["WWW-Authenticate"]
-        params = MCP::Client::OAuth::Discovery.parse_www_authenticate(www_authenticate)
-
+        params = parse_www_authenticate_from_error(unauthorized_error)
         flow = MCP::Client::OAuth::Flow.new(provider: @oauth)
-        if attempt_refresh(flow: flow, resource_metadata_url: params["resource_metadata"])
-          return
-        end
+        return if attempt_refresh(flow: flow, resource_metadata_url: params["resource_metadata"])
 
+        run_full_authorization_flow!(flow: flow, params: params)
+      end
+
+      # Drives a full Authorization Code + PKCE flow without first attempting
+      # to refresh the access token. Used for the MCP scope-selection-strategy
+      # step-up path: the provider already holds a valid access token,
+      # but the server returned a 403 with
+      # `WWW-Authenticate: ... error="insufficient_scope", scope="..."`
+      # per RFC 6750 Section 3.1. Refreshing the existing token would re-issue
+      # the same scope set the server already rejected, so the SDK must run
+      # a fresh authorization request. The request asks for the union of
+      # the currently granted scope and the newly demanded scope; otherwise
+      # the caller would lose previously held scopes and trigger another step-up
+      # on the next operation that needs them.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#scope-selection-strategy
+      def run_step_up_flow!(forbidden_error:)
+        params = parse_www_authenticate_from_error(forbidden_error)
+        flow = MCP::Client::OAuth::Flow.new(provider: @oauth)
+        params = params.merge("scope" => escalated_step_up_scope(params["scope"]))
+
+        run_full_authorization_flow!(flow: flow, params: params)
+      end
+
+      # Returns the space-separated union of the currently granted scope (read
+      # from the stored token response per RFC 6749 Section 5.1) and the scope
+      # demanded by the step-up challenge. Duplicates are collapsed; order
+      # follows first appearance so existing scopes precede the newly added
+      # ones. Returns `nil` when neither side carries a scope so
+      # `build_authorization_url` omits the `scope` parameter entirely.
+      def escalated_step_up_scope(challenge_scope)
+        tokens = @oauth.tokens
+        granted = tokens.is_a?(Hash) ? (tokens["scope"] || tokens[:scope]) : nil
+        scopes = [granted, challenge_scope].compact.flat_map { |scope| scope.to_s.split }.uniq
+
+        scopes.empty? ? nil : scopes.join(" ")
+      end
+
+      # True when the response on `forbidden_error` carries a Bearer challenge
+      # with `error="insufficient_scope"` per RFC 6750 Section 3.1 and the MCP
+      # scope-selection-strategy section. A 403 without that signal is not a
+      # step-up challenge and must not trigger re-authorization.
+      def insufficient_scope_challenge?(forbidden_error)
+        parse_www_authenticate_from_error(forbidden_error)["error"] == "insufficient_scope"
+      end
+
+      def parse_www_authenticate_from_error(error)
+        response = error.response || {}
+        response_headers = response[:headers] || {}
+        header = response_headers["www-authenticate"] || response_headers["WWW-Authenticate"]
+        MCP::Client::OAuth::Discovery.parse_www_authenticate(header)
+      end
+
+      def run_full_authorization_flow!(flow:, params:)
         # Use the URL snapshotted at `initialize` time so a post-construction
         # mutation of `@url` cannot redirect PRM/AS discovery and the authorize
         # URL to an attacker-controlled host.

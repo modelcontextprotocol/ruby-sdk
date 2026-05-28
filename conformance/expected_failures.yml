@@ -5,7 +5,6 @@ client:
   # TODO: Elicitation not implemented in Ruby client.
   - elicitation-sep1034-client-defaults
   # TODO: Remaining OAuth/auth scenarios not yet implemented in Ruby client.
-  - auth/scope-step-up
   - auth/2025-03-26-oauth-metadata-backcompat
   - auth/2025-03-26-oauth-endpoint-fallback
   - auth/client-credentials-jwt

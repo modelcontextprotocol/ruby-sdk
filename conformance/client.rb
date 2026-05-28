@@ -116,7 +116,16 @@ when %r|\Aauth/|
   # Auth-only scenarios: the protocol-level checks (PRM/AS metadata, DCR, PKCE, token usage)
   # are observed by the conformance server during `connect` and the subsequent request below.
   # Listing tools forces a second authenticated MCP request so the bearer token usage check fires.
-  client.tools
+  tools = client.tools
+
+  # `auth/scope-step-up` only fires its escalation 403 on `tools/call`, not `tools/list`,
+  # so the client must actually invoke a tool to drive the second authorization request
+  # the scenario asserts on.
+  if scenario == "auth/scope-step-up"
+    tool = tools.find { |t| t.name == "test-tool" } || tools.first
+    abort("No tool exposed by conformance server for #{scenario}") unless tool
+    client.call_tool(tool: tool, arguments: {})
+  end
 else
   abort("Unknown or unsupported scenario: #{scenario}")
 end
