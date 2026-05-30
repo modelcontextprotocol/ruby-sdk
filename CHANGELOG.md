@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-30
+
+### Added
+
+- Support server-to-client `ping` per MCP specification (#358)
+
+### Changed
+
+- Warn on implicit stdio initialization (#338)
+- Cache `Tool::Schema` validation to avoid re-validating identical schemas (#363)
+
+### Fixed
+
+- Fix case-sensitive `Accept` header comparison (#359)
+
 ## [0.17.0] - 2026-05-19
 
 ### Added
