@@ -25,6 +25,16 @@ module MCP
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
       #   `client_information`, and `save_client_information(info)`. Defaults to
       #   an `InMemoryStorage`.
+      # - `client_id_metadata_document_url` - URL where the client publishes its Client ID Metadata Document
+      #   (`draft-ietf-oauth-client-id-metadata-document-00` and the MCP authorization specification).
+      #   When the authorization server advertises `client_id_metadata_document_supported: true`,
+      #   the SDK uses this URL as the OAuth `client_id` and skips Dynamic Client Registration.
+      #   Spec-required: `https://` scheme, a non-root path, and no fragment, userinfo, or `.`/`..` segments.
+      #   The SDK additionally refuses to send query strings (the draft marks them only SHOULD NOT include,
+      #   but different encodings of the same query would yield different `client_id` strings for the same document).
+      #   The document served at the URL is a separate JSON artifact from the `client_metadata` keyword:
+      #   DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include `client_id` set
+      #   to the URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
       class Provider
         # Raised when `Provider#initialize` is called with a `redirect_uri` that
         # is neither HTTPS nor a loopback `http://` URL, per the MCP
@@ -38,12 +48,21 @@ module MCP
         # runtime; failing at construction surfaces the bug earlier.
         class UnregisteredRedirectURIError < ArgumentError; end
 
+        # Raised when `client_id_metadata_document_url` is provided but does not meet
+        # the structural requirements for a Client ID Metadata Document URL:
+        # HTTPS, non-root path, and no fragment, query, userinfo, or `.`/`..` segments.
+        # The CIMD URL is sent to the authorization server as the OAuth `client_id`,
+        # so the same Communication Security guarantee that protects the redirect URI
+        # applies and the value must unambiguously identify the document.
+        class InvalidClientIDMetadataDocumentURLError < ArgumentError; end
+
         attr_reader :client_metadata,
           :redirect_uri,
           :scope,
           :storage,
           :redirect_handler,
-          :callback_handler
+          :callback_handler,
+          :client_id_metadata_document_url
 
         def initialize(
           client_metadata:,
@@ -51,7 +70,8 @@ module MCP
           redirect_handler:,
           callback_handler:,
           scope: nil,
-          storage: nil
+          storage: nil,
+          client_id_metadata_document_url: nil
         )
           unless Discovery.secure_url?(redirect_uri)
             raise InsecureRedirectURIError,
@@ -66,12 +86,20 @@ module MCP
                 "(got #{registered.inspect}); otherwise the authorization server will reject the authorization request."
           end
 
+          if client_id_metadata_document_url && !Discovery.client_id_metadata_document_url?(client_id_metadata_document_url)
+            raise InvalidClientIDMetadataDocumentURLError,
+              "client_id_metadata_document_url #{client_id_metadata_document_url.inspect} must be an https URL " \
+                "with a non-root path and no fragment, query, userinfo, or `.`/`..` segments, " \
+                "per the MCP authorization specification and `draft-ietf-oauth-client-id-metadata-document`."
+          end
+
           @client_metadata = client_metadata
           @redirect_uri = redirect_uri
           @redirect_handler = redirect_handler
           @callback_handler = callback_handler
           @scope = scope
           @storage = storage || InMemoryStorage.new
+          @client_id_metadata_document_url = client_id_metadata_document_url
         end
 
         def access_token

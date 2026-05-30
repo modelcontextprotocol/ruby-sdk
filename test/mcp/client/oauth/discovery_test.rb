@@ -367,6 +367,68 @@ module MCP
           refute(Discovery.secure_url?("not a url"))
         end
 
+        def test_client_id_metadata_document_url_accepts_https_with_path
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com/client-metadata.json"))
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com/path/to/cm"))
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com:8443/cm"))
+        end
+
+        def test_client_id_metadata_document_url_accepts_boundary_forms
+          # An uppercase scheme is `https` after case folding (URIs are scheme-insensitive, RFC 3986 Section 3.1).
+          assert(Discovery.client_id_metadata_document_url?("HTTPS://app.example.com/cm"))
+
+          # A trailing slash and consecutive slashes are non-root, non-dot paths.
+          # RFC 3986 `remove_dot_segments` does not collapse them, so they remain
+          # stable `client_id` strings rather than aliasing another URL.
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com/cm/"))
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com//cm"))
+
+          # The default https port is equivalent to omitting it; either form is a valid origin.
+          assert(Discovery.client_id_metadata_document_url?("https://app.example.com:443/cm"))
+
+          # IPv6 literal hosts and Punycode (IDN) hosts are ordinary hosts.
+          assert(Discovery.client_id_metadata_document_url?("https://[2001:db8::1]/cm"))
+          assert(Discovery.client_id_metadata_document_url?("https://[::1]/cm"))
+          assert(Discovery.client_id_metadata_document_url?("https://xn--e1afmkfd.example.com/cm"))
+        end
+
+        def test_client_id_metadata_document_url_rejects_non_https_schemes
+          refute(Discovery.client_id_metadata_document_url?("http://localhost/cm"))
+          refute(Discovery.client_id_metadata_document_url?("http://app.example.com/cm"))
+          refute(Discovery.client_id_metadata_document_url?("ftp://app.example.com/cm"))
+          refute(Discovery.client_id_metadata_document_url?("file:///cm"))
+        end
+
+        def test_client_id_metadata_document_url_rejects_root_and_empty_path
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com"))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/"))
+        end
+
+        def test_client_id_metadata_document_url_rejects_fragment_query_userinfo
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/cm#frag"))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/cm?x=1"))
+          refute(Discovery.client_id_metadata_document_url?("https://user:pass@app.example.com/cm"))
+          refute(Discovery.client_id_metadata_document_url?("https://user@app.example.com/cm"))
+        end
+
+        def test_client_id_metadata_document_url_rejects_dot_segments
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/./cm"))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/a/../cm"))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/cm/."))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/cm/.."))
+          # Percent-encoded `.` would otherwise let `%2E` and `.` produce
+          # different `client_id` values for the same document.
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/%2E/cm"))
+          refute(Discovery.client_id_metadata_document_url?("https://app.example.com/%2e/cm"))
+        end
+
+        def test_client_id_metadata_document_url_rejects_nil_or_empty_or_malformed
+          refute(Discovery.client_id_metadata_document_url?(nil))
+          refute(Discovery.client_id_metadata_document_url?(""))
+          refute(Discovery.client_id_metadata_document_url?("not a url"))
+          refute(Discovery.client_id_metadata_document_url?("https://"))
+        end
+
         def test_resource_covers_blocks_percent_encoded_dot_segment_bypass
           server = Discovery.canonicalize_url("https://srv.example.com/api/%2e%2e/mcp")
           prm = Discovery.canonicalize_url("https://srv.example.com/api")
