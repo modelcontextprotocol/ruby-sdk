@@ -11,7 +11,7 @@ The `MCP::Client` class provides an interface for interacting with MCP servers.
 **Supported operations:**
 
 - Tool listing (`MCP::Client#tools`) and invocation (`MCP::Client#call_tool`)
-- Resource listing (`MCP::Client#resources`) and reading (`MCP::Client#read_resources`)
+- Resource listing (`MCP::Client#resources`) and reading (`MCP::Client#read_resource`)
 - Resource template listing (`MCP::Client#resource_templates`)
 - Prompt listing (`MCP::Client#prompts`) and retrieval (`MCP::Client#get_prompt`)
 - Completion requests (`MCP::Client#complete`)
