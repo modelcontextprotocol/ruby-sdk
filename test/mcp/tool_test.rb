@@ -167,8 +167,8 @@ module MCP
       end
 
       assert_includes error.message, "Invalid JSON Schema"
-      assert_includes error.message, "#/properties/count/minimum"
-      assert_includes error.message, "string did not match the following type: number"
+      assert_includes error.message, "properties/count/minimum"
+      assert_includes error.message, "number"
     end
 
     test ".define allows definition of simple tools with a block" do
@@ -431,8 +431,8 @@ module MCP
       end
 
       assert_includes error.message, "Invalid JSON Schema"
-      assert_includes error.message, "#/properties/count/minimum"
-      assert_includes error.message, "string did not match the following type: number"
+      assert_includes error.message, "properties/count/minimum"
+      assert_includes error.message, "number"
     end
 
     test "output_schema accepts $ref in schema" do

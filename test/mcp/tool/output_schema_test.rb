@@ -110,10 +110,10 @@ module MCP
       test "unexpected errors bubble up from validate_result" do
         schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
-        JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
-          assert_raises(RuntimeError) do
-            schema.validate_result({ foo: "bar" })
-          end
+        JSONSchemer::Schema.any_instance.stubs(:validate).raises("unexpected error")
+
+        assert_raises(RuntimeError) do
+          schema.validate_result(foo: "bar")
         end
       end
 

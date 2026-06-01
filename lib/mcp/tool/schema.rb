@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
-require "json-schema"
+require "json_schemer"
 
 module MCP
   class Tool
@@ -38,11 +38,10 @@ module MCP
 
       # JSON Schema 2020-12 is the default dialect for MCP schema definitions
       # per MCP 2025-11-25 (SEP-1613). Note: emission only — runtime validation
-      # is still performed against the JSON Schema draft-04 metaschema because
-      # the `json-schema` gem does not yet support 2020-12.
+      # is still performed against the JSON Schema draft-04 metaschema.
       JSON_SCHEMA_2020_12_URI = "https://json-schema.org/draft/2020-12/schema"
 
-      attr_reader :schema
+      DRAFT4_META_SCHEMA_URI = "http://json-schema.org/draft-04/schema#"
 
       def initialize(schema = {})
         @schema = JSON.parse(JSON.dump(schema), symbolize_names: true)
@@ -51,7 +50,7 @@ module MCP
       end
 
       def ==(other)
-        other.is_a?(self.class) && schema == other.schema
+        other.is_a?(self.class) && @schema == other.instance_variable_get(:@schema)
       end
 
       def to_h
@@ -62,8 +61,38 @@ module MCP
 
       private
 
+      def stringify(obj)
+        case obj
+        when Hash
+          obj.each_with_object({}) { |(k, v), h| h[k.to_s] = stringify(v) }
+        when Array
+          obj.map { |v| stringify(v) }
+        when Symbol
+          obj.to_s
+        else
+          obj
+        end
+      end
+
+      # Lazily built so a cache hit in `validate_schema!` avoids the schemer construction cost.
+      # Memoized per Schema instance because schema content is fixed at construction,
+      # so the compiled schemer is reusable across many `fully_validate` calls.
+      #
+      # `format: false` preserves the legacy behavior of the previous `json-schema` based implementation,
+      # which did not enforce `format` keywords. `RegexpError` from a malformed `pattern` is re-raised as
+      # `ArgumentError` so callers see the same exception class they used to.
+      def schemer
+        @schemer ||= JSONSchemer.schema(
+          stringify(schema_for_validation),
+          meta_schema: DRAFT4_META_SCHEMA_URI,
+          format: false,
+        )
+      rescue RegexpError => e
+        raise ArgumentError, "Invalid JSON Schema: #{e.message}"
+      end
+
       def fully_validate(data)
-        JSON::Validator.fully_validate(schema_for_validation, data)
+        schemer.validate(stringify(data)).map { |validation_error| validation_error.fetch("error") }
       end
 
       def validate_schema!
@@ -75,16 +104,7 @@ module MCP
         key = Digest::SHA256.hexdigest(JSON.generate(target, max_nesting: false))
         return if VALIDATION_CACHE.validated?(key)
 
-        gem_path = File.realpath(Gem.loaded_specs["json-schema"].full_gem_path)
-        schema_reader = JSON::Schema::Reader.new(
-          accept_uri: false,
-          accept_file: ->(path) { File.realpath(path.to_s).start_with?(gem_path) },
-        )
-        metaschema_path = Pathname.new(JSON::Validator.validator_for_name("draft4").metaschema)
-        # Converts metaschema to a file URI for cross-platform compatibility
-        metaschema_uri = JSON::Util::URI.file_uri(metaschema_path.expand_path.cleanpath.to_s.tr("\\", "/"))
-        metaschema = metaschema_uri.to_s
-        errors = JSON::Validator.fully_validate(metaschema, target, schema_reader: schema_reader)
+        errors = schemer.validate_schema.map { |validation_error| validation_error.fetch("error") }
         if errors.any?
           raise ArgumentError, "Invalid JSON Schema: #{errors.join(", ")}"
         end
@@ -92,9 +112,8 @@ module MCP
         VALIDATION_CACHE.store(key)
       end
 
-      # The `json-schema` gem's draft-04 validator cannot resolve newer or unknown `$schema`
-      # dialect URIs. Strip the top-level `$schema` before validation so a dialect URI
-      # (whether SDK-injected by `to_h` or user-supplied) does not break the validator.
+      # `json_schemer` is pinned to the draft-04 metaschema, so strip top-level `$schema` before validation:
+      # this preserves the legacy behavior of ignoring the advertised dialect URI when the SDK validates schemas.
       def schema_for_validation
         return @schema unless @schema.key?(:"$schema")
 

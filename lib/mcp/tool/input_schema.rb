@@ -12,9 +12,9 @@ module MCP
       end
 
       def missing_required_arguments(arguments)
-        return [] unless schema[:required].is_a?(Array)
+        return [] unless @schema[:required].is_a?(Array)
 
-        (schema[:required] - arguments.keys.map(&:to_s))
+        (@schema[:required] - arguments.keys.map(&:to_s))
       end
 
       def validate_arguments(arguments)
