@@ -1060,6 +1060,116 @@ module MCP
         end
       end
 
+      def test_new_raises_argument_error_when_max_line_bytes_is_not_a_positive_integer
+        [nil, 0, -1, 1.5, "1024"].each do |invalid|
+          error = assert_raises(ArgumentError) do
+            Stdio.new(command: "ruby", args: ["server.rb"], max_line_bytes: invalid)
+          end
+          assert_equal("max_line_bytes must be a positive Integer", error.message)
+        end
+      end
+
+      def test_send_request_raises_when_response_frame_exceeds_max_line_bytes
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"], max_line_bytes: 1024)
+
+        request = { jsonrpc: "2.0", id: "test-id", method: "tools/list" }
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification.
+          stdin_read.gets
+
+          # Read tools/list request, then stream an unbounded frame with no newline.
+          stdin_read.gets
+          stdout_write.write("A" * 2000)
+          stdout_write.flush
+        end
+
+        transport.connect
+
+        error = assert_raises(RequestHandlerError) do
+          transport.send_request(request: request)
+        end
+
+        assert_match(/exceeds 1024 bytes without a newline/, error.message)
+        assert_equal(:internal_error, error.error_type)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_send_request_accepts_response_within_custom_max_line_bytes
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"], max_line_bytes: 1024)
+
+        request = { jsonrpc: "2.0", id: "test-id", method: "tools/list" }
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          stdin_read.gets
+
+          tools_line = stdin_read.gets
+          tools_request = JSON.parse(tools_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: tools_request["id"],
+            result: { tools: [] },
+          }))
+          stdout_write.flush
+        end
+
+        transport.connect
+
+        response = transport.send_request(request: request)
+
+        assert_equal("test-id", response["id"])
+        assert_equal({ "tools" => [] }, response["result"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
       def test_send_notification_writes_json_line_without_waiting_for_response
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe

@@ -102,6 +102,8 @@ transport = MCP::Server::Transports::StdioTransport.new(server)
 transport.open
 ```
 
+`StdioTransport.new` accepts an optional `max_line_bytes:` keyword that caps the byte length of a single newline-delimited request frame. A frame that reaches this limit without a newline is rejected and the connection is closed, preventing unbounded memory growth from a peer that never emits a newline. It defaults to `4 * 1024 * 1024` (4 MiB).
+
 You can run this script and then type in requests to the server at the command line.
 
 ```console
@@ -1958,6 +1960,7 @@ Use the `MCP::Client::Stdio` transport to interact with MCP servers running as s
 | `args:` | No | An array of arguments passed to the command. Defaults to `[]`. |
 | `env:` | No | A hash of environment variables to set for the server process. Defaults to `nil`. |
 | `read_timeout:` | No | Timeout in seconds for waiting for a server response. Defaults to `nil` (no timeout). |
+| `max_line_bytes:` | No | Maximum byte length of a single newline-delimited response frame. A frame that reaches this limit without a newline is rejected as a transport error, preventing unbounded memory growth from a server that never emits a newline. Defaults to `4 * 1024 * 1024` (4 MiB). |
 
 Example usage:
 

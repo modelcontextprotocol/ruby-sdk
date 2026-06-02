@@ -9,10 +9,25 @@ module MCP
       class StdioTransport < Transport
         STATUS_INTERRUPTED = Signal.list["INT"] + 128
 
-        def initialize(server)
+        # Default upper bound on a single newline-delimited frame. CRuby's `IO#gets`
+        # without a limit accumulates bytes until a newline arrives, so a peer that
+        # never emits one can grow a single String until the process is OOM-killed.
+        # 4 MiB is large enough for any realistic JSON-RPC frame, including
+        # base64-embedded images.
+        MAX_LINE_BYTES = 4 * 1024 * 1024
+
+        def initialize(server, max_line_bytes: MAX_LINE_BYTES)
           super(server)
           @open = false
           @session = nil
+          # Reject `nil` or non-positive values: `IO#gets("\n", nil)` and a negative
+          # limit read without an upper bound, which would silently disable the
+          # protection this option exists to provide.
+          unless max_line_bytes.is_a?(Integer) && max_line_bytes > 0
+            raise ArgumentError, "max_line_bytes must be a positive Integer"
+          end
+
+          @max_line_bytes = max_line_bytes
           $stdin.set_encoding("UTF-8")
           $stdout.set_encoding("UTF-8")
         end
@@ -20,7 +35,20 @@ module MCP
         def open
           @open = true
           @session = ServerSession.new(server: @server, transport: self)
-          while @open && (line = $stdin.gets)
+          while @open
+            begin
+              line = read_line($stdin)
+            rescue RequestHandlerError => e
+              # Stop accumulating and end the connection gracefully rather than
+              # letting an unbounded read exhaust memory or escape as an uncaught
+              # backtrace. Scoped to the read so genuine request errors raised while
+              # handling a frame are not swallowed here.
+              @open = false
+              MCP.configuration.exception_reporter.call(e, { error: "stdio frame exceeds limit" })
+              break
+            end
+            break if line.nil?
+
             response = @session.handle_json(line.strip)
             send_response(response) if response
           end
@@ -73,7 +101,7 @@ module MCP
             raise
           end
 
-          while @open && (line = $stdin.gets)
+          while @open && (line = read_line($stdin))
             begin
               parsed = JSON.parse(line.strip, symbolize_names: true)
             rescue JSON::ParserError => e
@@ -94,6 +122,26 @@ module MCP
           end
 
           raise "Transport closed while waiting for response to #{method} request."
+        end
+
+        private
+
+        # Reads one newline-delimited frame, bounded by `@max_line_bytes`. Returns
+        # the line (including its trailing newline) or `nil` at EOF. Raises when the
+        # limit is reached before a newline arrives, which signals a peer streaming
+        # an unbounded frame. A short final frame without a trailing newline (EOF) is
+        # still returned, since its length stays under the limit.
+        def read_line(io)
+          line = io.gets("\n", @max_line_bytes)
+          if line && !line.end_with?("\n") && line.bytesize >= @max_line_bytes
+            raise RequestHandlerError.new(
+              "stdio frame exceeds #{@max_line_bytes} bytes without a newline",
+              nil,
+              error_type: :internal_error,
+            )
+          end
+
+          line
         end
       end
     end
