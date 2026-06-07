@@ -49,5 +49,23 @@ module MCP
 
       assert_equal meta, resource.to_h[:_meta]
     end
+
+    test "#to_h omits size when nil" do
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_without_size")
+
+      refute resource.to_h.key?(:size)
+    end
+
+    test "#to_h includes size when present" do
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_with_size", size: 12_345)
+
+      assert_equal 12_345, resource.to_h[:size]
+    end
+
+    test "#to_h includes size when zero" do
+      resource = Resource.new(uri: "file:///empty.txt", name: "empty_resource", size: 0)
+
+      assert_equal 0, resource.to_h[:size]
+    end
   end
 end
