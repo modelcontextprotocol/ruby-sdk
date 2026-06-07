@@ -5,15 +5,16 @@ require_relative "resource/embedded"
 
 module MCP
   class Resource
-    attr_reader :uri, :name, :title, :description, :icons, :mime_type, :meta
+    attr_reader :uri, :name, :title, :description, :icons, :mime_type, :size, :meta
 
-    def initialize(uri:, name:, title: nil, description: nil, icons: [], mime_type: nil, meta: nil)
+    def initialize(uri:, name:, title: nil, description: nil, icons: [], mime_type: nil, size: nil, meta: nil)
       @uri = uri
       @name = name
       @title = title
       @description = description
       @icons = icons
       @mime_type = mime_type
+      @size = size
       @meta = meta
     end
 
@@ -25,6 +26,7 @@ module MCP
         description: description,
         icons: icons&.then { |icons| icons.empty? ? nil : icons.map(&:to_h) },
         mimeType: mime_type,
+        size: size,
         _meta: meta,
       }.compact
     end
