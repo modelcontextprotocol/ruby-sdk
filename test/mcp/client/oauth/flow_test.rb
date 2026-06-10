@@ -985,6 +985,111 @@ module MCP
           assert_match(/client_id/i, error.message)
         end
 
+        # Builds a provider whose callback returns the given `iss` shape:
+        # `:omitted` keeps the legacy 2-element `[code, state]` form, any other value (including nil) returns
+        # the 3-element `[code, state, iss]` form that opts into SEP-2468 / RFC 9207 issuer validation.
+        def build_iss_validation_provider(callback_iss: :omitted)
+          state_holder = {}
+          callback_handler = if callback_iss == :omitted
+            -> { ["test-auth-code", state_holder[:state]] }
+          else
+            -> { ["test-auth-code", state_holder[:state], callback_iss] }
+          end
+
+          Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: callback_handler,
+          )
+        end
+
+        # Re-stubs the AS metadata with `authorization_response_iss_parameter_supported: true`.
+        def stub_as_metadata_with_iss_support
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              authorization_response_iss_parameter_supported: true,
+            ),
+          )
+        end
+
+        def test_run_completes_when_authorization_response_iss_matches_issuer
+          provider = build_iss_validation_provider(callback_iss: @auth_base)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+        end
+
+        def test_run_aborts_before_code_exchange_when_authorization_response_iss_mismatches
+          provider = build_iss_validation_provider(callback_iss: "https://evil.example.com")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          # Per RFC 9207, the client MUST NOT send the authorization code to a token endpoint after an `iss` mismatch.
+          assert_match(/`iss` does not match/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_aborts_when_iss_is_missing_but_as_advertises_iss_support
+          stub_as_metadata_with_iss_support
+          provider = build_iss_validation_provider(callback_iss: nil)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/carried no `iss`/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_completes_with_legacy_two_element_callback_even_when_as_advertises_iss_support
+          stub_as_metadata_with_iss_support
+          provider = build_iss_validation_provider
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+        end
+
+        def test_run_completes_when_iss_is_missing_and_as_does_not_advertise_iss_support
+          provider = build_iss_validation_provider(callback_iss: nil)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+        end
+
+        def test_run_validates_present_iss_even_when_as_does_not_advertise_iss_support
+          provider = build_iss_validation_provider(callback_iss: "https://evil.example.com")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
         def test_run_skips_dcr_when_client_information_already_stored
           stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
 
