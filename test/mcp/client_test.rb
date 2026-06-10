@@ -430,6 +430,135 @@ module MCP
       client.call_tool(tool: tool, arguments: arguments, progress_token: progress_token)
     end
 
+    def test_call_tool_sends_trace_context_meta_entries
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      meta = {
+        MCP::TraceContext::TRACEPARENT_META_KEY => "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        MCP::TraceContext::TRACESTATE_META_KEY => "vendor=value",
+        MCP::TraceContext::BAGGAGE_META_KEY => "userId=alice",
+      }
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        sent_meta = args.dig(:request, :params, :_meta)
+        sent_meta["traceparent"] == meta["traceparent"] &&
+          sent_meta["tracestate"] == meta["tracestate"] &&
+          sent_meta["baggage"] == meta["baggage"]
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: {}, meta: meta)
+    end
+
+    def test_call_tool_merges_meta_with_progress_token_taking_precedence
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      meta = { "traceparent" => "00-trace-span-01", "progressToken" => "from-meta" }
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        sent_meta = args.dig(:request, :params, :_meta)
+        sent_meta["traceparent"] == "00-trace-span-01" &&
+          sent_meta[:progressToken] == "explicit-token" &&
+          !sent_meta.key?("progressToken")
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: {}, progress_token: "explicit-token", meta: meta)
+    end
+
+    def test_call_tool_omits_meta_when_empty_meta_hash_given
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :params).key?(:_meta) == false
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: {}, meta: {})
+    end
+
+    def test_call_tool_does_not_mutate_caller_meta
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      meta = { "traceparent" => "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01" }
+      mock_response = {
+        "result" => { "content" => [{ "type": "text", "text": "Hello, world!" }] },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(tool: tool, arguments: {}, progress_token: "t", meta: meta)
+
+      assert_equal({ "traceparent" => "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01" }, meta)
+    end
+
+    def test_read_resource_sends_meta_when_provided
+      transport = mock
+      traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"
+      mock_response = { "result" => { "contents" => [] } }
+
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "resources/read" &&
+          args.dig(:request, :params, :uri) == "file:///foo" &&
+          args.dig(:request, :params, :_meta, :traceparent) == traceparent
+      end.returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      client.read_resource(uri: "file:///foo", meta: { traceparent: traceparent })
+    end
+
+    def test_request_methods_send_meta_when_provided
+      # Per SEP-414, trace context should flow on every request, so the `meta:` keyword
+      # is available on all client request methods.
+      traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"
+      meta = { traceparent: traceparent }
+
+      [
+        ["tools/list", { "tools" => [] }, ->(client) { client.list_tools(meta: meta) }],
+        ["resources/list", { "resources" => [] }, ->(client) { client.list_resources(meta: meta) }],
+        ["resources/templates/list", { "resourceTemplates" => [] }, ->(client) { client.list_resource_templates(meta: meta) }],
+        ["prompts/list", { "prompts" => [] }, ->(client) { client.list_prompts(meta: meta) }],
+        ["prompts/get", {}, ->(client) { client.get_prompt(name: "p", meta: meta) }],
+        [
+          "completion/complete",
+          { "completion" => { "values" => [] } },
+          ->(client) {
+            client.complete(ref: { type: "ref/prompt", name: "p" }, argument: { name: "a", value: "v" }, meta: meta)
+          },
+        ],
+        ["ping", {}, ->(client) { client.ping(meta: meta) }],
+      ].each do |method, result, invoke|
+        transport = mock
+        transport.expects(:send_request).with do |args|
+          args.dig(:request, :method) == method &&
+            args.dig(:request, :params, :_meta, :traceparent) == traceparent
+        end.returns({ "result" => result }).once
+
+        invoke.call(Client.new(transport: transport))
+      end
+    end
+
+    def test_request_methods_omit_meta_when_not_provided
+      # Wire-format regression: without `meta:`, list requests keep sending no `params` at all.
+      transport = mock
+      transport.expects(:send_request).with do |args|
+        args.dig(:request, :method) == "tools/list" && !args[:request].key?(:params)
+      end.returns({ "result" => { "tools" => [] } }).once
+
+      Client.new(transport: transport).list_tools
+    end
+
     def test_call_tool_omits_meta_when_no_progress_token
       transport = mock
       tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
