@@ -921,6 +921,19 @@ end
 
 otherwise `resources/read` requests will be a no-op.
 
+For unknown URIs, raise `MCP::Server::ResourceNotFoundError` from the handler.
+Per SEP-2164, the server then responds with the standard JSON-RPC Invalid Params error (`-32602`)
+carrying the requested URI in the error `data` member:
+
+```ruby
+server.resources_read_handler do |params|
+  resource = lookup(params[:uri])
+  raise MCP::Server::ResourceNotFoundError.new(params[:uri], params) unless resource
+
+  [{ uri: params[:uri], mimeType: resource.mime_type, text: resource.body }]
+end
+```
+
 ### Resource Templates
 
 The `MCP::ResourceTemplate` class provides a way to register resource templates with the server.

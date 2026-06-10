@@ -610,6 +610,27 @@ module MCP
       assert_raises(Client::ServerError) { client.read_resource(uri: "file:///missing") }
     end
 
+    def test_read_resource_surfaces_resource_not_found_code_and_data
+      # Per SEP-2164, servers report unknown resource URIs with -32602 and
+      # the URI in the error `data`; the client must expose both unmodified.
+      transport = mock
+      mock_response = {
+        "error" => {
+          "code" => -32_602,
+          "message" => "Resource not found: file:///missing.txt",
+          "data" => { "uri" => "file:///missing.txt" },
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::ServerError) { client.read_resource(uri: "file:///missing.txt") }
+
+      assert_equal(-32_602, error.code)
+      assert_equal({ "uri" => "file:///missing.txt" }, error.data)
+    end
+
     def test_get_prompt_raises_server_error_on_error_response
       transport = mock
       mock_response = { "error" => { "code" => -32_602, "message" => "Prompt not found" } }
