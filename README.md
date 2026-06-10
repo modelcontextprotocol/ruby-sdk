@@ -1664,6 +1664,11 @@ Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
 ```
 
+In stateless mode, each POST is fully self-contained per SEP-2567: no `Mcp-Session-Id` is issued or required,
+handlers run against an ephemeral per-request session (so client identity never leaks across requests or onto the shared server),
+and repeated `initialize` requests are permitted. Request-scoped notifications such as progress and log messages are skipped
+(there is no stream to deliver them), while server-to-client requests (`sampling/createMessage`, `roots/list`, `elicitation/create`) raise an error.
+
 You can enable JSON response mode, where the server returns `application/json` instead of `text/event-stream`.
 Set `enable_json_response: true` in `MCP::Server::Transports::StreamableHTTPTransport.new`:
 

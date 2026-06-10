@@ -85,8 +85,10 @@ module MCP
         end
 
         def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
-          # Stateless mode doesn't support notifications
-          raise "Stateless mode does not support notifications" if @stateless
+          # Stateless mode has no streams to deliver notifications on. Report non-delivery instead of raising
+          # so the ephemeral per-request session's notify_* helpers (e.g. progress or log notifications from
+          # a tool handler) degrade gracefully rather than spamming the exception reporter on every call.
+          return false if @stateless
 
           notification = {
             jsonrpc: "2.0",
@@ -575,7 +577,9 @@ module MCP
         # `notifications/initialized`) through the server so it can update session state.
         def dispatch_notification(body_string, session_id)
           server_session = nil
-          if session_id && !@stateless
+          if @stateless
+            server_session = ephemeral_session
+          elsif session_id
             @mutex.synchronize do
               session = @sessions[session_id]
               server_session = session[:server_session] if session
@@ -611,9 +615,10 @@ module MCP
 
         def handle_initialization(body_string, body)
           session_id = nil
-          server_session = nil
 
-          unless @stateless
+          if @stateless
+            server_session = ephemeral_session
+          else
             session_id = SecureRandom.uuid
             server_session = ServerSession.new(server: @server, transport: self, session_id: session_id)
 
@@ -626,17 +631,13 @@ module MCP
             end
           end
 
-          response = if server_session
-            server_session.handle_json(body_string)
-          else
-            @server.handle_json(body_string)
-          end
+          response = server_session.handle_json(body_string)
 
           # If `Server#init` produced an error response (e.g., malformed JSON-RPC envelope),
           # `mark_initialized!` was never called. Discard the orphaned session and omit
           # the `Mcp-Session-Id` header so the client retries from a clean state instead of
           # reusing a never-initialized ID that would later look like a duplicate `initialize`.
-          if server_session && !server_session.initialized?
+          if session_id && !server_session.initialized?
             cleanup_session(session_id)
             session_id = nil
           end
@@ -657,15 +658,15 @@ module MCP
         def handle_regular_request(body_string, session_id, related_request_id: nil)
           server_session = nil
 
-          unless @stateless
-            if session_id
-              error_response = validate_and_touch_session(session_id)
-              return error_response if error_response
+          if @stateless
+            server_session = ephemeral_session
+          elsif session_id
+            error_response = validate_and_touch_session(session_id)
+            return error_response if error_response
 
-              @mutex.synchronize do
-                session = @sessions[session_id]
-                server_session = session[:server_session] if session
-              end
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              server_session = session[:server_session] if session
             end
           end
 
@@ -773,6 +774,13 @@ module MCP
 
         def session_exists?(session_id)
           @mutex.synchronize { @sessions.key?(session_id) }
+        end
+
+        # Each stateless POST is self-contained (SEP-2567): handlers run against an ephemeral per-request `ServerSession`
+        # so client info, logging level, and initialized state never leak onto the shared `Server` instance or across concurrent requests.
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567
+        def ephemeral_session
+          ServerSession.new(server: @server, transport: self, session_id: nil)
         end
 
         # Returns true iff a session exists and is not past its idle timeout. Expired sessions
