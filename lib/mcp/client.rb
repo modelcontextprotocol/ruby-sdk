@@ -146,21 +146,7 @@ module MCP
     #   end
     def tools
       # TODO: consider renaming to `list_all_tools`.
-      all_tools = []
-      seen = Set.new
-      cursor = nil
-
-      loop do
-        page = list_tools(cursor: cursor)
-        all_tools.concat(page.tools)
-        next_cursor = page.next_cursor
-        break if next_cursor.nil? || seen.include?(next_cursor)
-
-        seen << next_cursor
-        cursor = next_cursor
-      end
-
-      all_tools
+      fetch_all_pages { |cursor| list_tools(cursor: cursor) }.flat_map(&:tools)
     end
 
     # Returns a single page of resources from the server.
@@ -189,21 +175,7 @@ module MCP
     # @return [Array<Hash>] An array of available resources.
     def resources
       # TODO: consider renaming to `list_all_resources`.
-      all_resources = []
-      seen = Set.new
-      cursor = nil
-
-      loop do
-        page = list_resources(cursor: cursor)
-        all_resources.concat(page.resources)
-        next_cursor = page.next_cursor
-        break if next_cursor.nil? || seen.include?(next_cursor)
-
-        seen << next_cursor
-        cursor = next_cursor
-      end
-
-      all_resources
+      fetch_all_pages { |cursor| list_resources(cursor: cursor) }.flat_map(&:resources)
     end
 
     # Returns a single page of resource templates from the server.
@@ -232,21 +204,7 @@ module MCP
     # @return [Array<Hash>] An array of available resource templates.
     def resource_templates
       # TODO: consider renaming to `list_all_resource_templates`.
-      all_templates = []
-      seen = Set.new
-      cursor = nil
-
-      loop do
-        page = list_resource_templates(cursor: cursor)
-        all_templates.concat(page.resource_templates)
-        next_cursor = page.next_cursor
-        break if next_cursor.nil? || seen.include?(next_cursor)
-
-        seen << next_cursor
-        cursor = next_cursor
-      end
-
-      all_templates
+      fetch_all_pages { |cursor| list_resource_templates(cursor: cursor) }.flat_map(&:resource_templates)
     end
 
     # Returns a single page of prompts from the server.
@@ -275,21 +233,7 @@ module MCP
     # @return [Array<Hash>] An array of available prompts.
     def prompts
       # TODO: consider renaming to `list_all_prompts`.
-      all_prompts = []
-      seen = Set.new
-      cursor = nil
-
-      loop do
-        page = list_prompts(cursor: cursor)
-        all_prompts.concat(page.prompts)
-        next_cursor = page.next_cursor
-        break if next_cursor.nil? || seen.include?(next_cursor)
-
-        seen << next_cursor
-        cursor = next_cursor
-      end
-
-      all_prompts
+      fetch_all_pages { |cursor| list_prompts(cursor: cursor) }.flat_map(&:prompts)
     end
 
     # Calls a tool via the transport layer and returns the full response from the server.
@@ -379,6 +323,27 @@ module MCP
     end
 
     private
+
+    # Walks every page of a list endpoint, following `next_cursor`, and returns
+    # the page results. The `seen` set guards against a server that repeats or
+    # cycles cursors, so the loop always terminates.
+    def fetch_all_pages
+      pages = []
+      seen = Set.new
+      cursor = nil
+
+      loop do
+        page = yield(cursor)
+        pages << page
+        next_cursor = page.next_cursor
+        break if next_cursor.nil? || seen.include?(next_cursor)
+
+        seen << next_cursor
+        cursor = next_cursor
+      end
+
+      pages
+    end
 
     def request(method:, params: nil)
       request_body = {
