@@ -43,6 +43,18 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: "JSON-RPC version must be 2.0",
       }
+      assert_equal 1, @response[:id]
+    end
+
+    it "returns an error preserving the request id when jsonrpc is missing" do
+      handle id: 4, method: "add", params: { a: 1, b: 2 }
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
+      }
+      assert_equal 4, @response[:id]
     end
 
     # method
@@ -58,6 +70,7 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: 'Method name must be a string and not start with "rpc."',
       }
+      assert_equal 1, @response[:id]
     end
 
     it "returns an error when method begins with 'rpc.'" do
@@ -68,6 +81,7 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: 'Method name must be a string and not start with "rpc."',
       }
+      assert_equal 1, @response[:id]
     end
 
     # params
@@ -311,6 +325,50 @@ describe JsonRpcHandler do
         code: -32600,
         message: "Invalid Request",
         data: "Request ID must match validation pattern, or be an integer or null",
+      }
+      assert_nil @response[:id]
+    end
+
+    it "returns the same request id on an Invalid Request error when the id is detectable" do
+      handle jsonrpc: "1.0", id: 3, method: "ping", params: {}
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
+      }
+      assert_equal 3, @response[:id]
+    end
+
+    it "returns nil for id on an Invalid Request error when the request has no id" do
+      handle jsonrpc: "1.0", method: "ping", params: {}
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
+      }
+      assert_nil @response[:id]
+    end
+
+    it "returns nil for id on an Invalid Request error when the request id is explicitly null" do
+      handle jsonrpc: "1.0", id: nil, method: "ping", params: {}
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
+      }
+      assert_nil @response[:id]
+    end
+
+    it "returns nil for id on an Invalid Request error when the id fails validation" do
+      handle jsonrpc: "1.0", id: "<script>alert('xss')</script>", method: "ping", params: {}
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
       }
       assert_nil @response[:id]
     end
@@ -610,6 +668,20 @@ describe JsonRpcHandler do
 
         assert_nil @response
       end
+
+      it "preserves the request id of an invalid entry within a batch" do
+        register("add") { |params| params[:a] + params[:b] }
+
+        handle [
+          { jsonrpc: "2.0", id: 100, method: "add", params: { a: 1, b: 2 } },
+          { jsonrpc: "1.0", id: 200, method: "add", params: { a: 3, b: 4 } },
+        ]
+
+        assert @response.is_a?(Array)
+        assert_equal [100, 200], @response.map { |result| result[:id] }
+        assert_equal 3, @response.first[:result]
+        assert_equal(-32600, @response.last.dig(:error, :code))
+      end
     end
 
     # 7 Examples
@@ -756,10 +828,11 @@ describe JsonRpcHandler do
       assert_nil @response
     end
 
-    it "returns an error with the id set to nil when the request is invalid" do
+    it "returns an error preserving the request id when the request is invalid" do
       handle_json({ jsonrpc: "0.0", id: 1, method: "add", params: { a: 1, b: 2 } }.to_json)
 
-      assert_nil @response[:id]
+      assert_equal 1, @response[:id]
+      assert_equal(-32600, @response.dig(:error, :code))
     end
   end
 
