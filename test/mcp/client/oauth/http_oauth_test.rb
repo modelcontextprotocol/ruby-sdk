@@ -1304,6 +1304,11 @@ module MCP
             body: "",
           )
 
+          # With no PRM, discovery falls back to the legacy 2025-03-26 path; dead-end that too so the flow fails exactly once.
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/openid-configuration").to_return(status: 404)
+          stub_request(:post, "https://srv.example.com/register").to_return(status: 404)
+
           provider = Provider.new(
             client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
             redirect_uri: "http://localhost:0/callback",
