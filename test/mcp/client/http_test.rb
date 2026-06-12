@@ -35,7 +35,7 @@ module MCP
           )
 
         HTTP.any_instance.stubs(:require).with("faraday").returns(true)
-        HTTP.any_instance.stubs(:require).with("event_stream_parser")
+        HTTP.const_get(:SSEStream).any_instance.stubs(:require).with("event_stream_parser")
           .raises(LoadError, "cannot load such file -- event_stream_parser")
 
         error = assert_raises(LoadError) do
@@ -688,6 +688,169 @@ module MCP
 
         assert_includes(error.message, "No valid JSON-RPC response found in SSE stream")
         assert_equal(:parse_error, error.error_type)
+        assert_not_requested(:get, url)
+      end
+
+      def test_send_request_reconnects_with_last_event_id_after_primed_graceful_close
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_reconnection", arguments: {} },
+        }
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 100\ndata:\n\n",
+        )
+
+        get_body = "id: event-2\nretry: 100\ndata:\n\n" \
+          "event: message\nid: event-3\n" \
+          'data: {"jsonrpc":"2.0","id":"test_id","result":{"content":[]}}' \
+          "\n\n"
+        get_stub = stub_request(:get, url).with(
+          headers: { "Accept" => "text/event-stream", "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: get_body,
+        )
+
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        response = client.send_request(request: request)
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(get_stub)
+
+        # The server-specified `retry:` interval must elapse before the reconnection GET.
+        assert_operator(elapsed, :>=, 0.1)
+      end
+
+      def test_send_request_uses_default_reconnection_delay_when_retry_field_absent
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_reconnection", arguments: {} },
+        }
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\ndata:\n\n",
+        )
+
+        get_body = 'data: {"jsonrpc":"2.0","id":"test_id","result":{"content":[]}}' \
+          "\n\n"
+        stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: get_body,
+        )
+
+        client.expects(:sleep).with(HTTP::DEFAULT_RECONNECTION_DELAY_MS / 1000.0)
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+      end
+
+      def test_send_request_raises_after_reconnection_attempts_are_exhausted
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_reconnection", arguments: {} },
+        }
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 10\ndata:\n\n",
+        )
+
+        first_get = stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-2\nretry: 10\ndata:\n\n",
+        )
+        second_get = stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-2" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-3\nretry: 10\ndata:\n\n",
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_includes(error.message, "after 2 reconnection attempts")
+        assert_equal(:internal_error, error.error_type)
+        assert_requested(first_get)
+        assert_requested(second_get)
+      end
+
+      def test_send_request_parses_json_response_when_adapter_does_not_stream
+        # The Faraday test adapter ignores `on_data`, like adapters without
+        # streaming support; the body must be read from `response.body`.
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do
+            [200, { "Content-Type" => "application/json" }, { result: { tools: [] } }.to_json]
+          end
+        end
+        client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+
+        response = client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+
+        assert_equal({ "result" => { "tools" => [] } }, response)
+      end
+
+      def test_send_request_parses_sse_response_when_adapter_does_not_stream
+        sse_body = "event: message\n" \
+          'data: {"jsonrpc":"2.0","id":"test_id","result":{"tools":[]}}' \
+          "\n\n"
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do
+            [200, { "Content-Type" => "text/event-stream" }, sse_body]
+          end
+        end
+        client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+
+        response = client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+
+        assert_equal({ "tools" => [] }, response["result"])
+      end
+
+      def test_sse_stream_parses_buffered_chunks_when_env_is_unavailable
+        # Faraday < 2.1 invokes `on_data` without `env`; the content type
+        # cannot be detected, so SSE chunks accumulate in the buffer and are
+        # parsed by the `ingest_pending!` fallback.
+        stream = HTTP.const_get(:SSEStream).new(abortable: true)
+        chunk = "data: {\"jsonrpc\":\"2.0\",\"id\":\"test_id\",\"result\":{}}\n\n"
+
+        stream.on_data.call(chunk, chunk.bytesize)
+
+        assert_nil(stream.response)
+        assert_equal(chunk, stream.buffer)
+
+        stream.ingest_pending!(nil)
+
+        assert_equal({ "jsonrpc" => "2.0", "id" => "test_id", "result" => {} }, stream.response)
+        assert_empty(stream.buffer)
       end
 
       def test_captures_session_id_and_protocol_version_on_initialize

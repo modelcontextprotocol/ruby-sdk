@@ -135,6 +135,15 @@ when "tools_call"
   add_numbers = tools.find { |t| t.name == "add_numbers" }
   abort("Tool add_numbers not found") unless add_numbers
   client.call_tool(tool: add_numbers, arguments: { a: 1, b: 2 })
+when "sse-retry"
+  # SEP-1699: the server closes the tools/call SSE stream right after a priming event.
+  # The transport waits the server's `retry:` interval, reconnects with a GET carrying `Last-Event-ID`,
+  # and receives the tool result on the resumed stream; the harness verifies the reconnect,
+  # its timing, and the header.
+  tools = client.tools
+  test_reconnection = tools.find { |t| t.name == "test_reconnection" }
+  abort("Tool test_reconnection not found") unless test_reconnection
+  client.call_tool(tool: test_reconnection, arguments: {})
 when %r|\Aauth/|
   # Auth-only scenarios: the protocol-level checks (PRM/AS metadata, DCR, PKCE, token usage)
   # are observed by the conformance server during `connect` and the subsequent request below.

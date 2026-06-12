@@ -1,7 +1,5 @@
 server: []
 client:
-  # TODO: SSE reconnection not implemented in Ruby client.
-  - sse-retry
   # TODO: Elicitation not implemented in Ruby client.
   - elicitation-sep1034-client-defaults
   # TODO: Remaining OAuth/auth scenarios not yet implemented in Ruby client.
