@@ -8,9 +8,6 @@ require_relative "../version"
 
 module MCP
   class Client
-    # TODO: A standalone HTTP GET listening stream for server-initiated messages is not yet implemented;
-    #   GET is currently used only to resume a request's SSE stream after a disconnect.
-    #   https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
     class HTTP
       ACCEPT_HEADER = "application/json, text/event-stream"
       SSE_ACCEPT_HEADER = "text/event-stream"
@@ -26,6 +23,12 @@ module MCP
       # an exponential backoff that the `retry:` field likewise overrides.
       DEFAULT_RECONNECTION_DELAY_MS = 1000
       MAX_RECONNECTION_ATTEMPTS = 2
+
+      # How long the standalone GET listening stream may stay idle before the read times out
+      # and the connection is counted as a failure and retried. Matches the Python SDK's
+      # `sse_read_timeout` default of 5 minutes; without this, the adapter's default read timeout
+      # (60 seconds for Net::HTTP) would recycle quiet streams too eagerly.
+      SSE_LISTENER_READ_TIMEOUT = 300
 
       # Raised when an `oauth:` provider is paired with an MCP URL that is neither HTTPS nor
       # a loopback `http://` URL, since a bearer token sent over plain HTTP to a remote host
@@ -75,8 +78,9 @@ module MCP
         attr_reader :buffer, :response, :last_event_id, :retry_ms
         attr_accessor :abortable
 
-        def initialize(abortable:)
+        def initialize(abortable:, on_request: nil)
           @abortable = abortable
+          @on_request = on_request
           @buffer = +""
           @parser = nil
           @response = nil
@@ -138,8 +142,14 @@ module MCP
               next
             end
 
-            if parsed.is_a?(Hash) && (parsed.key?("result") || parsed.key?("error"))
+            next unless parsed.is_a?(Hash)
+
+            if parsed.key?("result") || parsed.key?("error")
               @response ||= parsed
+            elsif parsed["method"] && parsed.key?("id")
+              # A server-to-client request (e.g. `elicitation/create`) delivered
+              # on the stream while the original request is still pending.
+              @on_request&.call(parsed)
             end
           end
         end
@@ -194,6 +204,24 @@ module MCP
         @protocol_version = nil
         @server_info = nil
         @connected = false
+        @server_request_handlers = {}
+        @listener_thread = nil
+      end
+
+      # Registers a handler for a server-to-client request (e.g. `elicitation/create`) delivered on an SSE stream.
+      # The handler receives the request's `params` (a Hash with string keys, possibly empty) and its return value is
+      # sent back to the server as the JSON-RPC `result`.
+      # The handler may raise `MCP::Client::ServerRequestError` to answer with a specific JSON-RPC error code.
+      # Requests for methods without a registered handler are answered with a JSON-RPC "method not found" (-32601) error.
+      # Registering a handler opens a standalone GET SSE listening stream (once connected), since servers send requests
+      # that are not tied to a client request on that stream - matching the TypeScript and Python SDK clients,
+      # which start listening after the `initialize` handshake.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server
+      def on_server_request(method, &handler)
+        raise ArgumentError, "A handler block is required" unless handler
+
+        @server_request_handlers[method.to_s] = handler
+        start_listening if connected?
       end
 
       # Performs the MCP `initialize` handshake: sends an `initialize` request
@@ -272,6 +300,7 @@ module MCP
         end
 
         @connected = true
+        start_listening if @server_request_handlers.any?
         @server_info
       end
 
@@ -305,8 +334,13 @@ module MCP
           # The response is consumed incrementally so that an SSE stream the server holds open
           # (or closes early per SEP-1699) can be handled; `initialize` streams are read to EOF
           # so the response object (and its `Mcp-Session-Id` header) is always available for capture.
-          stream = SSEStream.new(abortable: method.to_s != MCP::Methods::INITIALIZE)
+          stream = SSEStream.new(
+            abortable: method.to_s != MCP::Methods::INITIALIZE,
+            on_request: ->(message) { dispatch_server_request(message) },
+          )
+
           yield if block_given?
+
           response = begin
             client.post("", request, session_headers.merge(request_metadata_headers(method, params))) do |req|
               req.options.on_data = stream.on_data
@@ -636,10 +670,62 @@ module MCP
       end
 
       def clear_session
+        stop_listening
         @session_id = nil
         @protocol_version = nil
         @server_info = nil
         @connected = false
+      end
+
+      # Opens the standalone GET SSE listening stream on a background thread so server-to-client requests
+      # can arrive while the main thread is blocked on its own request (e.g. a tools/call awaiting elicitation).
+      # Like the TypeScript and Python SDK clients, the GET is fired without waiting for it to be established.
+      def start_listening
+        return if @listener_thread&.alive?
+
+        @listener_thread = Thread.new { listen_for_server_requests }
+      end
+
+      def stop_listening
+        @listener_thread&.kill
+        @listener_thread = nil
+      end
+
+      # Reconnection semantics match the TypeScript and Python SDK clients: a stream that was established and
+      # then closed gracefully is retried indefinitely after the server's `retry:` interval (SSE semantics),
+      # while consecutive connection failures - HTTP errors and idle read timeouts both count - stop the listener
+      # once they reach `MAX_RECONNECTION_ATTEMPTS`; a successful stream in between resets the count.
+      # A 405 stops immediately without retrying, since it is the spec's answer from a server that offers no listening stream.
+      def listen_for_server_requests
+        stream = SSEStream.new(
+          abortable: false,
+          on_request: ->(message) { dispatch_server_request(message) },
+        )
+        consecutive_failures = 0
+
+        loop do
+          begin
+            client.get("") do |request|
+              request.headers.update(session_headers)
+              request.headers["Accept"] = SSE_ACCEPT_HEADER
+              request.headers[LAST_EVENT_ID_HEADER] = stream.last_event_id if stream.last_event_id
+              request.options.read_timeout = SSE_LISTENER_READ_TIMEOUT
+              request.options.on_data = stream.on_data
+            end
+
+            consecutive_failures = 0
+          rescue Faraday::Error => e
+            break if e.response&.dig(:status) == 405
+
+            consecutive_failures += 1
+
+            break if consecutive_failures >= MAX_RECONNECTION_ATTEMPTS
+          end
+
+          stream.reset_parser!
+
+          sleep((stream.retry_ms || DEFAULT_RECONNECTION_DELAY_MS) / 1000.0)
+        end
       end
 
       def require_faraday!
@@ -692,6 +778,56 @@ module MCP
             error_type: :unsupported_media_type,
           )
         end
+      end
+
+      # Answers a server-to-client request received on an SSE stream by invoking the handler registered via
+      # `on_server_request` and POSTing its return value back as a JSON-RPC response; the server ACKs with
+      # 202 Accepted. Requests without a registered handler are answered with a "method not found" error.
+      # A handler may raise `ServerRequestError` to answer with a specific JSON-RPC error code
+      # (e.g. `-1` for a rejected sampling request); any other error is answered with an "internal error".
+      # In every case the server is not left waiting, matching how the TypeScript and Python SDKs convert handler
+      # failures into JSON-RPC error responses.
+      def dispatch_server_request(message)
+        handler = @server_request_handlers[message["method"]]
+        response = if handler
+          begin
+            {
+              jsonrpc: JsonRpcHandler::Version::V2_0,
+              id: message["id"],
+              result: handler.call(message["params"] || {}),
+            }
+          rescue ServerRequestError => e
+            {
+              jsonrpc: JsonRpcHandler::Version::V2_0,
+              id: message["id"],
+              error: { code: e.code, message: e.message },
+            }
+          rescue StandardError => e
+            {
+              jsonrpc: JsonRpcHandler::Version::V2_0,
+              id: message["id"],
+              error: {
+                code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+                message: "Internal error handling #{message["method"]} request: #{e.message}",
+              },
+            }
+          end
+        else
+          {
+            jsonrpc: JsonRpcHandler::Version::V2_0,
+            id: message["id"],
+            error: {
+              code: JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND,
+              message: "Method not found: #{message["method"]}",
+            },
+          }
+        end
+
+        send_client_response(response)
+      end
+
+      def send_client_response(response)
+        client.post("", response, session_headers)
       end
 
       def parse_json_buffer(buffer, method, params)

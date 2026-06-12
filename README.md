@@ -2112,6 +2112,30 @@ response = client.call_tool(
 
 The server will send `notifications/progress` back to the client during execution.
 
+#### Server-to-Client Requests (Elicitation)
+
+Servers can send requests back to the client while one of the client's own requests is in flight - for example,
+[`elicitation/create`](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) to ask the user for additional input during a tool call.
+Register a handler and advertise the capability on `connect` to respond to them:
+
+```ruby
+client.connect(capabilities: { elicitation: {} })
+
+client.on_elicitation do |params|
+  {
+    action: "accept",
+    # Fill fields omitted by the user with the schema's `default` values (SEP-1034)
+    content: MCP::Client::Elicitation.apply_defaults(params["requestedSchema"]),
+  }
+end
+```
+
+Registering a handler opens a standalone HTTP GET SSE stream on a background thread
+([listening for messages from the server](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#listening-for-messages-from-the-server)),
+since servers deliver requests that are not tied to a client request on that stream. Server requests with no registered handler are answered with
+a JSON-RPC `-32601` (method not found) error. To handle methods other than `elicitation/create`, register directly on the transport with
+`http_transport.on_server_request("method/name") { |params| ... }`.
+
 #### HTTP Authorization
 
 By default, the HTTP transport layer provides no authentication to the server, but you can provide custom headers if you need authentication. For example, to use Bearer token authentication:

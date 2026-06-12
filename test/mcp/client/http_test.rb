@@ -853,6 +853,347 @@ module MCP
         assert_empty(stream.buffer)
       end
 
+      def test_send_request_dispatches_server_request_to_registered_handler
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_client_elicitation_defaults", arguments: {} },
+        }
+
+        elicitation_request = {
+          jsonrpc: "2.0",
+          id: 0,
+          method: "elicitation/create",
+          params: {
+            message: "Please accept with defaults",
+            requestedSchema: {
+              type: "object",
+              properties: { name: { type: "string", default: "John Doe" } },
+              required: [],
+            },
+          },
+        }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = "event: message\ndata: #{elicitation_request.to_json}\n\n" \
+          "event: message\ndata: #{tool_result.to_json}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_response = {
+          jsonrpc: "2.0",
+          id: 0,
+          result: { action: "accept", content: { name: "John Doe" } },
+        }
+        response_stub = stub_request(:post, url).with(
+          body: expected_response.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        received_params = nil
+        client.on_server_request("elicitation/create") do |params|
+          received_params = params
+          {
+            action: "accept",
+            content: { name: params.dig("requestedSchema", "properties", "name", "default") },
+          }
+        end
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(response_stub)
+        assert_equal("Please accept with defaults", received_params["message"])
+      end
+
+      def test_send_request_answers_unregistered_server_request_with_method_not_found
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "some_tool", arguments: {} },
+        }
+
+        server_request = {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "sampling/createMessage",
+          params: {},
+        }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = "event: message\ndata: #{server_request.to_json}\n\n" \
+          "event: message\ndata: #{tool_result.to_json}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_error_response = {
+          jsonrpc: "2.0",
+          id: 5,
+          error: { code: -32601, message: "Method not found: sampling/createMessage" },
+        }
+        error_stub = stub_request(:post, url).with(
+          body: expected_error_response.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(error_stub)
+      end
+
+      def test_send_request_answers_raising_handler_with_internal_error
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "some_tool", arguments: {} },
+        }
+
+        server_request = {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "elicitation/create",
+          params: {},
+        }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = "event: message\ndata: #{server_request.to_json}\n\n" \
+          "event: message\ndata: #{tool_result.to_json}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_error_response = {
+          jsonrpc: "2.0",
+          id: 9,
+          error: { code: -32603, message: "Internal error handling elicitation/create request: boom" },
+        }
+        error_stub = stub_request(:post, url).with(
+          body: expected_error_response.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        client.on_server_request("elicitation/create") { raise "boom" }
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(error_stub)
+      end
+
+      def test_send_request_answers_server_request_error_with_its_code
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "ask_llm", arguments: {} },
+        }
+
+        server_request = {
+          jsonrpc: "2.0",
+          id: 11,
+          method: "sampling/createMessage",
+          params: {},
+        }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = "event: message\ndata: #{server_request.to_json}\n\n" \
+          "event: message\ndata: #{tool_result.to_json}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_error_response = {
+          jsonrpc: "2.0",
+          id: 11,
+          error: { code: -1, message: "User rejected sampling request" },
+        }
+        error_stub = stub_request(:post, url).with(
+          body: expected_error_response.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        client.on_server_request("sampling/createMessage") do
+          raise MCP::Client::ServerRequestError.new("User rejected sampling request", code: -1)
+        end
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(error_stub)
+      end
+
+      def test_on_server_request_requires_a_block
+        assert_raises(ArgumentError) do
+          client.on_server_request("elicitation/create")
+        end
+      end
+
+      def test_registering_a_handler_after_connect_listens_on_standalone_get_stream
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+
+        elicitation_request = {
+          jsonrpc: "2.0",
+          id: 7,
+          method: "elicitation/create",
+          params: {
+            message: "Please accept with defaults",
+            requestedSchema: {
+              type: "object",
+              properties: { name: { type: "string", default: "John Doe" } },
+              required: [],
+            },
+          },
+        }
+        stub_request(:get, url)
+          .with(
+            headers: { "Accept" => "text/event-stream", "Mcp-Session-Id" => "session-abc" },
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "text/event-stream" },
+            body: "event: message\ndata: #{elicitation_request.to_json}\n\n",
+          )
+
+        expected_response = {
+          jsonrpc: "2.0",
+          id: 7,
+          result: { action: "accept", content: { name: "John Doe" } },
+        }
+        response_stub = stub_request(:post, url).with(
+          body: expected_response.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        client.connect
+        client.on_server_request("elicitation/create") do |params|
+          {
+            action: "accept",
+            content: { name: params.dig("requestedSchema", "properties", "name", "default") },
+          }
+        end
+
+        wait_until { requested?(response_stub) }
+
+        assert_requested(response_stub)
+      ensure
+        client.close
+      end
+
+      def test_connect_listens_on_standalone_get_stream_when_a_handler_is_registered
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+
+        get_stub = stub_request(:get, url).with(
+          headers: { "Accept" => "text/event-stream" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "",
+        )
+
+        client.on_server_request("elicitation/create") { { action: "decline" } }
+
+        assert_not_requested(:get, url)
+
+        client.connect
+
+        wait_until { requested?(get_stub) }
+
+        assert_requested(get_stub)
+      ensure
+        client.close
+      end
+
+      def test_listener_stops_after_consecutive_connection_failures
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+        stub_request(:get, url).to_return(status: 500)
+
+        client.stubs(:sleep)
+        client.connect
+        client.on_server_request("elicitation/create") { { action: "decline" } }
+        listener = client.instance_variable_get(:@listener_thread)
+
+        wait_until { !listener.alive? }
+
+        assert_requested(:get, url, times: HTTP::MAX_RECONNECTION_ATTEMPTS)
+      ensure
+        client.close
+      end
+
+      def test_listener_failure_count_resets_after_a_successful_stream
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+        stub_request(:get, url).to_return(
+          { status: 500 },
+          { status: 200, headers: { "Content-Type" => "text/event-stream" }, body: "" },
+          { status: 500 },
+          { status: 500 },
+        )
+
+        client.stubs(:sleep)
+        client.connect
+        client.on_server_request("elicitation/create") { { action: "decline" } }
+        listener = client.instance_variable_get(:@listener_thread)
+
+        wait_until { !listener.alive? }
+
+        # Without the reset, the second failure (the third request) would
+        # already reach the cap and the fourth request would never be made.
+        assert_requested(:get, url, times: 4)
+      ensure
+        client.close
+      end
+
+      def test_listener_stops_immediately_when_server_does_not_offer_a_get_stream
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+        stub_request(:get, url).to_return(status: 405)
+
+        client.stubs(:sleep)
+        client.connect
+        client.on_server_request("elicitation/create") { { action: "decline" } }
+        listener = client.instance_variable_get(:@listener_thread)
+
+        wait_until { !listener.alive? }
+
+        assert_requested(:get, url, times: 1)
+      ensure
+        client.close
+      end
+
       def test_captures_session_id_and_protocol_version_on_initialize
         stub_request(:post, url)
           .to_return(
@@ -1402,6 +1743,20 @@ module MCP
 
       def stub_request(method, url)
         WebMock.stub_request(method, url)
+      end
+
+      # Polls until the block is truthy; the listener runs on a background
+      # thread, so its requests are observed asynchronously.
+      def wait_until(timeout: 5)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        until yield
+          flunk("Timed out waiting for condition") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+          sleep(0.01)
+        end
+      end
+
+      def requested?(stub)
+        WebMock::RequestRegistry.instance.times_executed(stub.request_pattern).positive?
       end
 
       def url
