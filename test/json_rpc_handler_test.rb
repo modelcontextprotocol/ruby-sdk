@@ -36,13 +36,14 @@ describe JsonRpcHandler do
     end
 
     it "returns an error when jsonrpc is not 2.0" do
-      handle jsonrpc: "3.0", id: 1, method: "add", params: { a: 1, b: 2 }
+      handle jsonrpc: "3.0", id: 3, method: "add", params: { a: 1, b: 2 }
 
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
         data: "JSON-RPC version must be 2.0",
       }
+      assert_equal 3, @response[:id]
     end
 
     # method
@@ -51,13 +52,14 @@ describe JsonRpcHandler do
     #   used for anything else.
 
     it "returns an error when method is not a string" do
-      handle jsonrpc: "2.0", id: 1, method: 42, params: { a: 1, b: 2 }
+      handle jsonrpc: "2.0", id: 8, method: 42, params: { a: 1, b: 2 }
 
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
         data: 'Method name must be a string and not start with "rpc."',
       }
+      assert_equal 8, @response[:id]
     end
 
     it "returns an error when method begins with 'rpc.'" do
@@ -756,8 +758,19 @@ describe JsonRpcHandler do
       assert_nil @response
     end
 
-    it "returns an error with the id set to nil when the request is invalid" do
-      handle_json({ jsonrpc: "0.0", id: 1, method: "add", params: { a: 1, b: 2 } }.to_json)
+    it "returns an error with the request id when the JSON-RPC version is missing" do
+      handle_json({ id: 4, method: "add", params: { a: 1, b: 2 } }.to_json)
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "JSON-RPC version must be 2.0",
+      }
+      assert_equal 4, @response[:id]
+    end
+
+    it "returns an error with the id set to nil when the request id is invalid" do
+      handle_json({ jsonrpc: "2.0", id: {}, method: "add", params: { a: 1, b: 2 } }.to_json)
 
       assert_nil @response[:id]
     end

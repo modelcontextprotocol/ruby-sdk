@@ -79,7 +79,7 @@ module JsonRpcHandler
       'Method name must be a string and not start with "rpc."'
     end
 
-    return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+    return error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
       code: ErrorCode::INVALID_REQUEST,
       message: "Invalid Request",
       data: error,
