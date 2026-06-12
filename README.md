@@ -2505,6 +2505,43 @@ Keyword arguments:
 - `token_endpoint_auth_method`: `"client_secret_basic"` (default) or `"client_secret_post"`. `"none"` is rejected with `ClientCredentialsProvider::InvalidCredentialsError`.
 - `scope`, `storage`: Optional, same meaning as on `Provider`.
 
+##### Cross-App Access (JWT Bearer) Grant
+
+For enterprise MCP deployments where an identity provider (IdP) governs authorization (SEP-990), use `MCP::Client::OAuth::CrossAppAccessProvider` instead of `Provider`.
+The client exchanges an IdP-issued ID token for an Identity Assertion Authorization Grant (ID-JAG) at the IdP via RFC 8693 token exchange, then presents the ID-JAG
+to the MCP authorization server with the RFC 7523 `jwt-bearer` grant, authenticating with `client_secret_basic`. There is no authorization request, PKCE, DCR, or `offline_access`.
+Mirrors `CrossAppAccessProvider` and `requestJwtAuthorizationGrant` in the TypeScript SDK.
+
+`MCP::Client::OAuth::IDJAGTokenExchange.request` performs the RFC 8693 exchange at the IdP token endpoint. Wrap it in a callable so the same provider can plug into
+an enterprise secret store or a test double without changing the transport wiring.
+
+```ruby
+provider = MCP::Client::OAuth::CrossAppAccessProvider.new(
+  client_id: "my-mcp-client",
+  client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  assertion_provider: ->(audience:, resource:) {
+    MCP::Client::OAuth::IDJAGTokenExchange.request(
+      token_endpoint: "https://idp.example.com/token",
+      id_token: ENV.fetch("IDP_ID_TOKEN"),
+      client_id: "my-idp-client",
+      audience: audience,
+      resource: resource,
+    )
+  },
+  # scope: "mcp:read mcp:write" (optional; used when neither WWW-Authenticate nor PRM specify one)
+)
+
+transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp", oauth: provider)
+```
+
+Keyword arguments:
+
+- `client_id`, `client_secret`: Required. The `jwt-bearer` grant authenticates with `client_secret_basic` at the MCP authorization server.
+- `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
+  `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
+  Passing both through to `IDJAGTokenExchange.request` covers the common case.
+- `scope`, `storage`: Optional, same meaning as on `Provider`.
+
 ##### Communication Security
 
 When `oauth:` is set, the MCP transport URL and every OAuth-facing URL (PRM, Authorization Server metadata, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`,

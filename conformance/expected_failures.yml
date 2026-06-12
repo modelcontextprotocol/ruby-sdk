@@ -1,4 +1,2 @@
 server: []
-client:
-  # TODO: Remaining OAuth/auth scenarios not yet implemented in Ruby client.
-  - auth/cross-app-access-complete-flow
+client: []
