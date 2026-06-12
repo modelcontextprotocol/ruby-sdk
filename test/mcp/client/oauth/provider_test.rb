@@ -181,6 +181,12 @@ module MCP
             end
           end
         end
+
+        def test_authorization_flow_is_authorization_code
+          provider = Provider.new(**args_for("https://app.example.com/callback"))
+
+          assert_equal(:authorization_code, provider.authorization_flow)
+        end
       end
     end
   end

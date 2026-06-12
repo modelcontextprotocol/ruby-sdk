@@ -2014,6 +2014,29 @@ provider = MCP::Client::OAuth::Provider.new(
 )
 ```
 
+##### Client Credentials Grant
+
+For a confidential machine-to-machine client (no user, no browser redirect), use `MCP::Client::OAuth::ClientCredentialsProvider` instead of `Provider`.
+The transport discovers the authorization server the same way, then exchanges the OAuth 2.1 `client_credentials` grant (RFC 6749 Section 4.4) at
+the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant does not issue a refresh token.
+
+```ruby
+provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
+  client_id: "my-service",
+  client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  # token_endpoint_auth_method: "client_secret_basic" (default) or "client_secret_post"
+  # scope: "mcp:read mcp:write" (optional; used when the server does not advertise scopes)
+)
+
+transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp", oauth: provider)
+```
+
+Keyword arguments:
+
+- `client_id`, `client_secret`: Required. The grant is for confidential clients, so a credential is mandatory.
+- `token_endpoint_auth_method`: `"client_secret_basic"` (default) or `"client_secret_post"`. `"none"` is rejected with `ClientCredentialsProvider::InvalidCredentialsError`.
+- `scope`, `storage`: Optional, same meaning as on `Provider`.
+
 ##### Communication Security
 
 When `oauth:` is set, the MCP transport URL and every OAuth-facing URL (PRM, Authorization Server metadata, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`,

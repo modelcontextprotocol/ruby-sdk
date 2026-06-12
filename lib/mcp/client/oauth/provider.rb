@@ -3,9 +3,11 @@
 module MCP
   class Client
     module OAuth
-      # Pluggable OAuth client configuration handed to `MCP::Client::HTTP` via
-      # the `oauth:` keyword. Inspired by the OAuthClientProvider in the TypeScript SDK
-      # and httpx.Auth-based provider in the Python SDK.
+      # Pluggable OAuth client configuration for the OAuth 2.1 Authorization Code + PKCE flow,
+      # handed to `MCP::Client::HTTP` via the `oauth:` keyword.
+      # Inspired by the OAuthClientProvider in the TypeScript SDK and the httpx.Auth-based provider
+      # in the Python SDK. For the non-interactive machine-to-machine `client_credentials` grant,
+      # use `ClientCredentialsProvider` instead.
       #
       # Required keyword arguments:
       # - `client_metadata`  - Hash sent to the authorization server's Dynamic Client
@@ -36,6 +38,8 @@ module MCP
       #   DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include `client_id` set
       #   to the URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
       class Provider
+        include StorageBackedProvider
+
         # Raised when `Provider#initialize` is called with a `redirect_uri` that
         # is neither HTTPS nor a loopback `http://` URL, per the MCP
         # authorization spec's Communication Security requirement.
@@ -102,28 +106,11 @@ module MCP
           @client_id_metadata_document_url = client_id_metadata_document_url
         end
 
-        def access_token
-          tokens&.dig("access_token") || tokens&.dig(:access_token)
-        end
-
-        def tokens
-          @storage.tokens
-        end
-
-        def save_tokens(tokens)
-          @storage.save_tokens(tokens)
-        end
-
-        def client_information
-          @storage.client_information
-        end
-
-        def save_client_information(info)
-          @storage.save_client_information(info)
-        end
-
-        def clear_tokens!
-          @storage.save_tokens(nil)
+        # Identifies the OAuth flow this provider drives.
+        # `Flow` dispatches on this rather than inspecting `client_metadata[:grant_types]`,
+        # which is protocol metadata for the authorization server, not an SDK control signal.
+        def authorization_flow
+          :authorization_code
         end
       end
     end

@@ -51,6 +51,30 @@ rescue JSON::ParserError
   {}
 end
 
+# Saves the pre-registered `client_id` / `client_secret` the harness injects
+# via context (used by pre-registration and client_credentials scenarios).
+def storage_for(context)
+  storage = MCP::Client::OAuth::InMemoryStorage.new
+  if context["client_id"]
+    storage.save_client_information(
+      "client_id" => context["client_id"],
+      "client_secret" => context["client_secret"],
+      "token_endpoint_auth_method" => context["token_endpoint_auth_method"] || "client_secret_basic",
+    )
+  end
+  storage
+end
+
+# Builds a `client_credentials`-only provider (machine-to-machine, no redirect).
+# The pre-registered credentials are injected by the harness via context.
+def build_client_credentials_provider(context)
+  MCP::Client::OAuth::ClientCredentialsProvider.new(
+    client_id: context["client_id"],
+    client_secret: context["client_secret"],
+    token_endpoint_auth_method: context["token_endpoint_auth_method"] || "client_secret_basic",
+  )
+end
+
 # Builds an OAuth provider that drives the authorization code + PKCE + DCR flow
 # non-interactively against the conformance test's auth server. The conformance
 # `/authorize` endpoint redirects synchronously to `redirect_uri` with
@@ -74,15 +98,6 @@ def build_oauth_provider(context, scenario:)
     [query["code"], query["state"]]
   end
 
-  storage = MCP::Client::OAuth::InMemoryStorage.new
-  if context["client_id"]
-    storage.save_client_information(
-      "client_id" => context["client_id"],
-      "client_secret" => context["client_secret"],
-      "token_endpoint_auth_method" => context["token_endpoint_auth_method"] || "client_secret_basic",
-    )
-  end
-
   MCP::Client::OAuth::Provider.new(
     client_metadata: {
       client_name: "ruby-sdk-conformance-client",
@@ -94,12 +109,20 @@ def build_oauth_provider(context, scenario:)
     redirect_uri: redirect_uri,
     redirect_handler: redirect_handler,
     callback_handler: callback_handler,
-    storage: storage,
+    storage: storage_for(context),
     client_id_metadata_document_url: (scenario == "auth/basic-cimd" ? CONFORMANCE_CIMD_URL : nil),
   )
 end
 
-oauth = scenario.start_with?("auth/") ? build_oauth_provider(conformance_context, scenario: scenario) : nil
+def build_provider_for(scenario, context)
+  if scenario.start_with?("auth/client-credentials")
+    build_client_credentials_provider(context)
+  else
+    build_oauth_provider(context, scenario: scenario)
+  end
+end
+
+oauth = scenario.start_with?("auth/") ? build_provider_for(scenario, conformance_context) : nil
 transport = MCP::Client::HTTP.new(url: server_url, oauth: oauth)
 client = MCP::Client.new(transport: transport)
 client.connect(client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION })
