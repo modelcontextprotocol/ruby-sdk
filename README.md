@@ -47,6 +47,7 @@ It implements the Model Context Protocol specification, handling model context r
 
 - `initialize` - Initializes the protocol and returns server capabilities
 - `ping` - Simple health check
+- `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas
 - `tools/call` - Invokes a specific tool with provided arguments
 - `prompts/list` - Lists all registered prompts and their schemas
