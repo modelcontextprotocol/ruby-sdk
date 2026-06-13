@@ -121,6 +121,43 @@ module MCP
           assert_includes(urls, "https://auth.example.com/tenant1/.well-known/openid-configuration")
         end
 
+        # Per SEP-2351, MCP explicitly uses the RFC 8414 default `oauth-authorization-server` well-known URI suffix
+        # and defines no application-specific suffix. The first probed candidate for a root issuer must be exactly
+        # that default suffix.
+        def test_authorization_server_metadata_urls_probe_rfc8414_default_suffix_first
+          urls = Discovery.authorization_server_metadata_urls("https://auth.example.com")
+
+          assert_equal("https://auth.example.com/.well-known/oauth-authorization-server", urls.first)
+        end
+
+        def test_authorization_server_metadata_urls_use_only_registered_well_known_suffixes
+          root_urls = Discovery.authorization_server_metadata_urls("https://auth.example.com")
+          path_urls = Discovery.authorization_server_metadata_urls("https://auth.example.com/tenant1")
+
+          (root_urls + path_urls).each do |url|
+            suffix = url[%r{/\.well-known/([^/]+)}, 1]
+
+            assert_includes(
+              ["oauth-authorization-server", "openid-configuration"], suffix, "unexpected well-known suffix in #{url}"
+            )
+          end
+        end
+
+        def test_authorization_server_metadata_urls_put_path_inserted_oauth_candidate_first_for_path_issuer
+          urls = Discovery.authorization_server_metadata_urls("https://auth.example.com/tenant1")
+
+          assert_equal("https://auth.example.com/.well-known/oauth-authorization-server/tenant1", urls.first)
+        end
+
+        def test_authorization_server_metadata_urls_treat_trailing_slash_issuer_as_root
+          urls = Discovery.authorization_server_metadata_urls("https://auth.example.com/")
+
+          assert_equal(
+            ["https://auth.example.com/.well-known/oauth-authorization-server", "https://auth.example.com/.well-known/openid-configuration"],
+            urls,
+          )
+        end
+
         def test_canonicalize_url_normalizes_scheme_host_port_and_path
           assert_equal(
             "https://srv.example.com/mcp",

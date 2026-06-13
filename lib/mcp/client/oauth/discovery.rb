@@ -90,7 +90,17 @@ module MCP
           end
 
           # Returns the candidate Authorization Server metadata URLs to probe, in priority order.
-          # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-metadata-discovery
+          #
+          # Per SEP-2351, MCP uses the default `oauth-authorization-server` well-known URI suffix
+          # registered by RFC 8414 Section 7.3 and defines no application-specific suffix of its own.
+          # The OAuth candidates below therefore use only that default suffix
+          # (plus the `openid-configuration` suffix from OpenID Connect Discovery),
+          # both in the RFC 8414 Section 3.1 path-inserted form for issuers with a path component
+          # and in the root form for issuers without one.
+          #
+          # - https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#authorization-server-metadata-discovery
+          # - https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2351
+          # - https://www.rfc-editor.org/rfc/rfc8414#section-3.1
           def authorization_server_metadata_urls(issuer_url)
             uri = URI.parse(issuer_url)
             path = uri.path == "/" ? "" : uri.path.to_s
