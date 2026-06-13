@@ -6,6 +6,7 @@ module MCP
     SUPPORTED_STABLE_PROTOCOL_VERSIONS = [
       LATEST_STABLE_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05",
     ]
+    DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
 
     attr_writer :exception_reporter, :around_request
 

@@ -1799,6 +1799,50 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "missing MCP-Protocol-Version header falls back to default for validation" do
+          MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.stubs(:include?).returns(false)
+
+          request = Rack::Request.new(
+            "REQUEST_METHOD" => "POST",
+            "PATH_INFO" => "/",
+            "rack.input" => StringIO.new(""),
+          )
+
+          response = @transport.send(:validate_protocol_version_header, request)
+          assert_equal 400, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_includes body["error"]["message"], MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
+        end
+
+        test "POST request with empty MCP-Protocol-Version header returns 400" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_PROTOCOL_VERSION" => "",
+            },
+            { jsonrpc: "2.0", method: "tools/list", id: "list" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 400, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+        end
+
         test "POST request with array body and unsupported MCP-Protocol-Version returns 400" do
           init_request = create_rack_request(
             "POST",

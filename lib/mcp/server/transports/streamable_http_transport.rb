@@ -551,8 +551,7 @@ module MCP
         end
 
         def validate_protocol_version_header(request)
-          header_value = request.env["HTTP_MCP_PROTOCOL_VERSION"]
-          return if header_value.nil?
+          header_value = request.env["HTTP_MCP_PROTOCOL_VERSION"] || MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
           return if MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(header_value)
 
           supported = MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.join(", ")
