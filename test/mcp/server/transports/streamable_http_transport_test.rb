@@ -93,7 +93,10 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Invalid JSON", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::PARSE_ERROR, body["error"]["code"]
+          assert_equal "Parse error: Invalid JSON", body["error"]["message"]
         end
 
         test "POST request with JSON array body returns 400" do
@@ -219,7 +222,10 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 404, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "rejects duplicate initialize against an idle-expired session with 404 and evicts it" do
@@ -247,7 +253,7 @@ module MCP
 
             assert_equal(404, duplicate_response[0])
             body = JSON.parse(duplicate_response[2][0])
-            assert_equal("Session not found", body["error"])
+            assert_equal("Session not found", body["error"]["message"])
 
             refute(transport.send(:session_exists?, session_id), "expired session must be evicted")
           ensure
@@ -451,7 +457,10 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "rejects POST request without session ID in stateful mode" do
@@ -465,7 +474,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "rejects notification without session ID in stateful mode" do
@@ -479,7 +488,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "rejects response without session ID in stateful mode" do
@@ -493,7 +502,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "allows POST request without session ID in stateless mode" do
@@ -537,7 +546,10 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Conflict: Only one SSE stream is allowed per session", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Conflict: Only one SSE stream is allowed per session", body["error"]["message"]
         end
 
         test "store_stream_for_session does not overwrite existing stream (TOCTOU guard)" do
@@ -579,7 +591,7 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "handles POST request with invalid session ID" do
@@ -598,7 +610,7 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "handles DELETE request with valid session ID" do
@@ -639,7 +651,7 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "POST returns 404 after session is deleted" do
@@ -672,7 +684,7 @@ module MCP
           assert_equal 404, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "DELETE returns 404 after session is already deleted" do
@@ -702,7 +714,7 @@ module MCP
           assert_equal 404, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "handles DELETE request with missing session ID" do
@@ -717,7 +729,7 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "closes transport and cleans up session" do
@@ -1317,7 +1329,10 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Method not allowed", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Method not allowed", body["error"]["message"]
         end
 
         test "POST request without Content-Type returns 415" do
@@ -1332,7 +1347,10 @@ module MCP
           assert_equal 415, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_equal "Unsupported Media Type: Content-Type must be application/json", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Unsupported Media Type: Content-Type must be application/json", body["error"]["message"]
         end
 
         test "POST request with wrong Content-Type returns 415" do
@@ -1379,7 +1397,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
-            body["error"]
+            body["error"]["message"]
         end
 
         test "POST request with Accept header missing text/event-stream returns 406" do
@@ -1398,7 +1416,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
-            body["error"]
+            body["error"]["message"]
         end
 
         test "POST request with Accept header missing application/json returns 406" do
@@ -1417,7 +1435,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
-            body["error"]
+            body["error"]["message"]
         end
 
         test "POST request with valid Accept header succeeds" do
@@ -1524,7 +1542,10 @@ module MCP
           assert_equal 406, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]["message"]
         end
 
         test "GET request with Accept header missing text/event-stream returns 406" do
@@ -1550,7 +1571,7 @@ module MCP
           assert_equal 406, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]
+          assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]["message"]
         end
 
         test "GET request with valid Accept header succeeds" do
@@ -1960,7 +1981,7 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Method not allowed", body["error"]
+          assert_equal "Method not allowed", body["error"]["message"]
         end
 
         test "stateless mode silently responds with success to session DELETE when session ID is not present" do
@@ -2501,7 +2522,10 @@ module MCP
           assert_equal({ "Content-Type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
-          assert_equal "Internal server error", body["error"]
+          assert_equal "2.0", body["jsonrpc"]
+          assert_nil body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, body["error"]["code"]
+          assert_equal "Internal server error", body["error"]["message"]
         end
 
         test "send_request raises error in stateless mode" do
@@ -3372,7 +3396,7 @@ module MCP
           assert_equal(404, response[0])
 
           body = JSON.parse(response[2][0])
-          assert_equal("Session not found", body["error"])
+          assert_equal("Session not found", body["error"]["message"])
         ensure
           transport.close
         end
@@ -3407,7 +3431,7 @@ module MCP
           assert_equal(404, response[0])
 
           body = JSON.parse(response[2][0])
-          assert_equal("Session not found", body["error"])
+          assert_equal("Session not found", body["error"]["message"])
         ensure
           transport.close
         end
@@ -3563,7 +3587,7 @@ module MCP
           assert_equal(404, response[0])
 
           body = JSON.parse(response[2][0])
-          assert_equal("Session not found", body["error"])
+          assert_equal("Session not found", body["error"]["message"])
         ensure
           transport.close
         end
@@ -3756,7 +3780,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Missing session ID", body["error"]
+          assert_equal "Missing session ID", body["error"]["message"]
         end
 
         test "POST response with invalid session ID returns 404" do
@@ -3781,7 +3805,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 404, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal "Session not found", body["error"]
+          assert_equal "Session not found", body["error"]["message"]
         end
 
         test "handle_regular_request returns 404 for unknown session_id" do
@@ -3797,7 +3821,7 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal(404, response[0])
           body = JSON.parse(response[2][0])
-          assert_equal("Session not found", body["error"])
+          assert_equal("Session not found", body["error"]["message"])
         end
 
         test "session-scoped log notification is sent only to the originating session" do
