@@ -73,13 +73,18 @@ module JsonRpcHandler
 
     error = if !valid_version?(request[:jsonrpc])
       "JSON-RPC version must be 2.0"
-    elsif !valid_id?(request[:id], id_validation_pattern)
+    elsif !valid_id?(id, id_validation_pattern)
       "Request ID must match validation pattern, or be an integer or null"
     elsif !valid_method_name?(request[:method])
       'Method name must be a string and not start with "rpc."'
     end
 
-    return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+    # Per JSON-RPC 2.0 (Response object, `id`), the error response must carry
+    # the same id as the request when the id could be detected; null is only
+    # for requests whose id could not be determined. `error_response` nils out
+    # ids that fail validation, and the `:unknown_id` sentinel keeps a response
+    # (with a null id) being emitted when the request carried no id at all.
+    return error_response(id: id.nil? ? :unknown_id : id, id_validation_pattern: id_validation_pattern, error: {
       code: ErrorCode::INVALID_REQUEST,
       message: "Invalid Request",
       data: error,
