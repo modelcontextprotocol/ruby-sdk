@@ -260,6 +260,11 @@ See the relevant sections below for the arguments they receive.
 
 The MCP protocol supports a special [`_meta` parameter](https://modelcontextprotocol.io/specification/2025-06-18/basic#general-fields) in requests that allows clients to pass request-specific metadata. The server automatically extracts this parameter and makes it available to tools and prompts as a nested field within the `server_context`.
 
+> [!NOTE]
+> `_meta` is only merged when `server_context` is a `Hash` (or `nil`, in which case a new `{ _meta: ... }` hash is synthesized).
+> If you assign a non-`Hash` value to `server_context`, `_meta` is not merged and tools will not see it
+> under `server_context[:_meta]`. Keep `server_context` as a `Hash` if your tools need access to `_meta`.
+
 **Access Pattern:**
 
 When a client includes `_meta` in the request params, it becomes available as `server_context[:_meta]`:
