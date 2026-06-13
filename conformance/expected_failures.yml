@@ -8,5 +8,4 @@ client:
   - auth/2025-03-26-oauth-metadata-backcompat
   - auth/2025-03-26-oauth-endpoint-fallback
   - auth/client-credentials-jwt
-  - auth/client-credentials-basic
   - auth/cross-app-access-complete-flow

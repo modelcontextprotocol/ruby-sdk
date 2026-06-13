@@ -68,6 +68,14 @@ module MCP
           WebMock.reset!
         end
 
+        def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic")
+          ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            client_secret: "cc-secret",
+            token_endpoint_auth_method: token_endpoint_auth_method,
+          )
+        end
+
         # Runs the full authorization flow and returns the `scope` query parameter
         # sent on the authorization request. The caller stubs the AS metadata;
         # this helper supplies a provider whose `grant_types` and optional pre-set
@@ -94,6 +102,102 @@ module MCP
 
           Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
           captured_scope
+        end
+
+        def test_run_uses_client_credentials_grant_for_client_credentials_provider
+          provider = client_credentials_provider
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+          # No authorization-code machinery: /authorize is never contacted
+          # (no stub exists for it, so a request would raise), and DCR is not
+          # run because credentials are pre-registered.
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            expected_basic = "Basic " + Base64.strict_encode64("cc-client:cc-secret")
+            form["grant_type"] == "client_credentials" &&
+              !form.key?("code") &&
+              !form.key?("code_verifier") &&
+              req.headers["Authorization"] == expected_basic
+          end
+        end
+
+        def test_run_client_credentials_with_client_secret_post_sends_credentials_in_body
+          # `client_secret_post` puts the credentials in the form body rather
+          # than an HTTP Basic header (RFC 6749 Section 2.3.1).
+          provider = client_credentials_provider(token_endpoint_auth_method: "client_secret_post")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            form["grant_type"] == "client_credentials" &&
+              form["client_id"] == "cc-client" &&
+              form["client_secret"] == "cc-secret" &&
+              req.headers["Authorization"].nil?
+          end
+        end
+
+        def test_run_client_credentials_raises_clean_error_when_client_information_missing
+          # The constructor always stores credentials, but if a custom storage loses them
+          # the grant must fail with a domain error rather than a `NoMethodError` from
+          # the authorization-code registration helper.
+          provider = client_credentials_provider
+          provider.storage.save_client_information(nil)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+          assert_match(/client_credentials grant/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_client_credentials_requests_scope_from_prm_scopes_supported
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: [@auth_base],
+              scopes_supported: ["mcp:read", "mcp:write"],
+            ),
+          )
+
+          provider = client_credentials_provider
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["scope"] == "mcp:read mcp:write"
+          end
+        end
+
+        def test_run_uses_authorization_code_grant_for_default_provider
+          # A standard `Provider` declares `authorization_flow == :authorization_code`,
+          # so `Flow` runs the interactive grant regardless of what `client_metadata[:grant_types]` happens to list.
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code", "client_credentials"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["grant_type"] == "authorization_code"
+          end
         end
 
         def test_run_completes_full_authorization_flow

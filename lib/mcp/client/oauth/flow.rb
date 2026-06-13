@@ -54,6 +54,11 @@ module MCP
           as_metadata = fetch_authorization_server_metadata(issuer_url: authorization_server)
           ensure_issuer_matches!(expected: authorization_server, returned: as_metadata["issuer"])
           ensure_secure_endpoints!(as_metadata)
+
+          if provider_authorization_flow == :client_credentials
+            return run_client_credentials!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
+          end
+
           ensure_pkce_supported!(as_metadata)
 
           client_info = ensure_client_registered(as_metadata: as_metadata)
@@ -92,14 +97,46 @@ module MCP
           :authorized
         end
 
-        # Exchanges the saved `refresh_token` for a fresh access token (RFC 6749
-        # Section 6). Re-discovers PRM and AS metadata so we always pick up a moved
-        # token endpoint, and re-runs the audience / issuer / security checks
-        # before talking to it.
+        # Runs the OAuth 2.1 `client_credentials` grant (machine-to-machine, no user interaction) and persists
+        # the resulting token. Shares the same discovery and security checks as `run!`; the only difference is
+        # the grant exchanged at the token endpoint. There is no PKCE, redirect, or authorization request,
+        # and no `offline_access` augmentation because the grant does not issue a refresh token (OAuth 2.1 Section 4.3.3).
+        # The pre-registered `client_id` / `client_secret` come from the provider's stored `client_information`.
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
+        def run_client_credentials!(as_metadata:, prm:, resource:, scope:)
+          client_info = client_credentials_client_info
+
+          form = { "grant_type" => "client_credentials" }
+          effective_scope = resolve_scope(scope: scope, prm: prm)
+          form["scope"] = effective_scope if effective_scope
+          form["resource"] = resource if resource
+
+          tokens = post_to_token_endpoint(as_metadata: as_metadata, client_info: client_info, form: form)
+          @provider.save_tokens(tokens)
+          :authorized
+        end
+
+        # Reads the pre-registered credentials for the `client_credentials` grant directly from the provider's stored
+        # `client_information`, rather than going through `ensure_client_registered` (which targets the authorization-code
+        # flow and reaches for `Provider`-only methods like `client_metadata` and `client_id_metadata_document_url`).
+        # The grant is for confidential clients, so a missing `client_id` is a clean configuration error, not a fallback
+        # to dynamic registration.
+        def client_credentials_client_info
+          info = @provider.client_information
+          unless info.is_a?(Hash) && client_info_required_value(info, "client_id")
+            raise AuthorizationError,
+              "Cannot run the client_credentials grant: the provider has no stored `client_id`."
+          end
+
+          info
+        end
+
+        # Exchanges the saved `refresh_token` for a fresh access token (RFC 6749 Section 6).
+        # Re-discovers PRM and AS metadata so we always pick up a moved token endpoint, and re-runs the audience / issuer / security
+        # checks before talking to it.
         #
-        # Returns `:refreshed` on success. Raises `AuthorizationError` when
-        # the provider has no refresh token, no client information, or when
-        # the token endpoint refuses the refresh request.
+        # Returns `:refreshed` on success. Raises `AuthorizationError` when the provider has no refresh token, no client information,
+        # or when the token endpoint refuses the refresh request.
         # https://www.rfc-editor.org/rfc/rfc6749#section-6
         def refresh!(server_url:, resource_metadata_url: nil)
           refresh_token = read_token("refresh_token")
@@ -110,8 +147,7 @@ module MCP
 
           # A CIMD-configured provider stores no `client_information` on purpose
           # (the CIMD URL is re-resolved against the live AS metadata on every flow).
-          # Allow refresh to proceed in that case so the `refresh_token` obtained via
-          # the CIMD flow remains usable.
+          # Allow refresh to proceed in that case so the `refresh_token` obtained via the CIMD flow remains usable.
           have_cimd_url = !@provider.client_id_metadata_document_url.nil?
 
           unless have_stored_client_info || have_cimd_url
@@ -482,6 +518,18 @@ module MCP
           grant_types = metadata[:grant_types] || metadata["grant_types"]
 
           Array(grant_types).include?("refresh_token")
+        end
+
+        # The OAuth flow the provider drives. Dispatching on the provider's
+        # declared flow keeps `Flow` from second-guessing intent by parsing
+        # `client_metadata[:grant_types]` (which is protocol metadata for the
+        # authorization server, not an SDK control signal). A provider that
+        # predates this method is treated as the interactive authorization-code
+        # flow it was the only option for.
+        def provider_authorization_flow
+          return :authorization_code unless @provider.respond_to?(:authorization_flow)
+
+          @provider.authorization_flow
         end
 
         def build_authorization_url(as_metadata:, client_id:, scope:, state:, code_challenge:, resource:)
