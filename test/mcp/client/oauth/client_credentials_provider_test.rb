@@ -68,6 +68,98 @@ module MCP
           provider.clear_tokens!
           assert_nil(provider.tokens)
         end
+
+        # `OpenSSL::PKey::EC.generate` only exists from the openssl gem 2.2 (Ruby 3.0),
+        # while `EC#generate_key` raises on openssl 3.0+ where PKey objects are immutable,
+        # so branch on availability to keep CI green on every supported Ruby.
+        def generate_es256_key
+          if OpenSSL::PKey::EC.respond_to?(:generate)
+            OpenSSL::PKey::EC.generate("prime256v1")
+          else
+            OpenSSL::PKey::EC.new("prime256v1").tap(&:generate_key)
+          end
+        end
+
+        def private_key_jwt_provider(key: generate_es256_key)
+          ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            token_endpoint_auth_method: "private_key_jwt",
+            private_key: key,
+            signing_algorithm: "ES256",
+          )
+        end
+
+        def test_initialize_accepts_private_key_jwt
+          provider = private_key_jwt_provider
+
+          info = provider.client_information
+          assert_equal("cc-client", info["client_id"])
+          assert_equal("private_key_jwt", info["token_endpoint_auth_method"])
+        end
+
+        def test_initialize_private_key_jwt_does_not_persist_the_key_or_a_secret
+          # The PEM must never reach a (potentially persistent) storage backend.
+          provider = private_key_jwt_provider
+
+          info = provider.client_information
+          refute(info.key?("client_secret"))
+          refute(info.values.any? { |value| value.to_s.include?("PRIVATE KEY") })
+        end
+
+        def test_initialize_private_key_jwt_requires_private_key
+          assert_raises(ClientCredentialsProvider::InvalidCredentialsError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              token_endpoint_auth_method: "private_key_jwt",
+              signing_algorithm: "ES256",
+            )
+          end
+        end
+
+        def test_initialize_private_key_jwt_requires_signing_algorithm
+          assert_raises(ClientCredentialsProvider::InvalidCredentialsError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              token_endpoint_auth_method: "private_key_jwt",
+              private_key: generate_es256_key,
+            )
+          end
+        end
+
+        def test_initialize_private_key_jwt_rejects_client_secret
+          assert_raises(ClientCredentialsProvider::InvalidCredentialsError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              client_secret: "cc-secret",
+              token_endpoint_auth_method: "private_key_jwt",
+              private_key: generate_es256_key,
+              signing_algorithm: "ES256",
+            )
+          end
+        end
+
+        def test_initialize_private_key_jwt_fails_fast_on_key_algorithm_mismatch
+          assert_raises(JWTClientAssertion::InvalidKeyError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              token_endpoint_auth_method: "private_key_jwt",
+              private_key: OpenSSL::PKey::RSA.new(2048),
+              signing_algorithm: "ES256",
+            )
+          end
+        end
+
+        def test_client_assertion_returns_signed_jwt_for_the_audience
+          provider = private_key_jwt_provider
+
+          assertion = provider.client_assertion(audience: "https://auth.example.com")
+          payload_segment = assertion.split(".")[1]
+          claims = JSON.parse(Base64.urlsafe_decode64(payload_segment + "=" * (-payload_segment.length % 4)))
+
+          assert_equal("cc-client", claims["iss"])
+          assert_equal("cc-client", claims["sub"])
+          assert_equal("https://auth.example.com", claims["aud"])
+        end
       end
     end
   end

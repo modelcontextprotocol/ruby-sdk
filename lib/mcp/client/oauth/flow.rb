@@ -681,7 +681,26 @@ module MCP
           client_secret = client_info_required_value(client_info, "client_secret")
           token_endpoint_auth_method = client_info_value(client_info, "token_endpoint_auth_method")
 
-          form = form.merge("client_id" => client_id)
+          form = if token_endpoint_auth_method == "private_key_jwt"
+            # RFC 7523 Section 2.2 JWT client assertion for the `private_key_jwt` method of
+            # the `io.modelcontextprotocol/oauth-client-credentials` extension (SEP-1046).
+            # The client identity travels in the assertion's `iss`/`sub` claims, so `client_id` is
+            # omitted from the body per RFC 7521 Section 4.2 (the `client_assertion` conveys the client identity).
+            # The audience is the issuer identifier that `ensure_issuer_matches!` already byte-validated.
+            unless @provider.respond_to?(:client_assertion)
+              raise AuthorizationError,
+                "token_endpoint_auth_method is private_key_jwt but the provider does not " \
+                  "implement `client_assertion(audience:)`."
+            end
+
+            form.merge(
+              "client_assertion_type" => JWTClientAssertion::ASSERTION_TYPE,
+              "client_assertion" => @provider.client_assertion(audience: as_metadata["issuer"]),
+            )
+          else
+            form.merge("client_id" => client_id)
+          end
+
           headers = {}
           if client_secret
             case token_endpoint_auth_method
