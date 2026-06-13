@@ -7,7 +7,7 @@ module MCP
     class InputSchemaTest < ActiveSupport::TestCase
       test "required arguments are converted to strings" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
-        assert_equal ["message"], input_schema.schema[:required]
+        assert_equal ["message"], input_schema.to_h[:required]
       end
 
       test "to_h returns a hash representation of the input schema" do
@@ -139,10 +139,10 @@ module MCP
       test "unexpected errors bubble up from validate_arguments" do
         schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
-        JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
-          assert_raises(RuntimeError) do
-            schema.validate_arguments({ foo: "bar" })
-          end
+        JSONSchemer::Schema.any_instance.stubs(:validate).raises("unexpected error")
+
+        assert_raises(RuntimeError) do
+          schema.validate_arguments(foo: "bar")
         end
       end
 
@@ -199,6 +199,26 @@ module MCP
 
         schema6 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"], additionalProperties: false)
         refute_equal schema1, schema6
+      end
+
+      test "format keyword is not enforced (legacy behavior)" do
+        schema = InputSchema.new(
+          properties: { email: { type: "string", format: "email" } },
+          required: ["email"],
+        )
+        assert_nil(schema.validate_arguments(email: "not_an_email"))
+      end
+
+      test "invalid pattern raises ArgumentError, not RegexpError" do
+        error = assert_raises(ArgumentError) do
+          InputSchema.new(properties: { id: { type: "string", pattern: "[" } })
+        end
+        assert_includes error.message, "Invalid JSON Schema"
+      end
+
+      test "Symbol values in arguments are treated as strings" do
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        assert_nil(schema.validate_arguments(foo: :bar))
       end
     end
   end

@@ -10,7 +10,7 @@ module MCP
       end
 
       test "validates a schema once and reuses the result for identical schemas" do
-        JSON::Validator.expects(:fully_validate).once.returns([])
+        JSONSchemer::Schema.any_instance.expects(:validate_schema).once.returns([])
 
         schema = { properties: { validates_once: { type: "string" } } }
         InputSchema.new(schema)
@@ -18,7 +18,7 @@ module MCP
       end
 
       test "validates distinct schemas separately" do
-        JSON::Validator.expects(:fully_validate).twice.returns([])
+        JSONSchemer::Schema.any_instance.expects(:validate_schema).twice.returns([])
 
         InputSchema.new(properties: { distinct_a: { type: "string" } })
         InputSchema.new(properties: { distinct_b: { type: "string" } })
@@ -64,11 +64,11 @@ module MCP
           break
         end
 
-        JSON::Validator.stub(:fully_validate, []) do
-          assert_nothing_raised do
-            InputSchema.new(schema)
-            InputSchema.new(schema)
-          end
+        JSONSchemer::Schema.any_instance.stubs(:validate_schema).returns([])
+
+        assert_nothing_raised do
+          InputSchema.new(schema)
+          InputSchema.new(schema)
         end
       end
 
