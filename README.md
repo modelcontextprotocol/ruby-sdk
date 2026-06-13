@@ -300,6 +300,36 @@ end
 }
 ```
 
+**Distributed Tracing (W3C Trace Context):**
+
+Per SEP-414, the keys `traceparent`, `tracestate`, and `baggage` are reserved un-prefixed `_meta` keys for propagating
+[W3C Trace Context](https://www.w3.org/TR/trace-context/) across MCP requests. The SDK guarantees these keys pass through
+incoming request `_meta` untouched, and exposes their names as constants on `MCP::TraceContext` (`TRACEPARENT_META_KEY`,
+`TRACESTATE_META_KEY`, `BAGGAGE_META_KEY`, and `META_KEYS`). The SDK does not depend on OpenTelemetry; bridge the values
+to your tracing system yourself:
+
+```ruby
+class TracedTool < MCP::Tool
+  def self.call(message:, server_context:)
+    traceparent = server_context.dig(:_meta, :traceparent)
+    # Hand traceparent/tracestate/baggage to your tracing library
+    # (e.g. the opentelemetry-ruby gems) to continue the caller's trace.
+
+    MCP::Tool::Response.new([{ type: "text", text: "ok" }])
+  end
+end
+```
+
+On the client side, every request method (`call_tool`, `read_resource`, `get_prompt`, `complete`, `ping`, and the `list_*` methods)
+accepts a `meta:` keyword to inject these keys into the outgoing request, so trace context can flow on every request:
+
+```ruby
+meta = { MCP::TraceContext::TRACEPARENT_META_KEY => "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" }
+
+client.call_tool(tool: tool, arguments: { message: "Hello" }, meta: meta)
+client.read_resource(uri: "file:///report.txt", meta: meta)
+```
+
 #### Configuration Block Data
 
 ##### Exception Reporter

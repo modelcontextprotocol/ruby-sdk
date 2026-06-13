@@ -103,6 +103,8 @@ module MCP
     # Returns a single page of tools from the server.
     #
     # @param cursor [String, nil] Cursor from a previous page response.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [MCP::Client::ListToolsResult] Result with `tools` (Array<MCP::Client::Tool>)
     #   and `next_cursor` (String or nil).
     #
@@ -114,9 +116,9 @@ module MCP
     #     cursor = page.next_cursor
     #     break unless cursor
     #   end
-    def list_tools(cursor: nil)
+    def list_tools(cursor: nil, meta: nil)
       params = cursor ? { cursor: cursor } : nil
-      response = request(method: "tools/list", params: params)
+      response = request(method: "tools/list", params: params, meta: meta)
       result = response["result"] || {}
 
       tools = (result["tools"] || []).map do |tool|
@@ -152,11 +154,13 @@ module MCP
     # Returns a single page of resources from the server.
     #
     # @param cursor [String, nil] Cursor from a previous page response.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [MCP::Client::ListResourcesResult] Result with `resources` (Array<Hash>)
     #   and `next_cursor` (String or nil).
-    def list_resources(cursor: nil)
+    def list_resources(cursor: nil, meta: nil)
       params = cursor ? { cursor: cursor } : nil
-      response = request(method: "resources/list", params: params)
+      response = request(method: "resources/list", params: params, meta: meta)
       result = response["result"] || {}
 
       ListResourcesResult.new(
@@ -181,11 +185,13 @@ module MCP
     # Returns a single page of resource templates from the server.
     #
     # @param cursor [String, nil] Cursor from a previous page response.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [MCP::Client::ListResourceTemplatesResult] Result with `resource_templates`
     #   (Array<Hash>) and `next_cursor` (String or nil).
-    def list_resource_templates(cursor: nil)
+    def list_resource_templates(cursor: nil, meta: nil)
       params = cursor ? { cursor: cursor } : nil
-      response = request(method: "resources/templates/list", params: params)
+      response = request(method: "resources/templates/list", params: params, meta: meta)
       result = response["result"] || {}
 
       ListResourceTemplatesResult.new(
@@ -210,11 +216,13 @@ module MCP
     # Returns a single page of prompts from the server.
     #
     # @param cursor [String, nil] Cursor from a previous page response.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [MCP::Client::ListPromptsResult] Result with `prompts` (Array<Hash>)
     #   and `next_cursor` (String or nil).
-    def list_prompts(cursor: nil)
+    def list_prompts(cursor: nil, meta: nil)
       params = cursor ? { cursor: cursor } : nil
-      response = request(method: "prompts/list", params: params)
+      response = request(method: "prompts/list", params: params, meta: meta)
       result = response["result"] || {}
 
       ListPromptsResult.new(
@@ -242,6 +250,10 @@ module MCP
     # @param tool [MCP::Client::Tool] The tool to be called.
     # @param arguments [Object, nil] The arguments to pass to the tool.
     # @param progress_token [String, Integer, nil] A token to request progress notifications from the server during tool execution.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. the W3C Trace Context keys reserved by SEP-414
+    #   (`MCP::TraceContext::TRACEPARENT_META_KEY`, `tracestate`, `baggage`).
+    #   `progress_token` takes precedence over a `progressToken` entry in `meta`.
     # @return [Hash] The full JSON-RPC response from the transport.
     #
     # @example Call by name
@@ -256,14 +268,17 @@ module MCP
     # @note
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
-    def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil)
+    def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil, meta: nil)
       tool_name = name || tool&.name
       raise ArgumentError, "Either `name:` or `tool:` must be provided." unless tool_name
 
       params = { name: tool_name, arguments: arguments }
+      meta_entries = meta ? meta.dup : {}
       if progress_token
-        params[:_meta] = { progressToken: progress_token }
+        meta_entries.delete("progressToken")
+        meta_entries[:progressToken] = progress_token
       end
+      params[:_meta] = meta_entries unless meta_entries.empty?
 
       request(method: "tools/call", params: params)
     end
@@ -271,9 +286,11 @@ module MCP
     # Reads a resource from the server by URI and returns the contents.
     #
     # @param uri [String] The URI of the resource to read.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [Array<Hash>] An array of resource contents (text or blob).
-    def read_resource(uri:)
-      response = request(method: "resources/read", params: { uri: uri })
+    def read_resource(uri:, meta: nil)
+      response = request(method: "resources/read", params: { uri: uri }, meta: meta)
 
       response.dig("result", "contents") || []
     end
@@ -281,9 +298,11 @@ module MCP
     # Gets a prompt from the server by name and returns its details.
     #
     # @param name [String] The name of the prompt to get.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [Hash] A hash containing the prompt details.
-    def get_prompt(name:)
-      response = request(method: "prompts/get", params: { name: name })
+    def get_prompt(name:, meta: nil)
+      response = request(method: "prompts/get", params: { name: name }, meta: meta)
 
       response.fetch("result", {})
     end
@@ -294,12 +313,14 @@ module MCP
     #   or `{ type: "ref/resource", uri: "file:///{path}" }`.
     # @param argument [Hash] The argument being completed, e.g. `{ name: "language", value: "py" }`.
     # @param context [Hash, nil] Optional context with previously resolved arguments.
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request,
+    #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @return [Hash] The completion result with `"values"`, `"hasMore"`, and optionally `"total"`.
-    def complete(ref:, argument:, context: nil)
+    def complete(ref:, argument:, context: nil, meta: nil)
       params = { ref: ref, argument: argument }
       params[:context] = context if context
 
-      response = request(method: "completion/complete", params: params)
+      response = request(method: "completion/complete", params: params, meta: meta)
 
       response.dig("result", "completion") || { "values" => [], "hasMore" => false }
     end
@@ -315,8 +336,8 @@ module MCP
     #   client.ping # => {}
     #
     # @see https://modelcontextprotocol.io/specification/latest/basic/utilities/ping
-    def ping
-      result = request(method: Methods::PING)["result"]
+    def ping(meta: nil)
+      result = request(method: Methods::PING, meta: meta)["result"]
       raise ValidationError, "Response validation failed: missing or invalid `result`" unless result.is_a?(Hash)
 
       result
@@ -345,7 +366,13 @@ module MCP
       pages
     end
 
-    def request(method:, params: nil)
+    # Merges caller-supplied `meta` entries into the request params as `_meta`,
+    # without mutating the caller's hashes. Per SEP-414, `_meta` carries
+    # request-specific metadata such as W3C trace context (`traceparent`,
+    # `tracestate`, `baggage`); see {MCP::TraceContext}.
+    def request(method:, params: nil, meta: nil)
+      params = (params || {}).merge(_meta: meta) if meta && !meta.empty?
+
       request_body = {
         jsonrpc: JsonRpcHandler::Version::V2_0,
         id: request_id,

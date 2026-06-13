@@ -19,6 +19,7 @@ module MCP
   autoload :Server, "mcp/server"
   autoload :ServerSession, "mcp/server_session"
   autoload :Tool, "mcp/tool"
+  autoload :TraceContext, "mcp/trace_context"
 
   class << self
     def configure

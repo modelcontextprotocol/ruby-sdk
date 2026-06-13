@@ -2659,6 +2659,71 @@ module MCP
       assert_equal "from_accessor", received_context[:custom]
     end
 
+    test "#handle tools/call passes W3C trace context _meta keys through to the handler" do
+      # Per SEP-414, `traceparent`, `tracestate`, and `baggage` are reserved
+      # un-prefixed `_meta` keys and must never be stripped by the SDK.
+      server = Server.new(name: "trace_test", tools: [])
+      received_context = nil
+      server.define_tool(name: "trace_tool") do |server_context:|
+        received_context = server_context
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "trace_tool",
+          arguments: {},
+          _meta: {
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            tracestate: "vendor=value",
+            baggage: "userId=alice",
+            progressToken: "token-1",
+          },
+        },
+      })
+
+      meta = received_context[:_meta]
+      assert_equal "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", meta[:traceparent]
+      assert_equal "vendor=value", meta[:tracestate]
+      assert_equal "userId=alice", meta[:baggage]
+      assert_equal "token-1", meta[:progressToken]
+    end
+
+    test "#handle prompts/get passes W3C trace context _meta keys through to the handler" do
+      server = Server.new(name: "trace_test", prompts: [])
+      received_context = nil
+      server.define_prompt(name: "trace_prompt", arguments: []) do |_args, server_context:|
+        received_context = server_context
+        Prompt::Result.new(
+          description: "a prompt description",
+          messages: [Prompt::Message.new(role: "user", content: Content::Text.new("a prompt message"))],
+        )
+      end
+
+      server.handle({
+        jsonrpc: "2.0",
+        method: "prompts/get",
+        id: 1,
+        params: {
+          name: "trace_prompt",
+          arguments: {},
+          _meta: {
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            tracestate: "vendor=value",
+            baggage: "userId=alice",
+          },
+        },
+      })
+
+      meta = received_context[:_meta]
+      MCP::TraceContext::META_KEYS.each do |key|
+        assert meta.key?(key.to_sym), "expected _meta to retain #{key}"
+      end
+    end
+
     test "#handle tools/list returns paginated results when page_size is set" do
       tool_a = Tool.define(name: "tool_a", title: "Tool A", description: "Tool A")
       tool_b = Tool.define(name: "tool_b", title: "Tool B", description: "Tool B")
