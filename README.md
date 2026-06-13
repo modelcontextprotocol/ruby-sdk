@@ -453,10 +453,10 @@ The exception reporter receives two arguments:
 - `exception`: The Ruby exception object that was raised
 - `server_context`: A hash containing contextual information about where the error occurred
 
-The server_context hash includes:
+The `server_context` hash includes:
 
-- For tool calls: `{ tool_name: "name", arguments: { ... } }`
-- For general request handling: `{ request: { ... } }`
+- For request handling failures: `{ request: { ... } }` (the raw JSON-RPC request hash)
+- For notification delivery failures: `{ notification: "tools_list_changed" }` (or the relevant notification name)
 
 When an exception occurs:
 
