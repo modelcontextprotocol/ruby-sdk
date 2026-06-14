@@ -367,7 +367,7 @@ module MCP
           end
 
           response = begin
-            http_post_json(registration_endpoint, @provider.client_metadata)
+            http_post_json(registration_endpoint, registration_client_metadata)
           rescue Faraday::Error => e
             raise AuthorizationError,
               "Dynamic client registration failed: #{e.class}: #{e.message}."
@@ -391,6 +391,20 @@ module MCP
 
           @provider.save_client_information(info)
           info
+        end
+
+        # Returns the client metadata to submit on Dynamic Client Registration.
+        # Per SEP-837, MCP clients MUST specify an appropriate OIDC `application_type`
+        # so the authorization server can apply the matching redirect URI policy.
+        # When the user did not set one explicitly, infer `"native"` vs `"web"` from
+        # the registered `redirect_uris`; an explicit value always wins.
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/837
+        def registration_client_metadata
+          metadata = @provider.client_metadata
+          return metadata if metadata[:application_type] || metadata["application_type"]
+
+          redirect_uris = metadata[:redirect_uris] || metadata["redirect_uris"]
+          metadata.merge("application_type" => Discovery.infer_application_type(redirect_uris))
         end
 
         # Reads `key` from a `client_information` hash that may use either string or

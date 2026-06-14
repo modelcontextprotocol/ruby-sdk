@@ -237,6 +237,23 @@ module MCP
             false
           end
 
+          # Infers the OIDC Dynamic Client Registration `application_type` for a client from its `redirect_uris`.
+          # Per SEP-837, MCP clients MUST specify an appropriate application type during Dynamic Client Registration
+          # so the authorization server can apply the matching redirect URI policy.
+          #
+          # Returns `"native"` when every redirect URI is a native-app URI: a custom non-http(s) scheme (RFC 8252 Section 7.1)
+          # or an http(s) URI whose host is a loopback address (`localhost`, `127.0.0.0/8`, or `::1`, RFC 8252 Section 7.3).
+          # Returns `"web"` otherwise, including when `redirect_uris` is nil, empty, or contains an unparseable URI.
+          #
+          # - https://github.com/modelcontextprotocol/modelcontextprotocol/pull/837
+          # - https://openid.net/specs/openid-connect-registration-1_0.html#ClientMetadata
+          def infer_application_type(redirect_uris)
+            uris = Array(redirect_uris)
+            return "web" if uris.empty?
+
+            uris.all? { |uri| native_redirect_uri?(uri) } ? "native" : "web"
+          end
+
           # Like `canonicalize_url` but also strips query string, fragment, and
           # userinfo. This variant is used for identity comparison against
           # the request URL Faraday actually sends, which differs from the value
@@ -343,6 +360,20 @@ module MCP
             IPAddr.new(candidate)
           rescue IPAddr::Error
             nil
+          end
+
+          # A redirect URI counts as native when it uses a custom non-http(s) scheme
+          # (e.g. `com.example.app:/callback`) or when it is an http(s) URI whose host is
+          # a loopback address. A URI without a scheme or one that fails to parse is not native.
+          def native_redirect_uri?(url)
+            uri = URI.parse(url.to_s)
+            scheme = uri.scheme&.downcase
+            return false if scheme.nil?
+            return loopback_host?(uri.host) if ["http", "https"].include?(scheme)
+
+            true
+          rescue URI::InvalidURIError
+            false
           end
 
           def base_url(uri)

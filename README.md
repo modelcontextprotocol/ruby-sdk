@@ -2029,6 +2029,8 @@ Required keyword arguments to `Provider.new`:
 
 - `client_metadata`: Hash sent to the authorization server's Dynamic Client Registration endpoint. Must include `redirect_uris`, `grant_types`, `response_types`,
   `token_endpoint_auth_method`. `redirect_uri` (below) must appear in this list, otherwise the constructor raises `Provider::UnregisteredRedirectURIError`.
+  When `application_type` is omitted, the SDK infers `"native"` or `"web"` from `redirect_uris` per SEP-837 before registering (loopback or custom-scheme URIs are native);
+  an explicit value always wins.
 - `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
 - `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
 - `callback_handler`: Callable that returns `[code, state]` after the user is redirected back to `redirect_uri`.

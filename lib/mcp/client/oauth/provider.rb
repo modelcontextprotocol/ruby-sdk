@@ -13,6 +13,9 @@ module MCP
       # - `client_metadata`  - Hash sent to the authorization server's Dynamic Client
       #   Registration endpoint. Must include at minimum `redirect_uris`,
       #   `grant_types`, `response_types`, and `token_endpoint_auth_method`.
+      #   When `application_type` is omitted, the SDK infers `"native"` or `"web"`
+      #   from `redirect_uris` per SEP-837 before registering; an explicit value
+      #   always wins.
       # - `redirect_uri`     - String: the redirect URI used for the authorization
       #   request. Must be one of `redirect_uris` in `client_metadata`.
       # - `redirect_handler` - Callable invoked with the fully-built authorization

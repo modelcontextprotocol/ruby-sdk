@@ -200,6 +200,62 @@ module MCP
           end
         end
 
+        # Runs the full authorization flow with a minimal provider so tests can assert on
+        # the Dynamic Client Registration request body. The default loopback redirect URI
+        # exercises SEP-837's `"native"` inference; passing an HTTPS `redirect_uri` exercises
+        # the `"web"` inference.
+        def run_authorization_flow(redirect_uri: "http://localhost:0/callback", client_metadata_extra: {})
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: [redirect_uri],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            }.merge(client_metadata_extra),
+            redirect_uri: redirect_uri,
+            redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+        end
+
+        def test_run_registers_native_application_type_for_loopback_redirect_uri
+          run_authorization_flow
+
+          assert_requested(:post, "#{@auth_base}/register") do |req|
+            JSON.parse(req.body)["application_type"] == "native"
+          end
+        end
+
+        def test_run_registers_web_application_type_for_https_redirect_uri
+          run_authorization_flow(redirect_uri: "https://app.example.com/callback")
+
+          assert_requested(:post, "#{@auth_base}/register") do |req|
+            JSON.parse(req.body)["application_type"] == "web"
+          end
+        end
+
+        def test_run_does_not_override_explicit_application_type
+          run_authorization_flow(client_metadata_extra: { application_type: "web" })
+
+          assert_requested(:post, "#{@auth_base}/register") do |req|
+            JSON.parse(req.body)["application_type"] == "web"
+          end
+        end
+
+        def test_run_does_not_override_explicit_string_keyed_application_type
+          run_authorization_flow(
+            redirect_uri: "https://app.example.com/callback",
+            client_metadata_extra: { "application_type" => "native" },
+          )
+
+          assert_requested(:post, "#{@auth_base}/register") do |req|
+            JSON.parse(req.body)["application_type"] == "native"
+          end
+        end
+
         def test_run_completes_full_authorization_flow
           captured_authorization_url = nil
           state_value = nil
