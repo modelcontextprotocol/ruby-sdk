@@ -9,7 +9,7 @@ module MCP
   class ServerSession
     ERAS = [:legacy, :modern].freeze
 
-    attr_reader :session_id, :client, :logging_message_notification
+    attr_reader :session_id, :client, :logging_message_notification, :protocol_version
 
     # Connection-era lock of the dual-era serving model (SEP-2575): `nil` until the first era-distinctive message succeeds,
     # then `:legacy` or `:modern` for the connection's lifetime. Modern-era transports construct their per-request sessions
@@ -26,6 +26,7 @@ module MCP
       @client = nil
       @client_capabilities = nil
       @logging_message_notification = nil
+      @protocol_version = nil
       @in_flight = {}
       @in_flight_mutex = Mutex.new
       @initialized = false
@@ -39,8 +40,9 @@ module MCP
     # Called by `Server#init` after a successful `initialize` response, so subsequent
     # `initialize` requests on the same session can be rejected per MCP spec
     # (the initialization phase MUST be the first interaction).
-    def mark_initialized!
+    def mark_initialized!(protocol_version: nil)
       @initialized = true
+      @protocol_version = protocol_version
       # A successful `initialize` is the legacy-distinctive message of the dual-era serving model (SEP-2575),
       # so it also locks the connection era.
       @era ||= :legacy
@@ -130,6 +132,7 @@ module MCP
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
     #   server configuration, or environment variables instead.
     def list_roots(related_request_id: nil)
+      @server.send(:warn_if_deprecated_protocol_feature, :roots, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
       unless client_capabilities&.dig(:roots)
@@ -156,6 +159,7 @@ module MCP
     #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
     #   APIs instead.
     def create_sampling_message(related_request_id: nil, **kwargs)
+      @server.send(:warn_if_deprecated_protocol_feature, :sampling, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
       params = @server.build_sampling_params(client_capabilities, **kwargs)
@@ -246,6 +250,8 @@ module MCP
     #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
     #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
+      @server.send(:warn_if_deprecated_protocol_feature, :logging, session: self, uplevel: 2)
+
       effective_logging = @logging_message_notification || @server.logging_message_notification
       return unless effective_logging&.should_notify?(level)
 

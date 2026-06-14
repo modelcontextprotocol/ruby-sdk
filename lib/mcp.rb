@@ -2,6 +2,7 @@
 
 require_relative "json_rpc_handler"
 require_relative "mcp/configuration"
+require_relative "mcp/protocol_deprecations"
 require_relative "mcp/string_utils"
 require_relative "mcp/transport"
 require_relative "mcp/version"
