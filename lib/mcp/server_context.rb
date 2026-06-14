@@ -35,6 +35,9 @@ module MCP
     # @param data [Object] The log data to send.
     # @param level [String] Log level (e.g., `"debug"`, `"info"`, `"error"`).
     # @param logger [String, nil] Logger name.
+    # @deprecated MCP Logging (`logging/setLevel` and `notifications/message`)
+    #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil)
       return unless @notification_target
 
@@ -51,6 +54,10 @@ module MCP
     end
 
     # Delegates to the session so the request is scoped to the originating client.
+    # @deprecated MCP Roots (`roots/list` and
+    #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
+    #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
+    #   server configuration, or environment variables instead.
     def list_roots
       if @notification_target.respond_to?(:list_roots)
         @notification_target.list_roots(related_request_id: @related_request_id)
@@ -84,6 +91,9 @@ module MCP
     # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` (via `method_missing`) when `@notification_target`
     # does not support sampling.
+    # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
+    #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
+    #   APIs instead.
     def create_sampling_message(**kwargs)
       if @notification_target.respond_to?(:create_sampling_message)
         @notification_target.create_sampling_message(**kwargs, related_request_id: @related_request_id)

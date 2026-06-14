@@ -11,6 +11,8 @@ require "mcp/client"
 module MCP
   class Client
     class HTTPTest < Minitest::Test
+      include DeprecationWarningTestHelper
+
       def test_raises_load_error_when_faraday_not_available
         client = HTTP.new(url: url)
 
@@ -796,6 +798,44 @@ module MCP
           protocol_version: "2025-03-26",
           capabilities: { roots: { listChanged: true } },
         )
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+      end
+
+      def test_connect_warns_for_deprecated_capabilities_when_negotiated_protocol_version_is_2026_07_28
+        notification_stub = stub_notification
+
+        init_stub = stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: "2026-07-28" } }.to_json,
+          )
+
+        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
+          client.connect(capabilities: { roots: { listChanged: true }, sampling: {} })
+        end
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+      end
+
+      def test_connect_does_not_warn_for_deprecated_capabilities_when_negotiated_protocol_version_is_older
+        notification_stub = stub_notification
+
+        init_stub = stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          )
+
+        assert_no_deprecation_warning do
+          client.connect(capabilities: { roots: { listChanged: true }, sampling: {} })
+        end
 
         assert_requested(init_stub)
         assert_requested(notification_stub)
