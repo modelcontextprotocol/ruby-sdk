@@ -7,6 +7,7 @@ require_relative "instrumentation"
 require_relative "methods"
 require_relative "logging_message_notification"
 require_relative "progress"
+require_relative "protocol_deprecations"
 require_relative "server_context"
 require_relative "server/capabilities"
 require_relative "server/pagination"
@@ -140,6 +141,7 @@ module MCP
       self.page_size = page_size
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
+      @client_protocol_version = nil
 
       validate!
 
@@ -256,7 +258,12 @@ module MCP
       report_exception(e, { notification: "resources_list_changed" })
     end
 
+    # @deprecated MCP Logging (`logging/setLevel` and `notifications/message`)
+    #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil)
+      warn_if_deprecated_protocol_feature(:logging, uplevel: 1)
+
       return unless @transport
       return unless logging_message_notification&.should_notify?(level)
 
@@ -272,7 +279,13 @@ module MCP
     # Called when a client notifies the server that its filesystem roots have changed.
     #
     # @yield [params] The notification params (typically `nil`).
+    # @deprecated MCP Roots (`roots/list` and
+    #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
+    #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
+    #   server configuration, or environment variables instead.
     def roots_list_changed_handler(&block)
+      warn_if_deprecated_protocol_feature(:roots, uplevel: 1)
+
       @handlers[Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED] = block
     end
 
@@ -430,6 +443,13 @@ module MCP
         return ->(params) { handle_cancelled_notification(params, session: session) }
       end
 
+      case method
+      when Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED
+        warn_if_deprecated_protocol_feature(:roots, session: session, uplevel: 2)
+      when Methods::LOGGING_SET_LEVEL
+        warn_if_deprecated_protocol_feature(:logging, session: session, uplevel: 2)
+      end
+
       handler = @handlers[method]
       unless handler
         instrument_call("unsupported_method", server_context: { request: request }) do
@@ -568,7 +588,11 @@ module MCP
         response_instructions = nil
       end
 
-      session&.mark_initialized!
+      if session
+        session.mark_initialized!(protocol_version: negotiated_version)
+      else
+        @client_protocol_version = negotiated_version
+      end
 
       {
         protocolVersion: negotiated_version,
@@ -592,6 +616,19 @@ module MCP
       @logging_message_notification = logging_message_notification
 
       {}
+    end
+
+    def warn_if_deprecated_protocol_feature(feature, session: nil, uplevel: 1)
+      protocol_version = effective_deprecation_protocol_version(session)
+      MCP::ProtocolDeprecations.warn_for(feature, protocol_version: protocol_version, uplevel: uplevel)
+    end
+
+    def effective_deprecation_protocol_version(session)
+      session&.protocol_version || @client_protocol_version || explicit_protocol_version
+    end
+
+    def explicit_protocol_version
+      configuration.protocol_version if configuration.protocol_version?
     end
 
     def list_tools(request)

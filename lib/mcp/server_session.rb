@@ -7,7 +7,7 @@ module MCP
   # Holds per-connection state for a single client session.
   # Created by the transport layer; delegates request handling to the shared `Server`.
   class ServerSession
-    attr_reader :session_id, :client, :logging_message_notification
+    attr_reader :session_id, :client, :logging_message_notification, :protocol_version
 
     def initialize(server:, transport:, session_id: nil)
       @server = server
@@ -16,6 +16,7 @@ module MCP
       @client = nil
       @client_capabilities = nil
       @logging_message_notification = nil
+      @protocol_version = nil
       @in_flight = {}
       @in_flight_mutex = Mutex.new
       @initialized = false
@@ -29,8 +30,9 @@ module MCP
     # Called by `Server#init` after a successful `initialize` response, so subsequent
     # `initialize` requests on the same session can be rejected per MCP spec
     # (the initialization phase MUST be the first interaction).
-    def mark_initialized!
+    def mark_initialized!(protocol_version: nil)
       @initialized = true
+      @protocol_version = protocol_version
     end
 
     # Registers a `Cancellation` token for an in-flight request.
@@ -98,7 +100,13 @@ module MCP
     end
 
     # Sends a `roots/list` request scoped to this session.
+    # @deprecated MCP Roots (`roots/list` and
+    #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
+    #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
+    #   server configuration, or environment variables instead.
     def list_roots(related_request_id: nil)
+      @server.send(:warn_if_deprecated_protocol_feature, :roots, session: self, uplevel: 2)
+
       unless client_capabilities&.dig(:roots)
         raise "Client does not support roots."
       end
@@ -115,7 +123,12 @@ module MCP
     end
 
     # Sends a `sampling/createMessage` request scoped to this session.
+    # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
+    #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
+    #   APIs instead.
     def create_sampling_message(related_request_id: nil, **kwargs)
+      @server.send(:warn_if_deprecated_protocol_feature, :sampling, session: self, uplevel: 2)
+
       params = @server.build_sampling_params(client_capabilities, **kwargs)
       send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
     end
@@ -188,7 +201,12 @@ module MCP
     end
 
     # Sends a log message notification to this session only.
+    # @deprecated MCP Logging (`logging/setLevel` and `notifications/message`)
+    #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
+      @server.send(:warn_if_deprecated_protocol_feature, :logging, session: self, uplevel: 2)
+
       effective_logging = @logging_message_notification || @server.logging_message_notification
       return unless effective_logging&.should_notify?(level)
 
