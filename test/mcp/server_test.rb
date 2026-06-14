@@ -5,6 +5,7 @@ require "test_helper"
 module MCP
   class ServerTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
+    include DeprecationWarningTestHelper
     setup do
       @tool = Tool.define(
         name: "test_tool",
@@ -774,8 +775,67 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_equal({}, response[:result])
+      assert_empty response[:result]
       refute response.key?(:error)
+    end
+
+    test "#configure_logging_level warns when negotiated protocol version is 2026-07-28" do
+      server = Server.new(tools: [TestTool])
+      server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: {
+            protocolVersion: "2026-07-28",
+            clientInfo: { name: "test-client", version: "1.0" },
+          },
+        },
+      )
+
+      response = nil
+      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+        response = server.handle(
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "logging/setLevel",
+            params: {
+              level: "info",
+            },
+          },
+        )
+      end
+
+      assert_empty response[:result]
+    end
+
+    test "#configure_logging_level does not warn when negotiated protocol version is older" do
+      server = Server.new(tools: [TestTool])
+      server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: {
+            protocolVersion: "2025-11-25",
+            clientInfo: { name: "test-client", version: "1.0" },
+          },
+        },
+      )
+
+      assert_no_deprecation_warning do
+        server.handle(
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "logging/setLevel",
+            params: {
+              level: "info",
+            },
+          },
+        )
+      end
     end
 
     test "#configure_logging_level returns an error object when invalid log level is provided" do

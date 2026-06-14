@@ -5,6 +5,7 @@ require "test_helper"
 module MCP
   class ServerSamplingTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
+    include DeprecationWarningTestHelper
 
     class MockTransport < Transport
       attr_reader :requests
@@ -60,6 +61,28 @@ module MCP
 
       assert_equal "assistant", result[:role]
       assert_equal "Response from LLM", result[:content][:text]
+    end
+
+    test "create_sampling_message warns when session negotiated protocol version is 2026-07-28" do
+      @session.mark_initialized!(protocol_version: "2026-07-28")
+
+      assert_deprecation_warning(/MCP Sampling .*2026-07-28/) do
+        @session.create_sampling_message(
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
+    end
+
+    test "create_sampling_message does not warn when session negotiated protocol version is older" do
+      @session.mark_initialized!(protocol_version: "2025-11-25")
+
+      assert_no_deprecation_warning do
+        @session.create_sampling_message(
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
     end
 
     test "create_sampling_message sends all optional params" do
@@ -238,7 +261,7 @@ module MCP
       # Global must still have sampling.
       assert_equal({ sampling: {} }, server.client_capabilities)
       # Session must have its own (empty) capabilities.
-      assert_equal({}, session.client_capabilities)
+      assert_empty session.client_capabilities
     end
 
     test "create_sampling_message omits nil optional params" do

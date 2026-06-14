@@ -4,6 +4,8 @@ require "test_helper"
 
 module MCP
   class ServerRootsTest < ActiveSupport::TestCase
+    include DeprecationWarningTestHelper
+
     class MockTransport < Transport
       attr_reader :requests
 
@@ -60,6 +62,36 @@ module MCP
       })
 
       assert callback_called
+    end
+
+    test "notifications/roots/list_changed warns when negotiated protocol version is 2026-07-28" do
+      server = Server.new(name: "test", version: "1.0")
+      server.handle({
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2026-07-28",
+          capabilities: { roots: { listChanged: true } },
+          clientInfo: { name: "test-client", version: "1.0" },
+        },
+      })
+
+      assert_deprecation_warning(/MCP Roots .*2026-07-28/) do
+        server.handle({
+          jsonrpc: "2.0",
+          method: "notifications/roots/list_changed",
+        })
+      end
+    end
+
+    test "notifications/roots/list_changed does not warn when negotiated protocol version is older" do
+      assert_no_deprecation_warning do
+        @server.handle({
+          jsonrpc: "2.0",
+          method: "notifications/roots/list_changed",
+        })
+      end
     end
 
     test "notifications/roots/list_changed is handled as no-op by default" do
@@ -170,7 +202,7 @@ module MCP
       )
 
       assert_equal({ roots: {} }, server.client_capabilities)
-      assert_equal({}, session.client_capabilities)
+      assert_empty session.client_capabilities
     end
 
     test "ServerSession#list_roots uses session-scoped capabilities from HTTP init" do
@@ -197,6 +229,32 @@ module MCP
         session.list_roots
       end
       assert_equal("No active stream for roots/list request.", error.message)
+    end
+
+    test "ServerSession#list_roots warns when session negotiated protocol version is 2026-07-28" do
+      server = Server.new(name: "test", version: "1.0")
+      transport = MockTransport.new(server)
+
+      session = ServerSession.new(server: server, transport: transport, session_id: "s1")
+      server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: {
+            protocolVersion: "2026-07-28",
+            capabilities: { roots: {} },
+            clientInfo: { name: "http-client", version: "1.0" },
+          },
+        },
+        session: session,
+      )
+
+      assert_deprecation_warning(/MCP Roots .*2026-07-28/) do
+        session.list_roots
+      end
+
+      assert_equal Methods::ROOTS_LIST, transport.requests.first[:method]
     end
   end
 end
