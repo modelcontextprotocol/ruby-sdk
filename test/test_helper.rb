@@ -23,3 +23,21 @@ require "sorbet-runtime" if RUBY_VERSION >= "3.0"
 
 require_relative "instrumentation_test_helper"
 require_relative "initialize_params_test_helper"
+
+module DeprecationWarningTestHelper
+  def assert_deprecation_warning(message_pattern, &block)
+    original_verbose = $VERBOSE
+    $VERBOSE = false
+    assert_output(nil, message_pattern, &block)
+  ensure
+    $VERBOSE = original_verbose
+  end
+
+  def assert_no_deprecation_warning(&block)
+    original_verbose = $VERBOSE
+    $VERBOSE = false
+    assert_output(nil, "", &block)
+  ensure
+    $VERBOSE = original_verbose
+  end
+end
