@@ -53,5 +53,23 @@ module MCP
 
       assert_equal meta, resource_template.to_h[:_meta]
     end
+
+    test "#to_h omits annotations when nil" do
+      resource_template = ResourceTemplate.new(uri_template: "file:///{path}", name: "template_without_annotations")
+
+      refute resource_template.to_h.key?(:annotations)
+    end
+
+    test "#to_h includes annotations when present" do
+      annotations = Annotations.new(audience: ["user"], priority: 0.8, last_modified: "2025-01-12T15:00:58Z")
+      resource_template = ResourceTemplate.new(
+        uri_template: "file:///{path}",
+        name: "template_with_annotations",
+        annotations: annotations,
+      )
+
+      expected = { audience: ["user"], priority: 0.8, lastModified: "2025-01-12T15:00:58Z" }
+      assert_equal expected, resource_template.to_h[:annotations]
+    end
   end
 end

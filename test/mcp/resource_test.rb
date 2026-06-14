@@ -67,5 +67,19 @@ module MCP
 
       assert_equal 0, resource.to_h[:size]
     end
+
+    test "#to_h omits annotations when nil" do
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_without_annotations")
+
+      refute resource.to_h.key?(:annotations)
+    end
+
+    test "#to_h includes annotations when present" do
+      annotations = Annotations.new(audience: ["user"], priority: 0.8, last_modified: "2025-01-12T15:00:58Z")
+      resource = Resource.new(uri: "file:///test.txt", name: "resource_with_annotations", annotations: annotations)
+
+      expected = { audience: ["user"], priority: 0.8, lastModified: "2025-01-12T15:00:58Z" }
+      assert_equal expected, resource.to_h[:annotations]
+    end
   end
 end
