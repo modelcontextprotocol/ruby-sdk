@@ -5,6 +5,8 @@ module MCP
     attr_reader :audience, :priority, :last_modified
 
     def initialize(audience: nil, priority: nil, last_modified: nil)
+      raise ArgumentError, "The value of priority must be between 0 and 1." if priority && !priority.between?(0, 1)
+
       @audience = audience
       @priority = priority
       @last_modified = last_modified
