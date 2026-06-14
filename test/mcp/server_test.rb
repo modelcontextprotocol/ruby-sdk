@@ -159,6 +159,75 @@ module MCP
       assert_instrumentation_data({ method: "initialize" })
     end
 
+    test "#handle initialize result carries declared capability extensions" do
+      server = Server.new(
+        name: "extensions_test",
+        capabilities: {
+          tools: { listChanged: true },
+          extensions: { "com.example/feature" => { enabled: true } },
+        },
+      )
+
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+
+      assert_equal(
+        { "com.example/feature" => { enabled: true } },
+        response.dig(:result, :capabilities, :extensions),
+      )
+    end
+
+    test "Server.new accepts an MCP::Server::Capabilities instance" do
+      capabilities = Server::Capabilities.new
+      capabilities.support_tools
+      capabilities.support_extensions("io.modelcontextprotocol/tasks" => {})
+
+      server = Server.new(name: "extensions_test", capabilities: capabilities)
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+
+      assert_equal(
+        {
+          tools: {},
+          extensions: { "io.modelcontextprotocol/tasks" => {} },
+        },
+        response.dig(:result, :capabilities),
+      )
+    end
+
+    test "client-declared capability extensions are readable via client_capabilities" do
+      extensions = { "com.example/feature": { enabled: true } }
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: { name: "test_client", version: "1.0.0" },
+          capabilities: { extensions: extensions },
+        },
+      }
+
+      @server.handle(request)
+
+      assert_equal extensions, @server.client_capabilities[:extensions]
+    end
+
+    test "client-declared capability extensions are readable via the session" do
+      session = ServerSession.new(server: @server, transport: mock)
+      extensions = { "com.example/feature": {} }
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: { name: "test_client", version: "1.0.0" },
+          capabilities: { extensions: extensions },
+        },
+      }
+
+      @server.handle(request, session: session)
+
+      assert_equal extensions, session.client_capabilities[:extensions]
+    end
+
     test "#handle initialize request with clientInfo includes client in instrumentation data" do
       client_info = { name: "test_client", version: "1.0.0" }
       request = {

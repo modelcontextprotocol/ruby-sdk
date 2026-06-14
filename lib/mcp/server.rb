@@ -8,6 +8,7 @@ require_relative "methods"
 require_relative "logging_message_notification"
 require_relative "progress"
 require_relative "server_context"
+require_relative "server/capabilities"
 require_relative "server/pagination"
 require_relative "server/transports"
 
@@ -142,7 +143,12 @@ module MCP
 
       validate!
 
-      @capabilities = capabilities || default_capabilities
+      # Accept either a plain Hash or an `MCP::Server::Capabilities` builder.
+      @capabilities = if capabilities.is_a?(Capabilities)
+        capabilities.to_h
+      else
+        capabilities || default_capabilities
+      end
       @client_capabilities = nil
       @logging_message_notification = nil
 
