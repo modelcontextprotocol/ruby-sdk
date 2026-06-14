@@ -6,7 +6,7 @@ source "https://rubygems.org"
 gemspec
 
 # Specify development dependencies below
-gem "rubocop-minitest", require: false
+gem "rubocop-minitest", ">= 0.39.0", require: false
 gem "rubocop-rake", require: false
 gem "rubocop-shopify", ">= 2.18", require: false if RUBY_VERSION >= "3.1"
 
