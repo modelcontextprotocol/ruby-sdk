@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-14
+
+### Added
+
+- Support W3C Trace Context Propagation via `_meta` per SEP-414 (#397)
+- Support OAuth `client_credentials` grant in OAuth client (#399)
+- Add `annotations` field to `MCP::Resource` and `MCP::ResourceTemplate` per MCP specification (#403)
+
+### Changed
+
+- Re-run OAuth flow on 403 `insufficient_scope` (step-up) (#368)
+- Speed up `Tool::Schema` validation by 5x to 100x (#369)
+- Use JSON-RPC error envelope for `StreamableHTTPTransport` errors (#371)
+- Pin RFC 8414 default well-known suffix per SEP-2351 (#395)
+- Default missing `MCP-Protocol-Version` to `2025-03-26` in `StreamableHTTPTransport` (#392)
+
+### Fixed
+
+- Preserve the request ID in invalid request error responses (#400)
+- Standardize Resource Not Found errors on -32602 with URI data per SEP-2164 (#402)
+
 ## [0.19.0] - 2026-06-13
 
 ### Added
