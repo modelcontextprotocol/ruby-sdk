@@ -77,7 +77,9 @@ module MCP
     #
     # @param client_info [Hash, nil] `{ name:, version: }` identifying the client.
     # @param protocol_version [String, nil] Protocol version to offer.
-    # @param capabilities [Hash] Capabilities advertised by the client.
+    # @param capabilities [Hash] Capabilities advertised by the client. May include
+    #   an `extensions` member per SEP-2133, keyed by reverse-DNS extension identifiers,
+    #   e.g. `{ extensions: { "com.example/feature" => {} } }`.
     # @return [Hash, nil] The server's `InitializeResult`, or `nil` when the transport
     #   does not expose an explicit handshake.
     # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
