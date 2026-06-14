@@ -724,6 +724,25 @@ module MCP
       )
     end
 
+    test "#handle resources/read returns -32602 with the uri in error data when the handler raises ResourceNotFoundError" do
+      # Per SEP-2164, resource-not-found errors use the standard JSON-RPC Invalid Params code (-32602)
+      # and carry the requested URI in `data`.
+      @server.resources_read_handler do |request|
+        raise Server::ResourceNotFoundError.new(request[:uri], request)
+      end
+
+      response = @server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 1,
+        params: { uri: "file:///missing.txt" },
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal("Resource not found: file:///missing.txt", response[:error][:message])
+      assert_equal({ uri: "file:///missing.txt" }, response[:error][:data])
+    end
+
     test "#handle resources/templates/list returns a list of resource templates" do
       request = {
         jsonrpc: "2.0",
@@ -2204,6 +2223,30 @@ module MCP
       })
 
       assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete resource-not-found error carries the uri in error data" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "unknown://template" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal("Resource not found: unknown://template", response[:error][:message])
+      assert_equal({ uri: "unknown://template" }, response[:error][:data])
     end
 
     test "#handle completion/complete returns error for invalid ref type" do

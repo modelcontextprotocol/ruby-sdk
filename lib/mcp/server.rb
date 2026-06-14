@@ -58,6 +58,32 @@ module MCP
       end
     end
 
+    # Raised when a requested resource URI does not exist. Per SEP-2164,
+    # resource-not-found errors use the standard JSON-RPC Invalid Params code (-32602)
+    # with the requested URI in the error `data` member. Raise this from
+    # a `resources_read_handler` block for unknown URIs:
+    #
+    #   server.resources_read_handler do |params|
+    #     raise MCP::Server::ResourceNotFoundError.new(params[:uri], params) unless known?(params[:uri])
+    #     do_something(params[:uri])
+    #   end
+    #
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164
+    class ResourceNotFoundError < RequestHandlerError
+      def initialize(uri, request = nil)
+        # The explicit `error_code` keeps the descriptive message in the JSON-RPC
+        # error response; `error_type: :invalid_params` alone would replace it
+        # with the generic "Invalid params" string.
+        super(
+          "Resource not found: #{uri}",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
+      end
+    end
+
     class MethodAlreadyDefinedError < StandardError
       attr_reader :method_name
 
@@ -846,7 +872,7 @@ module MCP
         uri = ref[:uri]
         found = @resource_index.key?(uri) || @resource_templates.any? { |t| t.uri_template == uri }
         unless found
-          raise RequestHandlerError.new("Resource not found: #{uri}", params, error_type: :invalid_params)
+          raise ResourceNotFoundError.new(uri, params)
         end
       else
         raise RequestHandlerError.new("Invalid ref type: #{ref[:type]}", params, error_type: :invalid_params)
