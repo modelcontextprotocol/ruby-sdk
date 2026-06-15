@@ -73,6 +73,7 @@ module MCP
         stdin_write.close
         stdout_read.close
         stdout_write.close
+        stderr_read.close
       end
 
       def test_send_request_initializes_session_on_first_call
