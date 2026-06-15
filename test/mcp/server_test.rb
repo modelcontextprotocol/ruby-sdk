@@ -426,6 +426,54 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: tool_name, tool_arguments: tool_args })
     end
 
+    test "#handle_json tools/call delivers nested object arguments with symbol keys at every level" do
+      received_payload = nil
+      server = Server.new(name: "test_server")
+      server.define_tool(
+        name: "nested_args_tool",
+        input_schema: { properties: { message: { type: "string" }, payload: { type: "object" } }, required: ["message"] },
+      ) do |message:, payload: nil, server_context:|
+        received_payload = payload
+        Tool::Response.new([{ type: "text", text: "#{message} #{server_context.class}" }])
+      end
+
+      request_json = JSON.generate(
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "nested_args_tool",
+          arguments: { message: "hi", payload: { subject: "greet", nested: { deep: "value" } } },
+        },
+      )
+
+      server.handle_json(request_json)
+
+      assert_equal({ subject: "greet", nested: { deep: "value" } }, received_payload)
+      assert_equal "greet", received_payload[:subject]
+      assert_nil received_payload["subject"]
+    end
+
+    test "tool receives symbol keys when called under the JSON-round-tripped argument shape" do
+      received_payload = nil
+      tool = Tool.define(
+        name: "nested_args_tool",
+        input_schema: { properties: { payload: { type: "object" } } },
+      ) do |payload: nil, server_context:|
+        received_payload = payload
+        Tool::Response.new([{ type: "text", text: server_context.class.to_s }])
+      end
+
+      # Round-trip the arguments through JSON the way a transport does, so the tool
+      # is exercised under the symbolized shape it actually receives at runtime.
+      arguments = { payload: { "subject" => "greet" } }
+      delivered = JSON.parse(JSON.generate(arguments), symbolize_names: true)
+      tool.call(**delivered, server_context: nil)
+
+      assert_equal({ subject: "greet" }, received_payload)
+      assert_nil received_payload["subject"]
+    end
+
     test "#handle tools/call returns tool execution error if required tool arguments are missing" do
       tool_with_required_argument = Tool.define(
         name: "test_tool",
