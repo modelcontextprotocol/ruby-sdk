@@ -180,6 +180,53 @@ server.define_tool(
 end
 ```
 
+### Tool argument keys
+
+Tool arguments are delivered as a `Hash` whose keys are Ruby symbols at every nesting level, including nested objects
+and objects inside arrays. The transports parse incoming JSON with `JSON.parse(..., symbolize_names: true)`,
+so by the time a tool runs, a wire payload such as `{"payload": {"subject": "greet"}}` arrives as `{ payload: { subject: "greet" } }`.
+
+This means top-level values are bound through keyword arguments (`def call(message:, payload: nil, server_context:)`),
+and nested objects must be read with symbol keys:
+
+```ruby
+class ExampleTool < MCP::Tool
+  description "Echoes a nested argument"
+  input_schema(
+    properties: {
+      message: { type: "string" },
+      payload: {
+        type: "object",
+        properties: {
+          subject: { type: "string" },
+        }
+      }
+    },
+    required: ["message"]
+  )
+
+  def self.call(message:, payload: nil, server_context:)
+    subject = payload && payload[:subject] # symbol key, not payload["subject"]
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: "Message: #{message}; subject: #{subject}"
+    }])
+  end
+end
+```
+
+Reading a nested value with a string key (`payload["subject"]`) returns `nil`. This is a Ruby-specific contract:
+Top-level keyword arguments require symbol keys, and parsing JSON with `symbolize_names: true` symbolizes nested objects too.
+
+Calling a tool directly in a test with `MyTool.call(payload: { "subject" => "greet" }, server_context: nil)` passes string keys
+that a transport never delivers, so string-key access can pass tests yet fail against a real client.
+Exercise a tool under the delivered shape by round-tripping the arguments through JSON the same way a transport does:
+
+```ruby
+delivered = JSON.parse(JSON.generate(arguments), symbolize_names: true)
+MyTool.call(**delivered, server_context: nil)
+```
+
 ## Prompts
 
 Prompts are templates for LLM interactions. Like tools, they can be defined in three ways:

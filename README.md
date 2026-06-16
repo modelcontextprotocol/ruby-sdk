@@ -574,6 +574,10 @@ end
 The server_context parameter is the server_context passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
+Tool arguments arrive as a `Hash` with symbol keys at every nesting level, because the transports parse JSON with `symbolize_names: true`.
+Read nested objects with symbol keys (`payload[:subject]`, not `payload["subject"]`).
+See [Tool argument keys](docs/building-servers.md#tool-argument-keys) for details and a testing tip.
+
 ### Tool Annotations
 
 Tools can include annotations that provide additional metadata about their behavior. The following annotations are supported:
