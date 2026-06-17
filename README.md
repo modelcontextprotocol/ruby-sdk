@@ -1990,6 +1990,9 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - Send `Authorization: Bearer <access_token>` on every request when a token is available.
 - On a `401 Unauthorized`, parse the `WWW-Authenticate` header, discover the authorization server (Protected Resource Metadata + RFC 8414 Authorization Server Metadata),
   perform Dynamic Client Registration if needed, run the OAuth 2.1 Authorization Code flow with PKCE (S256), and retry the failed request with the acquired token.
+- Fall back to the legacy 2025-03-26 discovery when the server publishes no Protected Resource Metadata, matching the TypeScript and Python SDKs: the MCP server's origin acts
+  as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` without the RFC 8414 issuer byte-match (which the legacy spec predates),
+  and when even that is absent the spec's default endpoints `/authorize`, `/token`, and `/register` at the origin are used with PKCE S256 assumed.
 - On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.

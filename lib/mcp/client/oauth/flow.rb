@@ -38,22 +38,18 @@ module MCP
             ensure_secure_url!(resource_metadata_url, label: "WWW-Authenticate resource_metadata URL")
           end
 
-          prm = fetch_protected_resource_metadata(
+          prm, authorization_server = locate_authorization_server(
             server_url: server_url,
             resource_metadata_url: resource_metadata_url,
           )
-          authorization_server = first_authorization_server(prm)
-          ensure_secure_url!(authorization_server, label: "PRM `authorization_servers` entry")
 
           # Per RFC 8707 + MCP authorization, the canonical MCP server URI is sent on
           # both the authorization and token requests. When PRM advertises a `resource`,
           # it MUST identify the same MCP server we are talking to; otherwise we are
           # being redirected to credentials minted for a different audience.
-          resource = canonical_resource(server_url: server_url, prm_resource: prm["resource"])
+          resource = canonical_resource(server_url: server_url, prm_resource: prm&.dig("resource"))
 
-          as_metadata = fetch_authorization_server_metadata(issuer_url: authorization_server)
-          ensure_issuer_matches!(expected: authorization_server, returned: as_metadata["issuer"])
-          ensure_secure_endpoints!(as_metadata)
+          as_metadata = authorization_server_metadata(authorization_server: authorization_server, legacy: prm.nil?)
 
           if provider_authorization_flow == :client_credentials
             return run_client_credentials!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
@@ -63,7 +59,7 @@ module MCP
 
           client_info = ensure_client_registered(as_metadata: as_metadata)
 
-          effective_scope = resolve_scope(scope: scope, prm: prm)
+          effective_scope = resolve_scope(scope: scope, prm: prm || {})
           effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
           pkce = PKCE.generate
           state = SecureRandom.urlsafe_base64(32)
@@ -158,18 +154,14 @@ module MCP
             ensure_secure_url!(resource_metadata_url, label: "WWW-Authenticate resource_metadata URL")
           end
 
-          prm = fetch_protected_resource_metadata(
+          prm, authorization_server = locate_authorization_server(
             server_url: server_url,
             resource_metadata_url: resource_metadata_url,
           )
-          authorization_server = first_authorization_server(prm)
-          ensure_secure_url!(authorization_server, label: "PRM `authorization_servers` entry")
 
-          resource = canonical_resource(server_url: server_url, prm_resource: prm["resource"])
+          resource = canonical_resource(server_url: server_url, prm_resource: prm&.dig("resource"))
 
-          as_metadata = fetch_authorization_server_metadata(issuer_url: authorization_server)
-          ensure_issuer_matches!(expected: authorization_server, returned: as_metadata["issuer"])
-          ensure_secure_endpoints!(as_metadata)
+          as_metadata = authorization_server_metadata(authorization_server: authorization_server, legacy: prm.nil?)
 
           client_info = if have_stored_client_info
             # Pre-registered / DCR-issued `client_information` always wins: if the user picked an explicit identity,
@@ -219,6 +211,87 @@ module MCP
             resource_metadata_url: resource_metadata_url,
           )
           fetch_metadata_json(urls, label: "protected resource metadata")
+        end
+
+        # Locates the authorization server for `server_url` and returns `[prm, authorization_server]`.
+        #
+        # Modern path (2025-06-18+): Protected Resource Metadata names the authorization server in
+        # `authorization_servers`.
+        #
+        # Legacy path (2025-03-26 backwards compatibility): when the server publishes no PRM, `prm` is nil
+        # and the MCP server's own origin acts as the authorization base URL, matching the TypeScript and Python SDKs.
+        # Any PRM discovery failure (404s, network errors, malformed documents) selects the legacy path, mirroring both SDKs' behavior.
+        # https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#fallbacks-for-servers-without-metadata-discovery
+        def locate_authorization_server(server_url:, resource_metadata_url:)
+          prm = begin
+            fetch_protected_resource_metadata(
+              server_url: server_url,
+              resource_metadata_url: resource_metadata_url,
+            )
+          rescue AuthorizationError
+            nil
+          end
+
+          if prm
+            authorization_server = first_authorization_server(prm)
+            ensure_secure_url!(authorization_server, label: "PRM `authorization_servers` entry")
+            [prm, authorization_server]
+          else
+            authorization_base = server_origin!(server_url)
+            ensure_secure_url!(authorization_base, label: "MCP server origin (legacy authorization base URL)")
+            [nil, authorization_base]
+          end
+        end
+
+        # Fetches and validates the authorization server's RFC 8414 metadata.
+        #
+        # On the modern path the metadata `issuer` must be byte-identical to the discovery URL (RFC 8414 Section 3.3).
+        # On the legacy 2025-03-26 path that validation is skipped: the legacy spec predates the requirement,
+        # and a pre-PRM server may host its OAuth endpoints under a path prefix whose `issuer` legitimately differs from
+        # the origin the metadata was discovered at (neither the TypeScript nor the Python SDK validates the issuer on this path).
+        # When even the metadata document is absent, the legacy spec's default endpoints are used.
+        def authorization_server_metadata(authorization_server:, legacy:)
+          metadata = if legacy
+            begin
+              fetch_authorization_server_metadata(issuer_url: authorization_server)
+            rescue AuthorizationError
+              default_legacy_metadata(authorization_server)
+            end
+          else
+            fetch_authorization_server_metadata(issuer_url: authorization_server).tap do |fetched|
+              ensure_issuer_matches!(expected: authorization_server, returned: fetched["issuer"])
+            end
+          end
+
+          ensure_secure_endpoints!(metadata)
+          metadata
+        end
+
+        # The 2025-03-26 spec's "Fallbacks for Servers without Metadata Discovery": clients MUST use these default endpoint paths
+        # relative to the authorization base URL. PKCE S256 is assumed because the legacy spec mandates PKCE and there is no metadata
+        # to advertise it (the TypeScript and Python SDKs hardcode S256 on this path too).
+        def default_legacy_metadata(authorization_base)
+          {
+            "issuer" => authorization_base,
+            "authorization_endpoint" => "#{authorization_base}/authorize",
+            "token_endpoint" => "#{authorization_base}/token",
+            "registration_endpoint" => "#{authorization_base}/register",
+            "code_challenge_methods_supported" => ["S256"],
+          }
+        end
+
+        # Returns `scheme://host[:port]` of `server_url`, the legacy 2025-03-26 authorization base URL for servers without PRM.
+        def server_origin!(server_url)
+          uri = URI.parse(server_url.to_s)
+          unless uri.is_a?(URI::HTTP) && uri.host
+            raise AuthorizationError,
+              "Cannot derive a legacy authorization base URL from MCP server URL #{server_url.inspect}."
+          end
+
+          port_part = uri.port == uri.default_port ? "" : ":#{uri.port}"
+          "#{uri.scheme}://#{uri.host}#{port_part}"
+        rescue URI::InvalidURIError => e
+          raise AuthorizationError, "MCP server URL #{server_url.inspect} is not a valid URI: #{e.message}."
         end
 
         def fetch_authorization_server_metadata(issuer_url:)

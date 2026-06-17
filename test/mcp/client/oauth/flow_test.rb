@@ -544,14 +544,20 @@ module MCP
           assert_match(/PRM `resource`|not a valid URI/i, error.message)
         end
 
-        def test_run_raises_when_prm_is_not_a_json_object
-          # Valid JSON but the wrong shape: indexing into a top-level array
-          # would otherwise raise `TypeError` and leak out of the SDK.
+        def test_run_falls_back_to_legacy_discovery_when_prm_is_not_a_json_object
+          # Valid JSON but the wrong shape. Any PRM discovery failure selects the legacy 2025-03-26 path
+          # (matching the TypeScript and Python SDKs); here the legacy path also dead-ends, surfacing
+          # a domain error rather than a raw `TypeError` from indexing the array.
           stub_request(:get, @prm_url).to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
             body: "[]",
           )
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource/mcp").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/openid-configuration").to_return(status: 404)
+          stub_request(:post, "https://srv.example.com/register").to_return(status: 404)
 
           provider = Provider.new(
             client_metadata: {
@@ -569,7 +575,147 @@ module MCP
             Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
           end
 
-          assert_match(/not a JSON object/i, error.message)
+          assert_match(/Dynamic client registration failed/i, error.message)
+          assert_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+        end
+
+        # Builds a provider for the legacy-discovery tests, capturing the authorization URL so tests can assert
+        # which endpoint was used.
+        def build_legacy_discovery_provider(holder)
+          Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              holder[:authorization_url] = url
+              holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", holder[:state]] },
+          )
+        end
+
+        def stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource/mcp").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+        end
+
+        def test_run_falls_back_to_server_origin_metadata_without_prm
+          # Legacy 2025-03-26 shape: no PRM, AS metadata served from the MCP server origin,
+          # OAuth endpoints under a path prefix whose `issuer` differs from the discovery origin.
+          # The legacy path must not apply the RFC 8414 issuer byte-match (the legacy spec predates it).
+          stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: "https://srv.example.com/oauth",
+              authorization_endpoint: "https://srv.example.com/oauth/authorize",
+              token_endpoint: "https://srv.example.com/oauth/token",
+              registration_endpoint: "https://srv.example.com/oauth/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          stub_request(:post, "https://srv.example.com/oauth/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "legacy-client"),
+          )
+          stub_request(:post, "https://srv.example.com/oauth/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
+          )
+
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("legacy-token", provider.access_token)
+          assert_equal("/oauth/authorize", holder[:authorization_url].path)
+          assert_requested(:post, "https://srv.example.com/oauth/register")
+          assert_requested(:post, "https://srv.example.com/oauth/token")
+        end
+
+        def test_run_falls_back_to_default_endpoints_without_any_metadata
+          # Legacy 2025-03-26 "Fallbacks for Servers without Metadata Discovery": with no PRM and no AS metadata,
+          # the client MUST use /authorize, /token, and /register at the authorization base URL, still sending PKCE S256.
+          stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/openid-configuration").to_return(status: 404)
+          stub_request(:post, "https://srv.example.com/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "legacy-client"),
+          )
+          stub_request(:post, "https://srv.example.com/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
+          )
+
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("/authorize", holder[:authorization_url].path)
+          query = URI.decode_www_form(holder[:authorization_url].query).to_h
+          assert_equal("S256", query["code_challenge_method"])
+          refute_empty(query["code_challenge"].to_s)
+          assert_requested(:post, "https://srv.example.com/register")
+          assert_requested(:post, "https://srv.example.com/token") do |req|
+            URI.decode_www_form(req.body).to_h["code_verifier"].to_s != ""
+          end
+        end
+
+        def test_run_legacy_fallback_rejects_insecure_authorization_base
+          # The Communication Security requirement still applies on the legacy path: a remote plain-http origin must not
+          # become the authorization base URL.
+          stub_request(:get, "http://internal.example.com/.well-known/oauth-protected-resource/mcp").to_return(status: 404)
+          stub_request(:get, "http://internal.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: "http://internal.example.com/mcp")
+          end
+
+          assert_match(/legacy authorization base URL/, error.message)
+        end
+
+        def test_run_keeps_strict_issuer_validation_when_prm_is_present
+          # The legacy issuer-check relaxation must not leak into the modern path: with PRM present,
+          # a mismatched issuer still aborts.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: "https://evil.example.com",
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+            ),
+          )
+
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/`issuer` does not match/, error.message)
         end
 
         def test_run_raises_when_prm_authorization_servers_is_not_an_array
