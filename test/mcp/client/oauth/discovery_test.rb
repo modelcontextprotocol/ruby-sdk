@@ -158,6 +158,39 @@ module MCP
           )
         end
 
+        def test_infer_application_type_returns_native_for_loopback_http_redirect_uris
+          uris = ["http://localhost:0/callback", "http://127.0.0.1:8080/cb", "http://[::1]/cb"]
+
+          assert_equal("native", Discovery.infer_application_type(uris))
+        end
+
+        def test_infer_application_type_returns_native_for_custom_scheme_redirect_uris
+          assert_equal("native", Discovery.infer_application_type(["com.example.app:/oauth/callback"]))
+        end
+
+        def test_infer_application_type_returns_web_for_https_redirect_uris
+          assert_equal("web", Discovery.infer_application_type(["https://app.example.com/callback"]))
+        end
+
+        def test_infer_application_type_returns_web_when_any_redirect_uri_is_not_native
+          uris = ["http://localhost:0/callback", "https://app.example.com/callback"]
+
+          assert_equal("web", Discovery.infer_application_type(uris))
+        end
+
+        def test_infer_application_type_returns_web_for_localhost_lookalike_host
+          assert_equal("web", Discovery.infer_application_type(["http://localhost.example.com/cb"]))
+        end
+
+        def test_infer_application_type_returns_web_for_nil_or_empty_redirect_uris
+          assert_equal("web", Discovery.infer_application_type(nil))
+          assert_equal("web", Discovery.infer_application_type([]))
+        end
+
+        def test_infer_application_type_returns_web_for_unparseable_redirect_uri
+          assert_equal("web", Discovery.infer_application_type(["http://[invalid"]))
+        end
+
         def test_canonicalize_url_normalizes_scheme_host_port_and_path
           assert_equal(
             "https://srv.example.com/mcp",
