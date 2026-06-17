@@ -2061,17 +2061,102 @@ module MCP
         end
 
         test "stateless mode does not support server-sent events" do
+          # Notifications have no stream to ride in stateless mode; the transport reports non-delivery
+          # instead of raising so per-request session notify_* helpers degrade gracefully (SEP-2567).
           stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
 
-          e = assert_raises(RuntimeError) do
-            stateless_transport.send_notification(
-              "test_notification",
-              { message: "Hello" },
-              session_id: "some_session_id",
-            )
-          end
+          result = stateless_transport.send_notification(
+            "test_notification",
+            { message: "Hello" },
+            session_id: "some_session_id",
+          )
 
-          assert_equal("Stateless mode does not support notifications", e.message)
+          refute result
+        end
+
+        test "stateless mode does not leak client info onto the shared server" do
+          # Each stateless POST runs against an ephemeral per-request session (SEP-2567); concurrent requests
+          # must never observe another client's identity through the shared Server instance.
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "initialize",
+              id: 1,
+              params: {
+                protocolVersion: "2025-11-25",
+                capabilities: { roots: {} },
+                clientInfo: { name: "client-a", version: "1.0" },
+              },
+            }.to_json,
+          )
+          response = stateless_transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          assert_nil @server.client_capabilities
+          assert_nil @server.instance_variable_get(:@client)
+        end
+
+        test "stateless mode allows repeated initialize requests" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          2.times do |i|
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              {
+                jsonrpc: "2.0",
+                method: "initialize",
+                id: i + 1,
+                params: {
+                  protocolVersion: "2025-11-25",
+                  clientInfo: { name: "client-#{i}", version: "1.0" },
+                },
+              }.to_json,
+            )
+            response = stateless_transport.handle_request(request)
+
+            assert_equal 200, response[0]
+            body = JSON.parse(response[2][0])
+            assert body.key?("result"), "initialize ##{i + 1} should succeed, got #{body.inspect}"
+            refute response[1].key?("Mcp-Session-Id")
+          end
+        end
+
+        test "stateless mode skips progress notifications without raising" do
+          reported = []
+          configuration = MCP::Configuration.new
+          configuration.exception_reporter = ->(exception, _context) { reported << exception }
+
+          server = Server.new(name: "stateless_progress_test", configuration: configuration)
+          server.define_tool(name: "progress_tool") do |server_context:|
+            server_context.report_progress(50, total: 100)
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          stateless_transport = StreamableHTTPTransport.new(server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            {
+              jsonrpc: "2.0",
+              method: "tools/call",
+              id: 1,
+              params: { name: "progress_tool", arguments: {}, _meta: { progressToken: "tok" } },
+            }.to_json,
+          )
+          response = stateless_transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "ok", body.dig("result", "content", 0, "text")
+          assert_empty reported
         end
 
         test "stateless mode responds with 202 when client sends a notification/initialized request" do
