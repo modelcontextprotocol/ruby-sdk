@@ -17,6 +17,8 @@ gem "rackup", ">= 2.1.0"
 gem "activesupport"
 # Fix io-console install error when Ruby 3.0.
 gem "debug" if RUBY_VERSION >= "3.1"
+# Avoid i18n 1.15.0, which breaks on Ruby 3.1 (ruby-i18n/i18n#735).
+gem "i18n", "!= 1.15.0"
 gem "rake", "~> 13.0"
 gem "sorbet-static-and-runtime" if RUBY_VERSION >= "3.0"
 gem "yard", "~> 0.9"
