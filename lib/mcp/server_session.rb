@@ -98,11 +98,17 @@ module MCP
     end
 
     # Sends a `roots/list` request scoped to this session.
+    #
+    # Per SEP-2260, the request must be associated with an originating client
+    # request; prefer `server_context.list_roots` inside a handler, which stamps
+    # the association automatically.
     # @deprecated MCP Roots (`roots/list` and
     #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
     #   server configuration, or environment variables instead.
     def list_roots(related_request_id: nil)
+      warn_unassociated_request(__method__, related_request_id)
+
       unless client_capabilities&.dig(:roots)
         raise "Client does not support roots."
       end
@@ -119,16 +125,28 @@ module MCP
     end
 
     # Sends a `sampling/createMessage` request scoped to this session.
+    #
+    # Per SEP-2260, the request must be associated with an originating client
+    # request; prefer `server_context.create_sampling_message` inside a handler,
+    # which stamps the association automatically.
     # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
     #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
     #   APIs instead.
     def create_sampling_message(related_request_id: nil, **kwargs)
+      warn_unassociated_request(__method__, related_request_id)
+
       params = @server.build_sampling_params(client_capabilities, **kwargs)
       send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
     end
 
     # Sends an `elicitation/create` request (form mode) scoped to this session.
+    #
+    # Per SEP-2260, the request must be associated with an originating client
+    # request; prefer `server_context.create_form_elicitation` inside a handler,
+    # which stamps the association automatically.
     def create_form_elicitation(message:, requested_schema:, related_request_id: nil)
+      warn_unassociated_request(__method__, related_request_id)
+
       unless client_capabilities&.dig(:elicitation)
         raise "Client does not support elicitation. " \
           "The client must declare the `elicitation` capability during initialization."
@@ -139,7 +157,13 @@ module MCP
     end
 
     # Sends an `elicitation/create` request (URL mode) scoped to this session.
+    #
+    # Per SEP-2260, the request must be associated with an originating client
+    # request; prefer `server_context.create_url_elicitation` inside a handler,
+    # which stamps the association automatically.
     def create_url_elicitation(message:, url:, elicitation_id:, related_request_id: nil)
+      warn_unassociated_request(__method__, related_request_id)
+
       unless client_capabilities&.dig(:elicitation, :url)
         raise "Client does not support URL mode elicitation. " \
           "The client must declare the `elicitation.url` capability during initialization."
@@ -263,6 +287,22 @@ module MCP
       # accepts `**kwargs`, breaking handlers that rely on `params` arriving as a positional Hash.
       # The explicit splat suppresses that conversion and is a no-op when `supported` is empty.
       transport_method.call(method, params, **supported)
+    end
+
+    # Per SEP-2260, servers MUST send `roots/list`, `sampling/createMessage`, and `elicitation/create` only
+    # in association with an originating client request (`ping` is exempt). A request without `related_request_id:` is
+    # delivered on the standalone GET stream by the Streamable HTTP transport, which the 2026-07-28 spec forbids;
+    # warn so callers migrate to the `server_context` helpers before this becomes an error.
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2260
+    def warn_unassociated_request(method_name, related_request_id)
+      return if related_request_id
+
+      warn(
+        "Calling `ServerSession##{method_name}` without `related_request_id:` is deprecated (SEP-2260): " \
+          "server-to-client #{method_name} requests must be associated with an originating client request. " \
+          "Use `server_context.#{method_name}` inside a handler, or pass `related_request_id:` explicitly.",
+        uplevel: 2,
+      )
     end
   end
 end

@@ -48,6 +48,7 @@ module MCP
 
     test "create_sampling_message sends request with required params" do
       result = @session.create_sampling_message(
+        related_request_id: "req-1",
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
       )
@@ -64,6 +65,7 @@ module MCP
 
     test "create_sampling_message sends all optional params" do
       @session.create_sampling_message(
+        related_request_id: "req-1",
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
         system_prompt: "You are helpful",
@@ -90,6 +92,7 @@ module MCP
 
       error = assert_raises(RuntimeError) do
         @session.create_sampling_message(
+          related_request_id: "req-1",
           messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
           max_tokens: 100,
         )
@@ -101,6 +104,7 @@ module MCP
     test "create_sampling_message raises error when tools used but client lacks sampling.tools" do
       error = assert_raises(RuntimeError) do
         @session.create_sampling_message(
+          related_request_id: "req-1",
           messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
           max_tokens: 100,
           tools: [{ name: "test_tool", inputSchema: { type: "object" } }],
@@ -113,6 +117,7 @@ module MCP
     test "create_sampling_message raises error when tool_choice used alone but client lacks sampling.tools" do
       error = assert_raises(RuntimeError) do
         @session.create_sampling_message(
+          related_request_id: "req-1",
           messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
           max_tokens: 100,
           tool_choice: { mode: "auto" },
@@ -126,6 +131,7 @@ module MCP
       @session.store_client_info(client: { name: "test-client" }, capabilities: { sampling: { tools: {} } })
 
       result = @session.create_sampling_message(
+        related_request_id: "req-1",
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
         tools: [{ name: "test_tool", inputSchema: { type: "object" } }],
@@ -140,6 +146,31 @@ module MCP
       assert_equal "Response from LLM", result[:content][:text]
     end
 
+    test "create_sampling_message warns when called without related_request_id" do
+      # Per SEP-2260, server-to-client requests must be associated with an originating client request.
+      # `$VERBOSE = false` because the rake test task runs with `-W0`, under which `Kernel#warn` emits nothing.
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+      assert_output(nil, /SEP-2260/) do
+        @session.create_sampling_message(
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
+    ensure
+      $VERBOSE = original_verbose
+    end
+
+    test "create_sampling_message does not warn when related_request_id is given" do
+      assert_silent do
+        @session.create_sampling_message(
+          related_request_id: "req-1",
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
+    end
+
     test "create_sampling_message uses per-session capabilities via ServerSession" do
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(@server)
 
@@ -149,10 +180,12 @@ module MCP
       transport.instance_variable_get(:@sessions)["s1"] = { stream: nil, server_session: session_with_sampling }
 
       error_with_sampling = assert_raises(RuntimeError) do
-        session_with_sampling.create_sampling_message(
-          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
-          max_tokens: 100,
-        )
+        capture_io do
+          session_with_sampling.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+            max_tokens: 100,
+          )
+        end
       end
       assert_equal("No active stream for sampling/createMessage request.", error_with_sampling.message)
 
@@ -161,10 +194,12 @@ module MCP
       session_without_sampling.store_client_info(client: { name: "incapable" }, capabilities: {})
 
       error = assert_raises(RuntimeError) do
-        session_without_sampling.create_sampling_message(
-          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
-          max_tokens: 100,
-        )
+        capture_io do
+          session_without_sampling.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+            max_tokens: 100,
+          )
+        end
       end
       assert_equal("Client does not support sampling.", error.message)
     end
@@ -190,10 +225,12 @@ module MCP
 
       # Server was initialized with sampling capability, so fallback should pass validation.
       error = assert_raises(RuntimeError) do
-        session.create_sampling_message(
-          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
-          max_tokens: 100,
-        )
+        capture_io do
+          session.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+            max_tokens: 100,
+          )
+        end
       end
       assert_equal("No active stream for sampling/createMessage request.", error.message)
     end
@@ -243,6 +280,7 @@ module MCP
 
     test "create_sampling_message omits nil optional params" do
       @session.create_sampling_message(
+        related_request_id: "req-1",
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
         max_tokens: 100,
         system_prompt: nil,

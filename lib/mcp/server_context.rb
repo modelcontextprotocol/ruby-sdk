@@ -54,6 +54,9 @@ module MCP
     end
 
     # Delegates to the session so the request is scoped to the originating client.
+    # The originating request id is stamped as `related_request_id`, satisfying
+    # SEP-2260's requirement that server-to-client requests be associated with
+    # the client request being processed.
     # @deprecated MCP Roots (`roots/list` and
     #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
@@ -91,6 +94,11 @@ module MCP
     # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` (via `method_missing`) when `@notification_target`
     # does not support sampling.
+    #
+    # The originating request id is stamped as `related_request_id` and cannot be
+    # overridden by callers (the literal keyword after `**kwargs` wins),
+    # satisfying SEP-2260's requirement that server-to-client requests be
+    # associated with the client request being processed.
     # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
     #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
     #   APIs instead.
@@ -107,6 +115,8 @@ module MCP
     # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` (via `method_missing`) when `@notification_target`
     # does not support elicitation.
+    # The originating request id is stamped as a non-overridable
+    # `related_request_id`, as with `create_sampling_message` (SEP-2260).
     def create_form_elicitation(**kwargs)
       if @notification_target.respond_to?(:create_form_elicitation)
         @notification_target.create_form_elicitation(**kwargs, related_request_id: @related_request_id)
@@ -119,6 +129,8 @@ module MCP
 
     # Delegates to the session so the request is scoped to the originating client.
     # Falls back to `@context` when `@notification_target` does not support URL mode elicitation.
+    # The originating request id is stamped as a non-overridable `related_request_id`,
+    # as with `create_sampling_message` (SEP-2260).
     def create_url_elicitation(**kwargs)
       if @notification_target.respond_to?(:create_url_elicitation)
         @notification_target.create_url_elicitation(**kwargs, related_request_id: @related_request_id)

@@ -1172,6 +1172,12 @@ Roots define the boundaries of where a server can operate, providing a list of d
 - **Client Capability**: Clients must declare `roots` capability during initialization
 - **Change Notifications**: Clients that support `roots.listChanged` send `notifications/roots/list_changed` when roots change
 
+> [!NOTE]
+> Per SEP-2260, server-to-client requests (`roots/list`, `sampling/createMessage`, `elicitation/create`) must be associated with
+> an originating client request (`ping` is exempt). Use the `server_context` passed to your handler, which stamps the association
+> automatically and routes the request onto the originating POST stream on the Streamable HTTP transport. Calling the corresponding
+> `ServerSession` methods without `related_request_id:` still works but emits a deprecation warning.
+
 **Using Roots in Tools:**
 
 Tools that accept a `server_context:` parameter can call `list_roots` on it.
