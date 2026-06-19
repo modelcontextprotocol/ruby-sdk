@@ -137,8 +137,7 @@ class MCPHTTPClient
   end
 end
 
-# Main script
-if __FILE__ == $PROGRAM_NAME
+def main
   puts <<~MESSAGE
     MCP HTTP Client Example
     Make sure the HTTP server is running (ruby examples/http_server.rb)
@@ -182,3 +181,5 @@ if __FILE__ == $PROGRAM_NAME
     client.close_session
   end
 end
+
+main

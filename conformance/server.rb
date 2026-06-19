@@ -2,6 +2,7 @@
 
 require "rackup"
 require "json"
+require "set"
 require "uri"
 require_relative "../lib/mcp"
 
@@ -156,7 +157,6 @@ module Conformance
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestSampling < MCP::Tool
       tool_name "test_sampling"
       description "A tool that requests LLM sampling from the client"
@@ -166,16 +166,19 @@ module Conformance
       )
 
       class << self
-        def call(prompt:)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Sampling not supported in this SDK version").to_h],
-            error: true,
+        def call(prompt:, server_context:)
+          result = server_context.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: prompt } }],
+            max_tokens: 100,
           )
+          model = result[:model] || "unknown"
+          text = result.dig(:content, :text) || ""
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("LLM response: #{text} (model: #{model})").to_h])
         end
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitation < MCP::Tool
       tool_name "test_elicitation"
       description "A tool that requests user input from the client"
@@ -185,41 +188,96 @@ module Conformance
       )
 
       class << self
-        def call(message:)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, message:)
+          result = server_context.create_form_elicitation(
+            message: message,
+            requested_schema: {
+              type: "object",
+              properties: {
+                username: { type: "string", description: "User's response" },
+                email: { type: "string", description: "User's email address" },
+              },
+              required: ["username", "email"],
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("User response: #{result}").to_h])
         end
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitationSep1034Defaults < MCP::Tool
       tool_name "test_elicitation_sep1034_defaults"
       description "A tool that tests elicitation with default values"
 
       class << self
-        def call(**_args)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, **_args)
+          result = server_context.create_form_elicitation(
+            message: "Please provide your information (with defaults)",
+            requested_schema: {
+              type: "object",
+              properties: {
+                name: { type: "string", default: "John Doe" },
+                age: { type: "integer", default: 30 },
+                score: { type: "number", default: 95.5 },
+                status: { type: "string", enum: ["active", "inactive", "pending"], default: "active" },
+                verified: { type: "boolean", default: true },
+              },
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("Elicitation result: #{result}").to_h])
         end
       end
     end
 
-    # TODO: Implement when `Transport` supports server-to-client requests.
     class TestElicitationSep1330Enums < MCP::Tool
       tool_name "test_elicitation_sep1330_enums"
       description "A tool that tests elicitation with enum schemas"
 
       class << self
-        def call(**_args)
-          MCP::Tool::Response.new(
-            [MCP::Content::Text.new("Elicitation not supported in this SDK version").to_h],
-            error: true,
+        def call(server_context:, **_args)
+          result = server_context.create_form_elicitation(
+            message: "Please select options",
+            requested_schema: {
+              type: "object",
+              properties: {
+                untitledSingle: {
+                  type: "string",
+                  enum: ["option1", "option2", "option3"],
+                },
+                titledSingle: {
+                  type: "string",
+                  oneOf: [
+                    { const: "value1", title: "First Option" },
+                    { const: "value2", title: "Second Option" },
+                    { const: "value3", title: "Third Option" },
+                  ],
+                },
+                legacyEnum: {
+                  type: "string",
+                  enum: ["opt1", "opt2", "opt3"],
+                  enumNames: ["Option One", "Option Two", "Option Three"],
+                },
+                untitledMulti: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                    enum: ["option1", "option2", "option3"],
+                  },
+                },
+                titledMulti: {
+                  type: "array",
+                  items: {
+                    anyOf: [
+                      { const: "value1", title: "First Choice" },
+                      { const: "value2", title: "Second Choice" },
+                      { const: "value3", title: "Third Choice" },
+                    ],
+                  },
+                },
+              },
+            },
           )
+          MCP::Tool::Response.new([MCP::Content::Text.new("Elicitation result: #{result}").to_h])
         end
       end
     end
@@ -391,7 +449,7 @@ module Conformance
 
     def start
       server = build_server
-      transport = build_transport(server)
+      transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
       configure_handlers(server)
       rack_app = build_rack_app(transport)
 
@@ -477,17 +535,13 @@ module Conformance
       ]
     end
 
-    def build_transport(server)
-      transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-      server.transport = transport
-      transport
-    end
-
     def configure_handlers(server)
       server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
       server.server_context = server
 
       configure_resources_read_handler(server)
+      configure_subscription_handlers(server)
+      configure_completion_handler(server)
     end
 
     def configure_resources_read_handler(server)
@@ -525,6 +579,47 @@ module Conformance
         else
           []
         end
+      end
+    end
+
+    def configure_completion_handler(server)
+      server.completion_handler do |params|
+        ref = params[:ref]
+        argument = params[:argument]
+        value = argument[:value].to_s
+
+        case ref[:type]
+        when "ref/prompt"
+          case ref[:name]
+          when "test_prompt_with_arguments"
+            candidates = case argument[:name]
+            when "arg1"
+              ["value1", "value2", "value3"]
+            when "arg2"
+              ["optionA", "optionB", "optionC"]
+            else
+              []
+            end
+            values = candidates.select { |v| v.start_with?(value) }
+            { completion: { values: values, hasMore: false } }
+          else
+            { completion: { values: [], hasMore: false } }
+          end
+        else
+          { completion: { values: [], hasMore: false } }
+        end
+      end
+    end
+
+    def configure_subscription_handlers(server)
+      subscribed_uris = Set.new
+
+      server.resources_subscribe_handler do |params|
+        subscribed_uris.add(params[:uri].to_s)
+      end
+
+      server.resources_unsubscribe_handler do |params|
+        subscribed_uris.delete(params[:uri].to_s)
       end
     end
 

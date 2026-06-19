@@ -1,25 +1,61 @@
 # frozen_string_literal: true
 
 require "json"
-require "securerandom"
 require_relative "../../transport"
+
+# This file is autoloaded only when `StreamableHTTPTransport` is referenced,
+# so the `rack` dependency does not affect `StdioTransport` users.
+begin
+  require "rack"
+rescue LoadError
+  raise LoadError, "The 'rack' gem is required to use the StreamableHTTPTransport. " \
+    "Add it to your Gemfile: gem 'rack'"
+end
 
 module MCP
   class Server
     module Transports
       class StreamableHTTPTransport < Transport
-        def initialize(server, stateless: false)
+        class InvalidJsonError < StandardError; end
+
+        SSE_HEADERS = {
+          "Content-Type" => "text/event-stream",
+          "Cache-Control" => "no-cache",
+          "Connection" => "keep-alive",
+        }.freeze
+
+        def initialize(server, stateless: false, enable_json_response: false, session_idle_timeout: nil)
           super(server)
-          # { session_id => { stream: stream_object }
+          # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
           @mutex = Mutex.new
 
           @stateless = stateless
+          @enable_json_response = enable_json_response
+          @session_idle_timeout = session_idle_timeout
+          @pending_responses = {}
+
+          if @session_idle_timeout
+            if @stateless
+              raise ArgumentError, "session_idle_timeout is not supported in stateless mode."
+            elsif @session_idle_timeout <= 0
+              raise ArgumentError, "session_idle_timeout must be a positive number."
+            end
+          end
+
+          start_reaper_thread if @session_idle_timeout
         end
 
-        REQUIRED_POST_ACCEPT_TYPES = ["application/json", "text/event-stream"].freeze
+        REQUIRED_POST_ACCEPT_TYPES_SSE = ["application/json", "text/event-stream"].freeze
+        REQUIRED_POST_ACCEPT_TYPES_JSON = ["application/json"].freeze
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
+        SESSION_REAP_INTERVAL = 60
+
+        # Rack app interface. This transport can be mounted as a Rack app.
+        def call(env)
+          handle_request(Rack::Request.new(env))
+        end
 
         def handle_request(request)
           case request.env["REQUEST_METHOD"]
@@ -35,14 +71,24 @@ module MCP
         end
 
         def close
-          @mutex.synchronize do
-            @sessions.each_key { |session_id| cleanup_session_unsafe(session_id) }
+          @reaper_thread&.kill
+          @reaper_thread = nil
+
+          removed_sessions = @mutex.synchronize do
+            @sessions.each_key.filter_map { |session_id| cleanup_session_unsafe(session_id) }
+          end
+
+          removed_sessions.each do |session|
+            close_stream_safely(session[:get_sse_stream])
+            close_post_request_streams(session)
           end
         end
 
-        def send_notification(method, params = nil, session_id: nil)
-          # Stateless mode doesn't support notifications
-          raise "Stateless mode does not support notifications" if @stateless
+        def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
+          # Stateless mode has no streams to deliver notifications on. Report non-delivery instead of raising
+          # so the ephemeral per-request session's notify_* helpers (e.g. progress or log notifications from
+          # a tool handler) degrade gracefully rather than spamming the exception reporter on every call.
+          return false if @stateless
 
           notification = {
             jsonrpc: "2.0",
@@ -50,21 +96,41 @@ module MCP
           }
           notification[:params] = params if params
 
-          @mutex.synchronize do
+          streams_to_close = []
+
+          result = @mutex.synchronize do
             if session_id
+              # JSON response mode returns a single JSON object as the POST response,
+              # so request-scoped notifications (e.g. progress, log) cannot be delivered
+              # alongside it. Session-scoped standalone notifications
+              # (e.g. `resources/updated`, `elicitation/complete`) still flow via GET SSE.
+              next false if @enable_json_response && related_request_id
+
               # Send to specific session
-              session = @sessions[session_id]
-              return false unless session && session[:stream]
+              if (session = @sessions[session_id])
+                stream = active_stream(session, related_request_id: related_request_id)
+              end
+              next false unless stream
+
+              if session_expired?(session)
+                cleanup_and_collect_stream(session_id, streams_to_close)
+                next false
+              end
 
               begin
-                send_to_stream(session[:stream], notification)
+                send_to_stream(stream, notification)
                 true
               rescue *STREAM_WRITE_ERRORS => e
                 MCP.configuration.exception_reporter.call(
                   e,
                   { session_id: session_id, error: "Failed to send notification" },
                 )
-                cleanup_session_unsafe(session_id)
+                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
+                  session[:post_request_streams].delete(related_request_id)
+                  streams_to_close << stream
+                else
+                  cleanup_and_collect_stream(session_id, streams_to_close)
+                end
                 false
               end
             else
@@ -73,10 +139,15 @@ module MCP
               failed_sessions = []
 
               @sessions.each do |sid, session|
-                next unless session[:stream]
+                next unless (stream = session[:get_sse_stream])
+
+                if session_expired?(session)
+                  failed_sessions << sid
+                  next
+                end
 
                 begin
-                  send_to_stream(session[:stream], notification)
+                  send_to_stream(stream, notification)
                   sent_count += 1
                 rescue *STREAM_WRITE_ERRORS => e
                   MCP.configuration.exception_reporter.call(
@@ -88,46 +159,243 @@ module MCP
               end
 
               # Clean up failed sessions
-              failed_sessions.each { |sid| cleanup_session_unsafe(sid) }
+              failed_sessions.each { |sid| cleanup_and_collect_stream(sid, streams_to_close) }
 
               sent_count
+            end
+          end
+
+          streams_to_close.each do |stream|
+            close_stream_safely(stream)
+          end
+
+          result
+        end
+
+        # Sends a server-to-client JSON-RPC request (e.g., `sampling/createMessage`) and
+        # blocks until the client responds.
+        #
+        # Uses a `Queue` for cross-thread synchronization. This method creates a `Queue`,
+        # sends the request via SSE stream, then blocks on `queue.pop`.
+        # When the client POSTs a response, `handle_response` matches it by `request_id`
+        # and pushes the result onto the queue, unblocking this thread.
+        def send_request(method, params = nil, session_id: nil, related_request_id: nil, parent_cancellation: nil, server_session: nil)
+          if @stateless
+            raise "Stateless mode does not support server-to-client requests."
+          end
+
+          if @enable_json_response
+            raise "JSON response mode does not support server-to-client requests."
+          end
+
+          unless session_id
+            raise "session_id is required for server-to-client requests."
+          end
+
+          request_id = generate_request_id
+          queue = Queue.new
+          cancel_hook = nil
+
+          request = { jsonrpc: "2.0", id: request_id, method: method }
+          request[:params] = params if params
+
+          sent = false
+
+          @mutex.synchronize do
+            unless (session = @sessions[session_id])
+              raise "Session not found: #{session_id}."
+            end
+
+            @pending_responses[request_id] = { queue: queue, session_id: session_id }
+
+            if (stream = active_stream(session, related_request_id: related_request_id))
+              begin
+                send_to_stream(stream, request)
+                sent = true
+              rescue *STREAM_WRITE_ERRORS
+                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
+                  session[:post_request_streams].delete(related_request_id)
+                  close_stream_safely(stream)
+                else
+                  cleanup_session_unsafe(session_id)
+                end
+              end
+            end
+          end
+
+          # TODO: Replace with event store + replay when resumability is implemented.
+          # Resumability is a separate MCP specification feature (SSE event IDs, Last-Event-ID replay,
+          # event store management) independent of sampling.
+          # See: https://modelcontextprotocol.io/specification/latest/basic/transports#resumability-and-redelivery
+          #
+          # The TypeScript and Python SDKs buffer messages and replay on reconnect.
+          # Until then, raise to prevent queue.pop from blocking indefinitely.
+          unless sent
+            raise "No active stream for #{method} request."
+          end
+
+          if parent_cancellation && server_session
+            cancel_hook = parent_cancellation.on_cancel do |reason|
+              server_session.send_peer_cancellation(
+                nested_request_id: request_id,
+                related_request_id: related_request_id,
+                reason: reason,
+              )
+            end
+          end
+
+          response = queue.pop
+
+          if response.is_a?(Hash) && response.key?(:error)
+            raise StandardError, "Client returned an error for #{method} request (code: #{response[:error][:code]}): #{response[:error][:message]}"
+          end
+
+          if response == :session_closed
+            raise "SSE session closed while waiting for #{method} response."
+          end
+
+          if response == :cancelled
+            reason = @mutex.synchronize { @pending_responses.dig(request_id, :cancel_reason) }
+            raise MCP::CancelledError.new(
+              "#{method} request was cancelled",
+              request_id: request_id,
+              reason: reason,
+            )
+          end
+
+          response
+        ensure
+          parent_cancellation.off_cancel(cancel_hook) if cancel_hook
+          if request_id
+            @mutex.synchronize do
+              @pending_responses.delete(request_id)
+            end
+          end
+        end
+
+        # Unblocks a `send_request` awaiting a response when the peer is being cancelled.
+        # The waiting thread will see `:cancelled` on its queue and raise `MCP::CancelledError`.
+        #
+        # Race note: this is first-writer-wins on the pending-response queue. If a real response
+        # has already been pushed (client responded before the cancel hook fired), that response
+        # wins and `:cancelled` is enqueued behind it but never read - `send_request` returns
+        # the real response and deletes the pending entry in its `ensure` block. Conversely,
+        # if `:cancelled` arrives first, any later client response is silently dropped in `handle_response`
+        # because the pending entry has been removed.
+        def cancel_pending_request(request_id, reason: nil)
+          @mutex.synchronize do
+            if (pending = @pending_responses[request_id])
+              pending[:cancel_reason] = reason
+              pending[:queue].push(:cancelled)
             end
           end
         end
 
         private
 
+        def start_reaper_thread
+          @reaper_thread = Thread.new do
+            loop do
+              sleep(SESSION_REAP_INTERVAL)
+              reap_expired_sessions
+            rescue StandardError => e
+              MCP.configuration.exception_reporter.call(e, error: "Session reaper error")
+            end
+          end
+        end
+
+        def reap_expired_sessions
+          return unless @session_idle_timeout
+
+          removed_sessions = @mutex.synchronize do
+            @sessions.each_key.filter_map do |session_id|
+              next unless session_expired?(@sessions[session_id])
+
+              cleanup_session_unsafe(session_id)
+            end
+          end
+
+          removed_sessions.each do |session|
+            close_stream_safely(session[:get_sse_stream])
+            close_post_request_streams(session)
+          end
+        end
+
         def send_to_stream(stream, data)
           message = data.is_a?(String) ? data : data.to_json
           stream.write("data: #{message}\n\n")
-          stream.flush if stream.respond_to?(:flush)
+          stream.flush
         end
 
         def send_ping_to_stream(stream)
           stream.write(": ping #{Time.now.iso8601}\n\n")
-          stream.flush if stream.respond_to?(:flush)
+          stream.flush
         end
 
         def handle_post(request)
-          accept_error = validate_accept_header(request, REQUIRED_POST_ACCEPT_TYPES)
+          required_types = @enable_json_response ? REQUIRED_POST_ACCEPT_TYPES_JSON : REQUIRED_POST_ACCEPT_TYPES_SSE
+          accept_error = validate_accept_header(request, required_types)
           return accept_error if accept_error
+
+          content_type_error = validate_content_type(request)
+          return content_type_error if content_type_error
 
           body_string = request.body.read
           session_id = extract_session_id(request)
 
-          body = parse_request_body(body_string)
-          return body unless body.is_a?(Hash) # Error response
+          begin
+            body = parse_request_body(body_string)
+          rescue InvalidJsonError
+            return invalid_json_response
+          end
 
-          if body["method"] == "initialize"
+          # Streamable HTTP (2025-11-25) requires a single JSON-RPC message object per POST.
+          # Batched/array bodies are not supported; reject with `-32600` instead of falling through to
+          # a malformed Rack response.
+          unless body.is_a?(Hash)
+            return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
+          end
+
+          # The `MCP-Protocol-Version` header is only meaningful after negotiation, so on `initialize`
+          # the JSON-RPC body `params.protocolVersion` is authoritative and the header (if any) is ignored.
+          # This matches the TypeScript and Python SDKs.
+          unless initialize_request?(body)
+            return missing_session_id_response if !@stateless && !session_id
+
+            protocol_version_error = validate_protocol_version_header(request)
+            return protocol_version_error if protocol_version_error
+          end
+
+          if initialize_request?(body)
+            if !@stateless && session_id
+              # An `initialize` request carrying an `Mcp-Session-Id` header is either a duplicate
+              # initialization attempt against a live session, or a retry against an unknown/expired
+              # one. In the live case, reject with `-32600` so the original session is not abandoned.
+              # In the unknown/expired case, return 404 so the client retries from scratch instead
+              # of silently inheriting a fresh session under the old ID.
+              return already_initialized_response(body[:id]) if session_active?(session_id)
+
+              return session_not_found_response
+            end
+
             handle_initialization(body_string, body)
-          elsif notification?(body) || response?(body)
+          elsif notification?(body)
+            dispatch_notification(body_string, session_id)
             handle_accepted
+          elsif response?(body)
+            return session_not_found_response if !@stateless && !session_exists?(session_id)
+
+            handle_response(body, session_id: session_id)
           else
-            handle_regular_request(body_string, session_id)
+            handle_regular_request(body_string, session_id, related_request_id: body[:id])
           end
         rescue StandardError => e
           MCP.configuration.exception_reporter.call(e, { request: body_string })
-          [500, { "Content-Type" => "application/json" }, [{ error: "Internal server error" }.to_json]]
+          json_rpc_error_response(
+            status: 500,
+            code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+            message: "Internal server error",
+          )
         end
 
         def handle_get(request)
@@ -141,7 +409,14 @@ module MCP
           session_id = extract_session_id(request)
 
           return missing_session_id_response unless session_id
-          return session_not_found_response unless session_exists?(session_id)
+
+          error_response = validate_and_touch_session(session_id)
+          return error_response if error_response
+
+          protocol_version_error = validate_protocol_version_header(request)
+          return protocol_version_error if protocol_version_error
+
+          return session_already_connected_response if get_session_stream(session_id)
 
           setup_sse_stream(session_id)
         end
@@ -150,12 +425,18 @@ module MCP
           success_response = [200, { "Content-Type" => "application/json" }, [{ success: true }.to_json]]
 
           if @stateless
+            protocol_version_error = validate_protocol_version_header(request)
+            return protocol_version_error if protocol_version_error
+
             # Stateless mode doesn't support sessions, so we can just return a success response
             return success_response
           end
 
-          return missing_session_id_response unless (session_id = request.env["HTTP_MCP_SESSION_ID"])
+          return missing_session_id_response unless (session_id = extract_session_id(request))
           return session_not_found_response unless session_exists?(session_id)
+
+          protocol_version_error = validate_protocol_version_header(request)
+          return protocol_version_error if protocol_version_error
 
           cleanup_session(session_id)
 
@@ -163,21 +444,51 @@ module MCP
         end
 
         def cleanup_session(session_id)
-          @mutex.synchronize do
+          session = @mutex.synchronize do
             cleanup_session_unsafe(session_id)
+          end
+
+          if session
+            close_stream_safely(session[:get_sse_stream])
+            close_post_request_streams(session)
           end
         end
 
+        # Removes a session from `@sessions` and returns it. Does not close the stream.
+        # Callers must close the stream outside the mutex to avoid holding the lock during
+        # potentially blocking I/O.
         def cleanup_session_unsafe(session_id)
-          session = @sessions[session_id]
-          return unless session
+          session = @sessions.delete(session_id)
 
-          begin
-            session[:stream]&.close
-          rescue
-            nil
+          # Unblock threads waiting on pending responses for this session.
+          @pending_responses.each_value do |pending_response|
+            if pending_response[:session_id] == session_id
+              pending_response[:queue].push(:session_closed)
+            end
           end
-          @sessions.delete(session_id)
+
+          session
+        end
+
+        def cleanup_and_collect_stream(session_id, streams_to_close)
+          return unless (removed = cleanup_session_unsafe(session_id))
+
+          streams_to_close << removed[:get_sse_stream]
+          removed[:post_request_streams]&.each_value { |stream| streams_to_close << stream }
+        end
+
+        def close_stream_safely(stream)
+          stream&.close
+        rescue StandardError
+          # Ignore close-related errors from already closed/broken streams.
+        end
+
+        def close_post_request_streams(session)
+          return unless (post_request_streams = session[:post_request_streams])
+
+          post_request_streams.each_value do |stream|
+            close_stream_safely(stream)
+          end
         end
 
         def extract_session_id(request)
@@ -199,46 +510,137 @@ module MCP
 
         def parse_accept_header(header)
           header.split(",").map do |part|
-            part.split(";").first.strip
+            part.split(";").first.strip.downcase
           end
         end
 
+        def validate_content_type(request)
+          content_type = request.env["CONTENT_TYPE"]
+          media_type = content_type&.split(";")&.first&.strip&.downcase
+          return if media_type == "application/json"
+
+          json_rpc_error_response(
+            status: 415,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Unsupported Media Type: Content-Type must be application/json",
+          )
+        end
+
         def not_acceptable_response(required_types)
-          [
-            406,
-            { "Content-Type" => "application/json" },
-            [{ error: "Not Acceptable: Accept header must include #{required_types.join(" and ")}" }.to_json],
-          ]
+          json_rpc_error_response(
+            status: 406,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Not Acceptable: Accept header must include #{required_types.join(" and ")}",
+          )
         end
 
         def parse_request_body(body_string)
-          JSON.parse(body_string)
+          JSON.parse(body_string, symbolize_names: true)
         rescue JSON::ParserError, TypeError
-          [400, { "Content-Type" => "application/json" }, [{ error: "Invalid JSON" }.to_json]]
+          raise InvalidJsonError
+        end
+
+        def invalid_json_response
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::PARSE_ERROR,
+            message: "Parse error: Invalid JSON",
+          )
+        end
+
+        def initialize_request?(body)
+          body.is_a?(Hash) && body[:method] == Methods::INITIALIZE
+        end
+
+        def validate_protocol_version_header(request)
+          header_value = request.env["HTTP_MCP_PROTOCOL_VERSION"] || MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
+          return if MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(header_value)
+
+          supported = MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.join(", ")
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Bad Request: Unsupported protocol version: #{header_value}. Supported versions: #{supported}",
+          )
+        end
+
+        def json_rpc_error_response(status:, code:, message:)
+          body = { jsonrpc: "2.0", id: nil, error: { code: code, message: message } }
+          [status, { "Content-Type" => "application/json" }, [body.to_json]]
         end
 
         def notification?(body)
-          !body["id"] && !!body["method"]
+          !body[:id] && !!body[:method]
+        end
+
+        # Dispatches a client-originated notification (e.g. `notifications/cancelled`,
+        # `notifications/initialized`) through the server so it can update session state.
+        def dispatch_notification(body_string, session_id)
+          server_session = nil
+          if @stateless
+            server_session = ephemeral_session
+          elsif session_id
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              server_session = session[:server_session] if session
+            end
+          end
+
+          dispatch_handle_json(body_string, server_session)
+        rescue => e
+          MCP.configuration.exception_reporter.call(e, { error: "Failed to dispatch notification" })
         end
 
         def response?(body)
-          !!body["id"] && !body["method"]
+          !!body[:id] && !body[:method]
+        end
+
+        # Verifies that the response came from the expected session to prevent
+        # cross-session response injection if request IDs are ever leaked.
+        def handle_response(body, session_id:)
+          request_id = body[:id]
+          @mutex.synchronize do
+            if (pending_response = @pending_responses[request_id]) && pending_response[:session_id] == session_id
+              if body.key?(:error)
+                error = body[:error]
+                pending_response[:queue].push(error: { code: error[:code], message: error[:message] })
+              else
+                pending_response[:queue].push(body[:result])
+              end
+            end
+          end
+
+          handle_accepted
         end
 
         def handle_initialization(body_string, body)
           session_id = nil
 
-          unless @stateless
+          if @stateless
+            server_session = ephemeral_session
+          else
             session_id = SecureRandom.uuid
+            server_session = ServerSession.new(server: @server, transport: self, session_id: session_id)
 
             @mutex.synchronize do
               @sessions[session_id] = {
-                stream: nil,
+                get_sse_stream: nil,
+                server_session: server_session,
+                last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
               }
             end
           end
 
-          response = @server.handle_json(body_string)
+          response = server_session.handle_json(body_string)
+
+          # If `Server#init` produced an error response (e.g., malformed JSON-RPC envelope),
+          # `mark_initialized!` was never called. Discard the orphaned session and omit
+          # the `Mcp-Session-Id` header so the client retries from a clean state instead of
+          # reusing a never-initialized ID that would later look like a duplicate `initialize`.
+          if session_id && !server_session.initialized?
+            cleanup_session(session_id)
+            session_id = nil
+          end
 
           headers = {
             "Content-Type" => "application/json",
@@ -253,83 +655,231 @@ module MCP
           [202, {}, []]
         end
 
-        def handle_regular_request(body_string, session_id)
-          unless @stateless
-            if session_id && !session_exists?(session_id)
-              return session_not_found_response
+        def handle_regular_request(body_string, session_id, related_request_id: nil)
+          server_session = nil
+
+          if @stateless
+            server_session = ephemeral_session
+          elsif session_id
+            error_response = validate_and_touch_session(session_id)
+            return error_response if error_response
+
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              server_session = session[:server_session] if session
             end
           end
 
-          response = @server.handle_json(body_string)
-
-          # Stream can be nil since stateless mode doesn't retain streams
-          stream = get_session_stream(session_id) if session_id
-
-          if stream
-            send_response_to_stream(stream, response, session_id)
+          if session_id && !@stateless && !@enable_json_response
+            handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id)
           else
+            response = dispatch_handle_json(body_string, server_session)
+
+            # `Server#handle_json` returns `nil` when cancellation has suppressed the JSON-RPC response per spec.
+            # Mirror the notification path and ack with 202 instead of returning a 200 with a `nil` Rack body,
+            # which would produce an empty body the client cannot parse as JSON.
+            return handle_accepted if response.nil?
+
             [200, { "Content-Type" => "application/json" }, [response]]
           end
         end
 
-        def get_session_stream(session_id)
-          @mutex.synchronize { @sessions[session_id]&.fetch(:stream, nil) }
+        # Returns the POST response as an SSE stream so the server can send
+        # JSON-RPC requests and notifications during request processing.
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
+        def handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: nil)
+          body = proc do |stream|
+            @mutex.synchronize do
+              session = @sessions[session_id]
+              if session && related_request_id
+                session[:post_request_streams] ||= {}
+                session[:post_request_streams][related_request_id] = stream
+              end
+            end
+
+            begin
+              response = dispatch_handle_json(body_string, server_session)
+
+              send_to_stream(stream, response) if response
+            ensure
+              if related_request_id
+                @mutex.synchronize do
+                  session = @sessions[session_id]
+                  session[:post_request_streams]&.delete(related_request_id) if session
+                end
+              end
+
+              begin
+                stream.close
+              rescue StandardError
+                # Ignore close-related errors from already closed/broken streams.
+              end
+            end
+          end
+
+          [200, SSE_HEADERS.dup, body]
         end
 
-        def send_response_to_stream(stream, response, session_id)
-          message = JSON.parse(response)
-          send_to_stream(stream, message)
-          handle_accepted
-        rescue *STREAM_WRITE_ERRORS => e
-          MCP.configuration.exception_reporter.call(
-            e,
-            { session_id: session_id, error: "Stream closed during response" },
-          )
-          cleanup_session(session_id)
-          [200, { "Content-Type" => "application/json" }, [response]]
+        # Returns the SSE stream available for server-to-client messages.
+        # When `related_request_id` is given, returns only the POST response
+        # stream for that request (no fallback to GET SSE). This prevents
+        # request-scoped messages from leaking to the wrong stream.
+        # When `related_request_id` is nil, returns the GET SSE stream.
+        def active_stream(session, related_request_id: nil)
+          if related_request_id
+            session.dig(:post_request_streams, related_request_id)
+          else
+            session[:get_sse_stream]
+          end
+        end
+
+        def dispatch_handle_json(body_string, server_session)
+          if server_session
+            server_session.handle_json(body_string)
+          else
+            @server.handle_json(body_string)
+          end
+        end
+
+        def validate_and_touch_session(session_id)
+          removed = nil
+
+          response = @mutex.synchronize do
+            next session_not_found_response unless (session = @sessions[session_id])
+            next unless @session_idle_timeout
+
+            if session_expired?(session)
+              removed = cleanup_session_unsafe(session_id)
+              next session_not_found_response
+            end
+
+            session[:last_active_at] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            nil
+          end
+
+          if removed
+            close_stream_safely(removed[:get_sse_stream])
+
+            removed[:post_request_streams]&.each_value do |stream|
+              close_stream_safely(stream)
+            end
+          end
+
+          response
+        end
+
+        def get_session_stream(session_id)
+          @mutex.synchronize { @sessions[session_id]&.fetch(:get_sse_stream, nil) }
         end
 
         def session_exists?(session_id)
           @mutex.synchronize { @sessions.key?(session_id) }
         end
 
+        # Each stateless POST is self-contained (SEP-2567): handlers run against an ephemeral per-request `ServerSession`
+        # so client info, logging level, and initialized state never leak onto the shared `Server` instance or across concurrent requests.
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567
+        def ephemeral_session
+          ServerSession.new(server: @server, transport: self, session_id: nil)
+        end
+
+        # Returns true iff a session exists and is not past its idle timeout. Expired sessions
+        # are evicted as a side effect so a live request never observes a zombie session that
+        # the reaper hasn't yet pruned. Does NOT update `last_active_at`; callers that are
+        # rejecting a request must not extend the session's lifetime.
+        def session_active?(session_id)
+          removed = nil
+          active = @mutex.synchronize do
+            next false unless (session = @sessions[session_id])
+
+            if session_expired?(session)
+              removed = cleanup_session_unsafe(session_id)
+              next false
+            end
+
+            true
+          end
+
+          if removed
+            close_stream_safely(removed[:get_sse_stream])
+            close_post_request_streams(removed)
+          end
+
+          active
+        end
+
         def method_not_allowed_response
-          [405, { "Content-Type" => "application/json" }, [{ error: "Method not allowed" }.to_json]]
+          json_rpc_error_response(
+            status: 405,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Method not allowed",
+          )
         end
 
         def missing_session_id_response
-          [400, { "Content-Type" => "application/json" }, [{ error: "Missing session ID" }.to_json]]
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Missing session ID",
+          )
         end
 
         def session_not_found_response
-          [404, { "Content-Type" => "application/json" }, [{ error: "Session not found" }.to_json]]
+          json_rpc_error_response(
+            status: 404,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Session not found",
+          )
+        end
+
+        def already_initialized_response(request_id)
+          invalid_request_response("Invalid Request: Server already initialized", request_id: request_id)
+        end
+
+        def invalid_request_response(message, request_id: nil)
+          body = {
+            jsonrpc: "2.0",
+            id: request_id,
+            error: {
+              code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+              message: message,
+            },
+          }
+          [400, { "Content-Type" => "application/json" }, [body.to_json]]
+        end
+
+        def session_already_connected_response
+          json_rpc_error_response(
+            status: 409,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Conflict: Only one SSE stream is allowed per session",
+          )
         end
 
         def setup_sse_stream(session_id)
           body = create_sse_body(session_id)
 
-          headers = {
-            "Content-Type" => "text/event-stream",
-            "Cache-Control" => "no-cache",
-            "Connection" => "keep-alive",
-          }
-
-          [200, headers, body]
+          [200, SSE_HEADERS.dup, body]
         end
 
         def create_sse_body(session_id)
           proc do |stream|
-            store_stream_for_session(session_id, stream)
-            start_keepalive_thread(session_id)
+            stored = store_stream_for_session(session_id, stream)
+            start_keepalive_thread(session_id) if stored
           end
         end
 
         def store_stream_for_session(session_id, stream)
           @mutex.synchronize do
-            if @sessions[session_id]
-              @sessions[session_id][:stream] = stream
+            session = @sessions[session_id]
+            if session && !session[:get_sse_stream]
+              session[:get_sse_stream] = stream
             else
+              # Either session was removed, or another request already established a stream.
               stream.close
+              # `stream.close` may return a truthy value depending on the stream class.
+              # Explicitly return nil to guarantee a falsy return for callers.
+              nil
             end
           end
         end
@@ -348,13 +898,13 @@ module MCP
         end
 
         def session_active_with_stream?(session_id)
-          @mutex.synchronize { @sessions.key?(session_id) && @sessions[session_id][:stream] }
+          @mutex.synchronize { @sessions.key?(session_id) && @sessions[session_id][:get_sse_stream] }
         end
 
         def send_keepalive_ping(session_id)
           @mutex.synchronize do
-            if @sessions[session_id] && @sessions[session_id][:stream]
-              send_ping_to_stream(@sessions[session_id][:stream])
+            if @sessions[session_id] && @sessions[session_id][:get_sse_stream]
+              send_ping_to_stream(@sessions[session_id][:get_sse_stream])
             end
           end
         rescue *STREAM_WRITE_ERRORS => e
@@ -363,6 +913,12 @@ module MCP
             { session_id: session_id, error: "Stream closed" },
           )
           raise # Re-raise to exit the keepalive loop
+        end
+
+        def session_expired?(session)
+          return false unless @session_idle_timeout
+
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) - session[:last_active_at] > @session_idle_timeout
         end
       end
     end

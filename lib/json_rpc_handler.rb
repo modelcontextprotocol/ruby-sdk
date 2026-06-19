@@ -18,6 +18,11 @@ module JsonRpcHandler
 
   DEFAULT_ALLOWED_ID_CHARACTERS = /\A[a-zA-Z0-9_-]+\z/
 
+  # Sentinel return value from a handler. When a handler returns this,
+  # `process_request` emits no JSON-RPC response for the request,
+  # matching the notification-style semantics (id is ignored).
+  NO_RESPONSE = Object.new.freeze
+
   extend self
 
   def handle(request, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, &method_finder)
@@ -68,13 +73,18 @@ module JsonRpcHandler
 
     error = if !valid_version?(request[:jsonrpc])
       "JSON-RPC version must be 2.0"
-    elsif !valid_id?(request[:id], id_validation_pattern)
+    elsif !valid_id?(id, id_validation_pattern)
       "Request ID must match validation pattern, or be an integer or null"
     elsif !valid_method_name?(request[:method])
       'Method name must be a string and not start with "rpc."'
     end
 
-    return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+    # Per JSON-RPC 2.0 (Response object, `id`), the error response must carry
+    # the same id as the request when the id could be detected; null is only
+    # for requests whose id could not be determined. `error_response` nils out
+    # ids that fail validation, and the `:unknown_id` sentinel keeps a response
+    # (with a null id) being emitted when the request carried no id at all.
+    return error_response(id: id.nil? ? :unknown_id : id, id_validation_pattern: id_validation_pattern, error: {
       code: ErrorCode::INVALID_REQUEST,
       message: "Invalid Request",
       data: error,
@@ -92,7 +102,7 @@ module JsonRpcHandler
     end
 
     begin
-      method = method_finder.call(method_name)
+      method = method_finder.call(method_name, id)
 
       if method.nil?
         return error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
@@ -103,6 +113,7 @@ module JsonRpcHandler
       end
 
       result = method.call(params)
+      return if result.equal?(NO_RESPONSE)
 
       success_response(id: id, result: result)
     rescue MCP::Server::RequestHandlerError => e
@@ -117,20 +128,27 @@ module JsonRpcHandler
   end
 
   def handle_request_error(error, id, id_validation_pattern)
-    error_type = error.respond_to?(:error_type) ? error.error_type : nil
+    if error.respond_to?(:error_code) && error.error_code
+      code = error.error_code
+      message = error.message
+    else
+      error_type = error.respond_to?(:error_type) ? error.error_type : nil
 
-    code, message = case error_type
-    when :invalid_request then [ErrorCode::INVALID_REQUEST, "Invalid Request"]
-    when :invalid_params then [ErrorCode::INVALID_PARAMS, "Invalid params"]
-    when :parse_error then [ErrorCode::PARSE_ERROR, "Parse error"]
-    when :internal_error then [ErrorCode::INTERNAL_ERROR, "Internal error"]
-    else [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      code, message = case error_type
+      when :invalid_request then [ErrorCode::INVALID_REQUEST, "Invalid Request"]
+      when :invalid_params then [ErrorCode::INVALID_PARAMS, "Invalid params"]
+      when :parse_error then [ErrorCode::PARSE_ERROR, "Parse error"]
+      when :internal_error then [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      else [ErrorCode::INTERNAL_ERROR, "Internal error"]
+      end
     end
+
+    data = error.respond_to?(:error_data) && error.error_data ? error.error_data : error.message
 
     error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
       code: code,
       message: message,
-      data: error.message,
+      data: data,
     })
   end
 

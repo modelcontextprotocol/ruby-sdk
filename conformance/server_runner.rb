@@ -6,7 +6,7 @@ require "net/http"
 require_relative "server"
 
 module Conformance
-  class Runner
+  class ServerRunner
     # Timeout for waiting for the Puma server to start.
     SERVER_START_TIMEOUT = 20
     SERVER_POLL_INTERVAL = 0.5
@@ -83,7 +83,7 @@ module Conformance
         terminate_server(server_pid)
       end
 
-      exit(conformance_exit_code || 1)
+      exit(conformance_exit_code || 1) unless conformance_exit_code == 0
     end
 
     def terminate_server(pid)

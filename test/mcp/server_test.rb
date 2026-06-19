@@ -159,6 +159,75 @@ module MCP
       assert_instrumentation_data({ method: "initialize" })
     end
 
+    test "#handle initialize result carries declared capability extensions" do
+      server = Server.new(
+        name: "extensions_test",
+        capabilities: {
+          tools: { listChanged: true },
+          extensions: { "com.example/feature" => { enabled: true } },
+        },
+      )
+
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+
+      assert_equal(
+        { "com.example/feature" => { enabled: true } },
+        response.dig(:result, :capabilities, :extensions),
+      )
+    end
+
+    test "Server.new accepts an MCP::Server::Capabilities instance" do
+      capabilities = Server::Capabilities.new
+      capabilities.support_tools
+      capabilities.support_extensions("io.modelcontextprotocol/tasks" => {})
+
+      server = Server.new(name: "extensions_test", capabilities: capabilities)
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+
+      assert_equal(
+        {
+          tools: {},
+          extensions: { "io.modelcontextprotocol/tasks" => {} },
+        },
+        response.dig(:result, :capabilities),
+      )
+    end
+
+    test "client-declared capability extensions are readable via client_capabilities" do
+      extensions = { "com.example/feature": { enabled: true } }
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: { name: "test_client", version: "1.0.0" },
+          capabilities: { extensions: extensions },
+        },
+      }
+
+      @server.handle(request)
+
+      assert_equal extensions, @server.client_capabilities[:extensions]
+    end
+
+    test "client-declared capability extensions are readable via the session" do
+      session = ServerSession.new(server: @server, transport: mock)
+      extensions = { "com.example/feature": {} }
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: { name: "test_client", version: "1.0.0" },
+          capabilities: { extensions: extensions },
+        },
+      }
+
+      @server.handle(request, session: session)
+
+      assert_equal extensions, session.client_capabilities[:extensions]
+    end
+
     test "#handle initialize request with clientInfo includes client in instrumentation data" do
       client_info = { name: "test_client", version: "1.0.0" }
       request = {
@@ -195,6 +264,31 @@ module MCP
       assert_instrumentation_data({ method: "ping", client: client_info })
     end
 
+    test "#handle rejects duplicate initialize on an already-initialized session with -32600" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      first_request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: { clientInfo: { name: "original", version: "1.0" } },
+      }
+      first_response = @server.handle(first_request, session: session)
+      refute_nil first_response[:result]
+
+      second_request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 2,
+        params: { clientInfo: { name: "intruder", version: "9.9" }, protocolVersion: "2024-11-05" },
+      }
+      second_response = @server.handle(second_request, session: session)
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, second_response[:error][:code]
+      assert_equal "Invalid Request", second_response[:error][:message]
+      assert_equal({ name: "original", version: "1.0" }, session.client)
+    end
+
     test "instrumentation data does not include client key when no clientInfo provided" do
       request = {
         jsonrpc: "2.0",
@@ -204,6 +298,20 @@ module MCP
 
       @server.handle(request)
       assert_instrumentation_data({ method: "ping" })
+    end
+
+    test "unsupported method instrumentation includes client from session" do
+      session = ServerSession.new(server: @server, transport: mock)
+      session.store_client_info(client: { name: "session-client", version: "1.0" })
+
+      request = {
+        jsonrpc: "2.0",
+        method: "does/not/exist",
+        id: 1,
+      }
+
+      @server.handle(request, session: session)
+      assert_instrumentation_data({ method: "unsupported_method", client: { name: "session-client", version: "1.0" } })
     end
 
     test "#handle returns nil for notification requests" do
@@ -249,7 +357,9 @@ module MCP
       assert_equal "test_tool", result[:tools][0][:name]
       assert_equal "Test tool", result[:tools][0][:title]
       assert_equal "A test tool", result[:tools][0][:description]
-      assert_equal({ type: "object" }, result[:tools][0][:inputSchema])
+      assert_equal(
+        { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object" }, result[:tools][0][:inputSchema]
+      )
       assert_equal({ foo: "bar" }, result[:tools][0][:_meta])
       assert_instrumentation_data({ method: "tools/list" })
     end
@@ -270,21 +380,22 @@ module MCP
       assert_equal({ foo: "bar" }, result[:tools][0][:_meta])
     end
 
-    test "#tools_list_handler sets the tools/list handler" do
-      @server.tools_list_handler do
-        [{ name: "hammer", description: "Hammer time!" }]
+    test "#handle tools/list emits 2020-12 $schema on inputSchema and outputSchema" do
+      tool_with_output = Tool.define(
+        name: "tool_with_output",
+        description: "tool with output schema",
+        input_schema: { properties: { msg: { type: "string" } } },
+        output_schema: { properties: { result: { type: "string" } } },
+      ) do
+        Tool::Response.new([{ type: "text", content: "OK" }])
       end
+      server = Server.new(name: "test_server", tools: [tool_with_output])
 
-      request = {
-        jsonrpc: "2.0",
-        method: "tools/list",
-        id: 1,
-      }
+      response = server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      tool = response[:result][:tools][0]
 
-      response = @server.handle(request)
-      result = response[:result]
-      assert_equal({ tools: [{ name: "hammer", description: "Hammer time!" }] }, result)
-      assert_instrumentation_data({ method: "tools/list" })
+      assert_equal "https://json-schema.org/draft/2020-12/schema", tool[:inputSchema][:"$schema"]
+      assert_equal "https://json-schema.org/draft/2020-12/schema", tool[:outputSchema][:"$schema"]
     end
 
     test "#handle tools/call executes tool and returns result" do
@@ -315,7 +426,55 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: tool_name, tool_arguments: tool_args })
     end
 
-    test "#handle tools/call returns error response with isError true if required tool arguments are missing" do
+    test "#handle_json tools/call delivers nested object arguments with symbol keys at every level" do
+      received_payload = nil
+      server = Server.new(name: "test_server")
+      server.define_tool(
+        name: "nested_args_tool",
+        input_schema: { properties: { message: { type: "string" }, payload: { type: "object" } }, required: ["message"] },
+      ) do |message:, payload: nil, server_context:|
+        received_payload = payload
+        Tool::Response.new([{ type: "text", text: "#{message} #{server_context.class}" }])
+      end
+
+      request_json = JSON.generate(
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "nested_args_tool",
+          arguments: { message: "hi", payload: { subject: "greet", nested: { deep: "value" } } },
+        },
+      )
+
+      server.handle_json(request_json)
+
+      assert_equal({ subject: "greet", nested: { deep: "value" } }, received_payload)
+      assert_equal "greet", received_payload[:subject]
+      assert_nil received_payload["subject"]
+    end
+
+    test "tool receives symbol keys when called under the JSON-round-tripped argument shape" do
+      received_payload = nil
+      tool = Tool.define(
+        name: "nested_args_tool",
+        input_schema: { properties: { payload: { type: "object" } } },
+      ) do |payload: nil, server_context:|
+        received_payload = payload
+        Tool::Response.new([{ type: "text", text: server_context.class.to_s }])
+      end
+
+      # Round-trip the arguments through JSON the way a transport does, so the tool
+      # is exercised under the symbolized shape it actually receives at runtime.
+      arguments = { payload: { "subject" => "greet" } }
+      delivered = JSON.parse(JSON.generate(arguments), symbolize_names: true)
+      tool.call(**delivered, server_context: nil)
+
+      assert_equal({ subject: "greet" }, received_payload)
+      assert_nil received_payload["subject"]
+    end
+
+    test "#handle tools/call returns tool execution error if required tool arguments are missing" do
       tool_with_required_argument = Tool.define(
         name: "test_tool",
         title: "Test tool",
@@ -339,10 +498,10 @@ module MCP
 
       response = server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
+      assert_nil response[:error]
+      assert(response[:result][:isError])
       assert_equal "text", response[:result][:content][0][:type]
-      assert_equal "Missing required arguments: message", response[:result][:content][0][:text]
+      assert_includes response[:result][:content][0][:text], "Missing required arguments: message"
     end
 
     test "#handle_json tools/call executes tool and returns result" do
@@ -410,17 +569,7 @@ module MCP
       assert_equal({ content: [{ type: "text", content: "OK" }], isError: false }, response[:result])
     end
 
-    test "#handle tools/call returns error response with isError true if the tool raises an error" do
-      @server.configuration.exception_reporter.expects(:call).with do |exception, server_context|
-        assert_not_nil exception
-        assert_equal(
-          {
-            request: { name: "tool_that_raises", arguments: { message: "test" } },
-          },
-          server_context,
-        )
-      end
-
+    test "#handle tools/call returns protocol error in JSON-RPC format if the tool raises an uncaught exception" do
       request = {
         jsonrpc: "2.0",
         method: "tools/call",
@@ -431,13 +580,18 @@ module MCP
         id: 1,
       }
 
+      @server.configuration.exception_reporter.expects(:call).with do |exception, server_context|
+        refute_kind_of MCP::Server::RequestHandlerError, exception
+        assert_equal({ request: request }, server_context)
+      end
+
       response = @server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
     test "registers tools with the same class name in different namespaces" do
@@ -478,7 +632,7 @@ module MCP
       MESSAGE
     end
 
-    test "#handle_json returns error response with isError true if the tool raises an error" do
+    test "#handle_json returns protocol error in JSON-RPC format if the tool raises an uncaught exception" do
       request = JSON.generate({
         jsonrpc: "2.0",
         method: "tools/call",
@@ -490,14 +644,14 @@ module MCP
       })
 
       response = JSON.parse(@server.handle_json(request), symbolize_names: true)
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:result][:content][0][:text])
-      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" } })
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
-    test "#handle tools/call returns error response with isError true if input_schema raises an error during validation" do
+    test "#handle tools/call returns protocol error in JSON-RPC format if input_schema raises an error during validation" do
       tool = Tool.define(
         name: "tool_with_faulty_schema",
         title: "Tool with faulty schema",
@@ -521,10 +675,10 @@ module MCP
 
       response = server.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:result][:content][0][:text])
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:error][:data])
     end
 
     test "#handle tools/call returns JSON-RPC error for unknown tool" do
@@ -564,24 +718,6 @@ module MCP
       assert_includes response[:error][:data], "Tool not found: unknown_tool"
     end
 
-    test "#tools_call_handler sets the tools/call handler" do
-      @server.tools_call_handler do |request|
-        tool_name = request[:name]
-        Tool::Response.new("#{tool_name} called successfully").to_h
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: "my_tool", arguments: {} },
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal({ content: "my_tool called successfully", isError: false }, response[:result])
-      assert_instrumentation_data({ method: "tools/call" })
-    end
-
     test "#handle prompts/list returns list of prompts" do
       request = {
         jsonrpc: "2.0",
@@ -591,22 +727,6 @@ module MCP
 
       response = @server.handle(request)
       assert_equal({ prompts: [@prompt.to_h] }, response[:result])
-      assert_instrumentation_data({ method: "prompts/list" })
-    end
-
-    test "#prompts_list_handler sets the prompts/list handler" do
-      @server.prompts_list_handler do
-        [{ name: "foo_prompt", description: "Foo prompt" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "prompts/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal({ prompts: [{ name: "foo_prompt", description: "Foo prompt" }] }, response[:result])
       assert_instrumentation_data({ method: "prompts/list" })
     end
 
@@ -667,32 +787,6 @@ module MCP
         prompt_name: "test_prompt",
         error: :missing_required_arguments,
       })
-    end
-
-    test "#prompts_get_handler sets the prompts/get handler" do
-      @server.prompts_get_handler do |request|
-        prompt_name = request[:name]
-        Prompt::Result.new(
-          description: prompt_name,
-          messages: [
-            Prompt::Message.new(role: "user", content: Content::Text.new(request[:arguments]["foo"])),
-          ],
-        ).to_h
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "prompts/get",
-        id: 1,
-        params: { name: "foo_bar_prompt", arguments: { "foo" => "bar" } },
-      }
-
-      response = @server.handle(request)
-      assert_equal(
-        { description: "foo_bar_prompt", messages: [{ role: "user", content: { type: "text", text: "bar" } }] },
-        response[:result],
-      )
-      assert_instrumentation_data({ method: "prompts/get" })
     end
 
     test "#handle resources/list returns a list of resources" do
@@ -809,6 +903,25 @@ module MCP
       )
     end
 
+    test "#handle resources/read returns -32602 with the uri in error data when the handler raises ResourceNotFoundError" do
+      # Per SEP-2164, resource-not-found errors use the standard JSON-RPC Invalid Params code (-32602)
+      # and carry the requested URI in `data`.
+      @server.resources_read_handler do |request|
+        raise Server::ResourceNotFoundError.new(request[:uri], request)
+      end
+
+      response = @server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 1,
+        params: { uri: "file:///missing.txt" },
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal("Resource not found: file:///missing.txt", response[:error][:message])
+      assert_equal({ uri: "file:///missing.txt" }, response[:error][:data])
+    end
+
     test "#handle resources/templates/list returns a list of resource templates" do
       request = {
         jsonrpc: "2.0",
@@ -820,33 +933,6 @@ module MCP
       assert_equal(
         {
           resourceTemplates: [@resource_template.to_h],
-        },
-        response[:result],
-      )
-      assert_instrumentation_data({ method: "resources/templates/list" })
-    end
-
-    test "#resources_templates_list_handler sets the resources/templates/list handler" do
-      @server.resources_templates_list_handler do
-        [{ uriTemplate: "test_resource_template/{id}", name: "Test resource template", description: "a template" }]
-      end
-
-      request = {
-        jsonrpc: "2.0",
-        method: "resources/templates/list",
-        id: 1,
-      }
-
-      response = @server.handle(request)
-      assert_equal(
-        {
-          resourceTemplates: [
-            {
-              uriTemplate: "test_resource_template/{id}",
-              name: "Test resource template",
-              description: "a template",
-            },
-          ],
         },
         response[:result],
       )
@@ -983,6 +1069,263 @@ module MCP
       response = @server.handle(request)
       assert_nil response
       assert_instrumentation_data({ method: "notify" })
+    end
+
+    test "#handle tools/call invokes around_request with correct data" do
+      call_log = []
+      data_before = nil
+      data_after = nil
+
+      configuration = MCP::Configuration.new
+      configuration.instrumentation_callback = instrumentation_helper.callback
+      configuration.around_request = ->(data, &request_handler) {
+        data_before = data.dup
+        call_log << :before
+        request_handler.call
+        call_log << :after
+        data_after = data.dup
+      }
+
+      tool = Tool.define(name: "around_test_tool", description: "Test") do |arg:|
+        Tool::Response.new([{ type: "text", text: arg }])
+      end
+
+      server = Server.new(name: "test_server", tools: [tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "around_test_tool", arguments: { arg: "hello" } },
+        id: 1,
+      }
+
+      server.handle(request)
+
+      assert_equal([:before, :after], call_log)
+      assert_equal("tools/call", data_before[:method])
+      assert_nil(data_before[:tool_name])
+      assert_equal("around_test_tool", data_after[:tool_name])
+      assert_equal({ arg: "hello" }, data_after[:tool_arguments])
+    end
+
+    test "#handle around_request and instrumentation_callback coexist" do
+      around_called = false
+      callback_data = nil
+
+      configuration = MCP::Configuration.new
+      configuration.around_request = ->(_data, &request_handler) {
+        around_called = true
+        request_handler.call
+      }
+      configuration.instrumentation_callback = ->(data) {
+        callback_data = data.dup
+      }
+
+      server = Server.new(name: "test_server", configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "ping",
+        id: 1,
+      }
+
+      server.handle(request)
+
+      assert(around_called)
+      assert_equal("ping", callback_data[:method])
+      assert(callback_data[:duration])
+    end
+
+    test "#handle reports exception and sets error when around_request raises" do
+      reported_exception = nil
+      reported_context = nil
+      callback_data = nil
+
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, server_context) {
+        reported_exception = e
+        reported_context = server_context
+      }
+      configuration.instrumentation_callback = ->(data) { callback_data = data.dup }
+      configuration.around_request = ->(_data, &_request_handler) { raise "around_request failure" }
+
+      server = Server.new(name: "test_server", configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "ping",
+        id: 1,
+      }
+
+      response = server.handle(request)
+
+      assert_equal("around_request failure", reported_exception.message)
+      assert_equal({ request: request }, reported_context)
+      assert_equal(:internal_error, callback_data[:error])
+      assert_equal(JsonRpcHandler::ErrorCode::INTERNAL_ERROR, response[:error][:code])
+    end
+
+    test "#handle does not double-report exception_reporter when a tool handler raises" do
+      report_count = 0
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(_e, _server_context) { report_count += 1 }
+
+      failing_tool = Tool.define(name: "failing_tool", description: "Always fails") do
+        raise "tool failure"
+      end
+
+      server = Server.new(name: "test_server", tools: [failing_tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "failing_tool", arguments: {} },
+        id: 1,
+      }
+
+      server.handle(request)
+
+      assert_equal(1, report_count)
+    end
+
+    test "#handle reports both exceptions when around_request ensure raises after tool failure" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e.message }
+      configuration.around_request = ->(_data, &request_handler) do
+        request_handler.call
+      ensure
+        raise "around ensure boom"
+      end
+
+      failing_tool = Tool.define(name: "failing_tool", description: "Always fails") do
+        raise "tool failure"
+      end
+
+      server = Server.new(name: "test_server", tools: [failing_tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "failing_tool", arguments: {} },
+        id: 1,
+      }
+
+      response = server.handle(request)
+
+      assert_equal(["tool failure", "around ensure boom"], reported)
+      assert_equal(JsonRpcHandler::ErrorCode::INTERNAL_ERROR, response[:error][:code])
+      assert_equal("around ensure boom", response[:error][:data])
+    end
+
+    test "#handle reports the same exception object reused across requests on every call" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e }
+
+      shared_error = RuntimeError.new("reused")
+      shared_tool = Tool.define(name: "shared_failing_tool", description: "Always fails") do
+        raise shared_error
+      end
+
+      server = Server.new(name: "test_server", tools: [shared_tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "shared_failing_tool", arguments: {} },
+        id: 1,
+      }
+
+      server.handle(request)
+      server.handle(request)
+
+      assert_equal(2, reported.size)
+      assert_same(shared_error, reported[0])
+      assert_same(shared_error, reported[1])
+    end
+
+    test "#handle reports frozen exceptions raised by tool handlers without wrapping them" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e }
+
+      frozen_error = RuntimeError.new("frozen failure").freeze
+      frozen_tool = Tool.define(name: "frozen_tool", description: "Raises frozen") do
+        raise frozen_error
+      end
+
+      server = Server.new(name: "test_server", tools: [frozen_tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "frozen_tool", arguments: {} },
+        id: 1,
+      }
+
+      response = server.handle(request)
+
+      assert_equal([frozen_error], reported)
+      assert_includes(response[:error][:data], "frozen failure")
+    end
+
+    test "#handle still reports via exception_reporter when around_request swallows the tool failure" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e.message }
+      configuration.around_request = ->(_data, &request_handler) do
+        request_handler.call
+      rescue StandardError
+        { swallowed: true }
+      end
+
+      failing_tool = Tool.define(name: "failing_tool", description: "Always fails") do
+        raise "tool failure"
+      end
+
+      server = Server.new(name: "test_server", tools: [failing_tool], configuration: configuration)
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "failing_tool", arguments: {} },
+        id: 1,
+      }
+
+      response = server.handle(request)
+
+      assert_equal(["tool failure"], reported)
+      assert_equal({ swallowed: true }, response[:result])
+    end
+
+    test "#handle concurrent requests on a shared server report exceptions independently" do
+      reported = Queue.new
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e.message }
+
+      failing_tool = Tool.define(name: "concurrent_tool", description: "Raises per-thread") do |i:|
+        raise "thread #{i}"
+      end
+
+      server = Server.new(name: "test_server", tools: [failing_tool], configuration: configuration)
+
+      threads = 10.times.map do |i|
+        Thread.new do
+          server.handle({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: "concurrent_tool", arguments: { i: i } },
+            id: i,
+          })
+        end
+      end
+      threads.each(&:join)
+
+      messages = []
+      messages << reported.pop until reported.empty?
+
+      assert_equal(10.times.map { |i| "thread #{i}" }.sort, messages.sort)
     end
 
     test "#define_custom_method raises an error if the method is already defined" do
@@ -1284,10 +1627,15 @@ module MCP
         name: "defined_tool",
         description: "Defined tool",
         input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+        output_schema: { type: "object", properties: { response: { type: "string" } }, required: ["response"] },
         meta: { foo: "bar" },
       ) do |message:|
-        Tool::Response.new(message)
+        Tool::Response.new({ "response" => message })
       end
+
+      stored_tool = @server.tools["defined_tool"]
+      assert_not_nil(stored_tool)
+      assert_equal(MCP::Tool::OutputSchema.new({ type: "object", properties: { response: { type: "string" } }, required: ["response"] }), stored_tool.output_schema)
 
       response = @server.handle({
         jsonrpc: "2.0",
@@ -1296,7 +1644,7 @@ module MCP
         id: 1,
       })
 
-      assert_equal({ content: "success", isError: false }, response[:result])
+      assert_equal({ content: { "response" => "success" }, isError: false }, response[:result])
     end
 
     test "#define_tool adds a tool with duplicated tool name to the server" do
@@ -1462,11 +1810,10 @@ module MCP
       refute response[:result].key?(:instructions)
     end
 
-    test "tools/call handles missing arguments field" do
-      server = Server.new(
-        tools: [TestTool],
-        configuration: Configuration.new(validate_tool_call_arguments: true),
-      )
+    test "tools/call returns tool execution error for missing arguments" do
+      configuration = Configuration.new(validate_tool_call_arguments: true)
+      configuration.instrumentation_callback = instrumentation_helper.callback
+      server = Server.new(tools: [TestTool], configuration: configuration)
 
       response = server.handle(
         {
@@ -1481,16 +1828,22 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
+      assert_nil response[:error]
+      assert(response[:result][:isError])
+      assert_equal "text", response[:result][:content][0][:type]
       assert_includes response[:result][:content][0][:text], "Missing required arguments"
+      assert_instrumentation_data({
+        method: "tools/call",
+        tool_name: "test_tool",
+        tool_arguments: {},
+        error: :missing_required_arguments,
+      })
     end
 
-    test "tools/call validates arguments against input schema when validate_tool_call_arguments is true" do
-      server = Server.new(
-        tools: [TestTool],
-        configuration: Configuration.new(validate_tool_call_arguments: true),
-      )
+    test "tools/call returns tool execution error for invalid arguments when validate_tool_call_arguments is true" do
+      configuration = Configuration.new(validate_tool_call_arguments: true)
+      configuration.instrumentation_callback = instrumentation_helper.callback
+      server = Server.new(tools: [TestTool], configuration: configuration)
 
       response = server.handle(
         {
@@ -1506,8 +1859,43 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
+      assert_nil response[:error]
+      assert(response[:result][:isError])
+      assert_equal "text", response[:result][:content][0][:type]
+      assert_includes response[:result][:content][0][:text], "Invalid arguments"
+      assert_instrumentation_data({
+        method: "tools/call",
+        tool_name: "test_tool",
+        tool_arguments: { message: 123 },
+        error: :invalid_schema,
+      })
+    end
+
+    test "tools/call returns tool execution error for nested schema validation failure" do
+      server = Server.new(
+        tools: [ComplexTypesTool],
+        configuration: Configuration.new(validate_tool_call_arguments: true),
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "complex_types_tool",
+            arguments: {
+              numbers: [1, 2, 3],
+              strings: ["a", "b", "c"],
+              objects: [{ name: 123 }],
+            },
+          },
+        },
+      )
+
+      assert_nil response[:error]
+      assert(response[:result][:isError])
+      assert_equal "text", response[:result][:content][0][:type]
       assert_includes response[:result][:content][0][:text], "Invalid arguments"
     end
 
@@ -1593,7 +1981,7 @@ module MCP
       assert_equal "OK", response[:result][:content][0][:content]
     end
 
-    test "tools/call disallows additional properties when additionalProperties set to false" do
+    test "tools/call returns tool execution error when additionalProperties set to false" do
       server = Server.new(
         tools: [TestToolWithAdditionalPropertiesSetToFalse],
         configuration: Configuration.new(validate_tool_call_arguments: true),
@@ -1616,14 +2004,190 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
+      assert_nil response[:error]
+      assert(response[:result][:isError])
+      assert_equal "text", response[:result][:content][0][:type]
       assert_includes response[:result][:content][0][:text], "Invalid arguments"
     end
 
+    test "tools/call skips output schema validation by default" do
+      tool = Tool.define(
+        name: "invalid_structured_content_tool",
+        output_schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
+      ) do
+        Tool::Response.new(
+          [{ type: "text", text: "ok" }],
+          structured_content: { result: 123 },
+        )
+      end
+      server = Server.new(tools: [tool])
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "invalid_structured_content_tool" },
+      })
+
+      assert_nil response[:error]
+      assert_equal({ result: 123 }, response[:result][:structuredContent])
+    end
+
+    test "tools/call validates structuredContent against output schema when enabled" do
+      tool = Tool.define(
+        name: "valid_structured_content_tool",
+        output_schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
+      ) do
+        Tool::Response.new(
+          [{ type: "text", text: "ok" }],
+          structured_content: { result: "success" },
+        )
+      end
+      server = Server.new(
+        tools: [tool],
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "valid_structured_content_tool" },
+      })
+
+      assert_nil response[:error]
+      assert_equal({ result: "success" }, response[:result][:structuredContent])
+    end
+
+    test "tools/call returns JSON-RPC error for invalid structuredContent when output schema validation is enabled" do
+      tool = Tool.define(
+        name: "invalid_structured_content_tool",
+        output_schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
+      ) do
+        Tool::Response.new(
+          [{ type: "text", text: "ok" }],
+          structured_content: { result: 123 },
+        )
+      end
+      server = Server.new(
+        tools: [tool],
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "invalid_structured_content_tool" },
+      })
+
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool invalid_structured_content_tool: Invalid result:/, response[:error][:data])
+    end
+
+    test "tools/call returns JSON-RPC error when output schema validation is enabled and structuredContent is missing" do
+      tool = Tool.define(
+        name: "missing_structured_content_tool",
+        output_schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
+      ) do
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      server = Server.new(
+        tools: [tool],
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "missing_structured_content_tool" },
+      })
+
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool missing_structured_content_tool: Invalid result:/, response[:error][:data])
+    end
+
+    test "tools/call skips output schema validation for error responses" do
+      tool = Tool.define(
+        name: "error_response_tool",
+        output_schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
+      ) do
+        Tool::Response.new(
+          [{ type: "text", text: "failed" }],
+          error: true,
+          structured_content: { result: 123 },
+        )
+      end
+      server = Server.new(
+        tools: [tool],
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "error_response_tool" },
+      })
+
+      assert_nil response[:error]
+      assert response[:result][:isError]
+      assert_equal({ result: 123 }, response[:result][:structuredContent])
+    end
+
+    test "tools/call returns JSON-RPC -32602 protocol error when tool is not found" do
+      server = Server.new(
+        tools: [TestTool],
+      )
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "unknown_tool",
+            arguments: {},
+          },
+        },
+      )
+
+      assert_nil response[:result]
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "Tool not found: unknown_tool"
+    end
+
     test "#handle completion/complete returns default completion result" do
+      prompt = Prompt.define(name: "test") {}
       server = Server.new(
         name: "test_server",
+        prompts: [prompt],
         capabilities: { completions: {} },
       )
 
@@ -1648,6 +2212,456 @@ module MCP
         },
         response,
       )
+    end
+
+    test "#handle completion/complete with custom handler for ref/prompt" do
+      prompt = Prompt.define(
+        name: "code_review",
+        arguments: [Prompt::Argument.new(name: "language", required: true)],
+      ) {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["python", "pytorch", "pyside"], total: 10, hasMore: true } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "code_review" },
+          argument: { name: "language", value: "py" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["python", "pytorch", "pyside"], total: 10, hasMore: true } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete with custom handler for ref/resource" do
+      template = ResourceTemplate.new(
+        uri_template: "file:///{path}",
+        name: "file",
+      )
+      server = Server.new(
+        name: "test_server",
+        resource_templates: [template],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["file:///src", "file:///spec"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "file:///{path}" },
+          argument: { name: "path", value: "s" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["file:///src", "file:///spec"], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete passes context arguments to handler" do
+      prompt = Prompt.define(
+        name: "code_review",
+        arguments: [
+          Prompt::Argument.new(name: "language", required: true),
+          Prompt::Argument.new(name: "framework", required: false),
+        ],
+      ) {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      received_params = nil
+      server.completion_handler do |params|
+        received_params = params
+        { completion: { values: ["flask"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "code_review" },
+          argument: { name: "framework", value: "fla" },
+          context: { arguments: { language: "python" } },
+        },
+      })
+
+      assert_equal({ language: "python" }, received_params.dig(:context, :arguments))
+    end
+
+    test "#handle completion/complete truncates values exceeding 100 items" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: (1..150).map(&:to_s), hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      completion = response[:result][:completion]
+      assert_equal 100, completion[:values].length
+      assert_equal "1", completion[:values].first
+      assert_equal "100", completion[:values].last
+      assert(completion[:hasMore])
+      assert_equal 150, completion[:total]
+    end
+
+    test "#handle completion/complete returns error for nonexistent prompt" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "nonexistent" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for nonexistent resource template" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "unknown://template" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete resource-not-found error carries the uri in error data" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "unknown://template" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal("Resource not found: unknown://template", response[:error][:message])
+      assert_equal({ uri: "unknown://template" }, response[:error][:data])
+    end
+
+    test "#handle completion/complete returns error for invalid ref type" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/invalid" },
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for missing ref" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: {},
+          argument: { name: "arg", value: "val" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete with custom handler for ref/resource with resource URI" do
+      resource = Resource.new(
+        uri: "file:///README.md",
+        name: "readme",
+      )
+      server = Server.new(
+        name: "test_server",
+        resources: [resource],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { completion: { values: ["file:///README.md"], hasMore: false } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/resource", uri: "file:///README.md" },
+          argument: { name: "path", value: "R" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: ["file:///README.md"], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete returns error for missing argument" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error for missing argument value" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg" },
+        },
+      })
+
+      assert_equal(-32_602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns default when handler returns nil" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        nil
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { completion: { values: [], hasMore: false } },
+        },
+        response,
+      )
+    end
+
+    test "#handle completion/complete with string-keyed handler result" do
+      prompt = Prompt.define(name: "test") {}
+      server = Server.new(
+        name: "test_server",
+        prompts: [prompt],
+        capabilities: { completions: {} },
+      )
+
+      server.completion_handler do |_params|
+        { "completion" => { "values" => ["alpha", "beta"], "hasMore" => true } }
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert_equal ["alpha", "beta"], response[:result][:completion][:values]
+      assert response[:result][:completion][:hasMore]
+    end
+
+    test "#handle completion/complete returns invalid params for non-Hash params" do
+      server = Server.new(
+        name: "test_server",
+        prompts: [],
+        capabilities: { completions: {} },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: "invalid",
+      })
+
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle completion/complete returns error when completions capability is not declared" do
+      server = Server.new(
+        name: "test_server",
+        prompts: [],
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "completion/complete",
+        params: {
+          ref: { type: "ref/prompt", name: "test" },
+          argument: { name: "arg", value: "" },
+        },
+      })
+
+      assert response[:error]
+      assert_includes response[:error][:data], "completions"
     end
 
     test "#handle resources/subscribe returns empty result" do
@@ -1700,6 +2714,72 @@ module MCP
         },
         response,
       )
+    end
+
+    test "#handle resources/subscribe with custom handler calls the handler" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      received_params = nil
+      server.resources_subscribe_handler do |params|
+        received_params = params
+        {}
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/subscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+      assert_equal "https://example.com/resource", received_params[:uri]
+    end
+
+    test "#handle resources/unsubscribe with custom handler calls the handler" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      received_params = nil
+      server.resources_unsubscribe_handler do |params|
+        received_params = params
+        {}
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/unsubscribe",
+        params: { uri: "https://example.com/resource" },
+      })
+
+      assert_equal(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          result: {},
+        },
+        response,
+      )
+      assert_equal "https://example.com/resource", received_params[:uri]
     end
 
     test "tools/call with no args" do
@@ -1773,6 +2853,258 @@ module MCP
           Tool::Response.new([{ type: "text", content: "OK" }])
         end
       end
+    end
+
+    test "server_context_with_meta uses accessor method, not ivar directly" do
+      subclass = Class.new(Server) do
+        def server_context
+          { custom: "from_accessor" }
+        end
+      end
+
+      server = subclass.new(name: "test", tools: [])
+
+      received_context = nil
+      server.define_tool(name: "ctx_tool") do |server_context:|
+        received_context = server_context
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "ctx_tool", arguments: {} },
+      }
+
+      server.handle(request)
+      assert_equal "from_accessor", received_context[:custom]
+    end
+
+    test "#handle tools/call passes W3C trace context _meta keys through to the handler" do
+      # Per SEP-414, `traceparent`, `tracestate`, and `baggage` are reserved
+      # un-prefixed `_meta` keys and must never be stripped by the SDK.
+      server = Server.new(name: "trace_test", tools: [])
+      received_context = nil
+      server.define_tool(name: "trace_tool") do |server_context:|
+        received_context = server_context
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "trace_tool",
+          arguments: {},
+          _meta: {
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            tracestate: "vendor=value",
+            baggage: "userId=alice",
+            progressToken: "token-1",
+          },
+        },
+      })
+
+      meta = received_context[:_meta]
+      assert_equal "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", meta[:traceparent]
+      assert_equal "vendor=value", meta[:tracestate]
+      assert_equal "userId=alice", meta[:baggage]
+      assert_equal "token-1", meta[:progressToken]
+    end
+
+    test "#handle prompts/get passes W3C trace context _meta keys through to the handler" do
+      server = Server.new(name: "trace_test", prompts: [])
+      received_context = nil
+      server.define_prompt(name: "trace_prompt", arguments: []) do |_args, server_context:|
+        received_context = server_context
+        Prompt::Result.new(
+          description: "a prompt description",
+          messages: [Prompt::Message.new(role: "user", content: Content::Text.new("a prompt message"))],
+        )
+      end
+
+      server.handle({
+        jsonrpc: "2.0",
+        method: "prompts/get",
+        id: 1,
+        params: {
+          name: "trace_prompt",
+          arguments: {},
+          _meta: {
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            tracestate: "vendor=value",
+            baggage: "userId=alice",
+          },
+        },
+      })
+
+      meta = received_context[:_meta]
+      MCP::TraceContext::META_KEYS.each do |key|
+        assert meta.key?(key.to_sym), "expected _meta to retain #{key}"
+      end
+    end
+
+    test "#handle tools/list returns paginated results when page_size is set" do
+      tool_a = Tool.define(name: "tool_a", title: "Tool A", description: "Tool A")
+      tool_b = Tool.define(name: "tool_b", title: "Tool B", description: "Tool B")
+      tool_c = Tool.define(name: "tool_c", title: "Tool C", description: "Tool C")
+
+      server = Server.new(
+        name: "pagination_test",
+        tools: [tool_a, tool_b, tool_c],
+        page_size: 2,
+      )
+
+      first_request = { jsonrpc: "2.0", method: "tools/list", id: 1 }
+      first_response = server.handle(first_request)
+      first_result = first_response[:result]
+
+      assert_equal 2, first_result[:tools].size
+      assert_equal "tool_a", first_result[:tools][0][:name]
+      assert_equal "tool_b", first_result[:tools][1][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_request = { jsonrpc: "2.0", method: "tools/list", id: 2, params: { cursor: first_result[:nextCursor] } }
+      second_response = server.handle(second_request)
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:tools].size
+      assert_equal "tool_c", second_result[:tools][0][:name]
+      # Final page omits the nextCursor key entirely (not just sets it to nil).
+      refute second_result.key?(:nextCursor)
+    end
+
+    test "#handle tools/list returns all tools when page_size is not set" do
+      response = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      result = response[:result]
+
+      assert_kind_of Array, result[:tools]
+      assert_nil result[:nextCursor]
+    end
+
+    test "#handle tools/list returns error for invalid cursor" do
+      server = Server.new(name: "pagination_test", tools: [@tool], page_size: 1)
+
+      request = { jsonrpc: "2.0", method: "tools/list", id: 1, params: { cursor: "!!!invalid!!!" } }
+      response = server.handle(request)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle prompts/list returns paginated results when page_size is set" do
+      prompt_a = Prompt.define(name: "prompt_a", title: "Prompt A", description: "A") { Prompt::Result.new(description: "A", messages: []) }
+      prompt_b = Prompt.define(name: "prompt_b", title: "Prompt B", description: "B") { Prompt::Result.new(description: "B", messages: []) }
+
+      server = Server.new(name: "pagination_test", prompts: [prompt_a, prompt_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:prompts].size
+      assert_equal "prompt_a", first_result[:prompts][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:prompts].size
+      assert_equal "prompt_b", second_result[:prompts][0][:name]
+      assert_nil second_result[:nextCursor]
+    end
+
+    test "#handle resources/list returns paginated results when page_size is set" do
+      resource_a = Resource.new(uri: "https://a.invalid", name: "a", description: "A", mime_type: "text/plain")
+      resource_b = Resource.new(uri: "https://b.invalid", name: "b", description: "B", mime_type: "text/plain")
+
+      server = Server.new(name: "pagination_test", resources: [resource_a, resource_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:resources].size
+      assert_equal "a", first_result[:resources][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:resources].size
+      assert_equal "b", second_result[:resources][0][:name]
+      assert_nil second_result[:nextCursor]
+    end
+
+    test "Server.new raises ArgumentError when page_size is zero" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: 0)
+      end
+    end
+
+    test "Server.new raises ArgumentError when page_size is negative" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: -1)
+      end
+    end
+
+    test "Server.new raises ArgumentError when page_size is non-Integer" do
+      assert_raises(ArgumentError) do
+        Server.new(name: "test", page_size: "10")
+      end
+    end
+
+    test "page_size= raises ArgumentError for invalid values" do
+      server = Server.new(name: "test")
+
+      assert_raises(ArgumentError) { server.page_size = 0 }
+      assert_raises(ArgumentError) { server.page_size = -1 }
+      assert_raises(ArgumentError) { server.page_size = "5" }
+
+      server.page_size = nil
+      server.page_size = 10
+      assert_equal 10, server.page_size
+    end
+
+    test "#handle tools/list returns -32602 for non-Hash params" do
+      server = Server.new(name: "test", tools: [@tool], page_size: 1)
+
+      request = { jsonrpc: "2.0", method: "tools/list", id: 1, params: [1, 2, 3] }
+      response = server.handle(request)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle_json tools/list returns -32602 for numeric cursor (spec requires string)" do
+      server = Server.new(name: "test", tools: [@tool], page_size: 1)
+
+      request_json = '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"cursor":0}}'
+      response = JSON.parse(server.handle_json(request_json), symbolize_names: true)
+
+      assert_not_nil response[:error]
+      assert_equal(-32602, response[:error][:code])
+    end
+
+    test "#handle resources/templates/list returns paginated results when page_size is set" do
+      template_a = ResourceTemplate.new(uri_template: "https://a.invalid/{id}", name: "a", description: "A", mime_type: "text/plain")
+      template_b = ResourceTemplate.new(uri_template: "https://b.invalid/{id}", name: "b", description: "B", mime_type: "text/plain")
+
+      server = Server.new(name: "pagination_test", resource_templates: [template_a, template_b], page_size: 1)
+
+      first_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 1 })
+      first_result = first_response[:result]
+
+      assert_equal 1, first_result[:resourceTemplates].size
+      assert_equal "a", first_result[:resourceTemplates][0][:name]
+      assert_not_nil first_result[:nextCursor]
+
+      second_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 2, params: { cursor: first_result[:nextCursor] } })
+      second_result = second_response[:result]
+
+      assert_equal 1, second_result[:resourceTemplates].size
+      assert_equal "b", second_result[:resourceTemplates][0][:name]
+      assert_nil second_result[:nextCursor]
     end
   end
 end

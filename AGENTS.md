@@ -56,11 +56,17 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 **MCP::Server** (`lib/mcp/server.rb`):
 
-- Main server class handling JSON-RPC requests
+- Main server class handling JSON-RPC requests and holding shared configuration (tools, prompts, resources, handlers, capabilities)
 - Implements MCP protocol methods: initialize, ping, tools/list, tools/call, prompts/list, prompts/get, resources/list, resources/read
 - Supports custom method registration via `define_custom_method`
 - Handles instrumentation, exception reporting, and notifications
 - Uses JsonRpcHandler for request processing
+
+**MCP::ServerSession** (`lib/mcp/server_session.rb`):
+
+- Per-connection state: client info, logging level
+- Created by the transport layer for each client connection
+- Delegates request handling to the shared `Server`
 
 **MCP::Client** (`lib/mcp/client.rb`):
 
@@ -95,6 +101,14 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - Protocol version 2025-03-26+ supports tool annotations (destructive_hint, idempotent_hint, etc.)
 - Validation is configurable via `configuration.validate_tool_call_arguments`
 
+**Session Architecture**:
+
+- `Server` holds shared configuration (tools, prompts, resources, handlers)
+- `ServerSession` holds per-connection state (client info, logging level)
+- Both `StdioTransport` and `StreamableHTTPTransport` create a `ServerSession` per connection, making the session model transparent across transports
+- Session-scoped notifications (`notify_progress`, `notify_log_message`) are sent only to the originating client via `ServerSession`
+- Server-wide notifications (`notify_tools_list_changed`, etc.) broadcast to all sessions via `Server`
+
 **Context Passing**:
 
 - `server_context` hash passed through tool/prompt calls for request-specific data
@@ -102,6 +116,6 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 
 ### Integration patterns
 
-- **Rails controllers**: Use `server.handle_json(request.body.read)` for HTTP endpoints
+- **Rails/Rack apps**: Mount `StreamableHTTPTransport` as a Rack app (e.g., `mount transport => "/mcp"`)
 - **Command-line tools**: Use `StdioTransport.new(server).open` for CLI applications
-- **HTTP services**: Use `StreamableHttpTransport` for web-based servers
+- **HTTP services**: Use `StreamableHTTPTransport` for web-based servers

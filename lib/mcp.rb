@@ -8,6 +8,8 @@ require_relative "mcp/version"
 
 module MCP
   autoload :Annotations, "mcp/annotations"
+  autoload :Cancellation, "mcp/cancellation"
+  autoload :CancelledError, "mcp/cancelled_error"
   autoload :Client, "mcp/client"
   autoload :Content, "mcp/content"
   autoload :Icon, "mcp/icon"
@@ -15,7 +17,9 @@ module MCP
   autoload :Resource, "mcp/resource"
   autoload :ResourceTemplate, "mcp/resource_template"
   autoload :Server, "mcp/server"
+  autoload :ServerSession, "mcp/server_session"
   autoload :Tool, "mcp/tool"
+  autoload :TraceContext, "mcp/trace_context"
 
   class << self
     def configure

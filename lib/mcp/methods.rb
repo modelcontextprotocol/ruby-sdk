@@ -33,6 +33,7 @@ module MCP
     NOTIFICATIONS_MESSAGE = "notifications/message"
     NOTIFICATIONS_PROGRESS = "notifications/progress"
     NOTIFICATIONS_CANCELLED = "notifications/cancelled"
+    NOTIFICATIONS_ELICITATION_COMPLETE = "notifications/elicitation/complete"
 
     class MissingRequiredCapabilityError < StandardError
       attr_reader :method
@@ -72,15 +73,13 @@ module MCP
           require_capability!(method, capabilities, :completions)
         when ROOTS_LIST
           require_capability!(method, capabilities, :roots)
-        when NOTIFICATIONS_ROOTS_LIST_CHANGED
-          require_capability!(method, capabilities, :roots)
-          require_capability!(method, capabilities, :roots, :listChanged)
         when SAMPLING_CREATE_MESSAGE
           require_capability!(method, capabilities, :sampling)
         when ELICITATION_CREATE
           require_capability!(method, capabilities, :elicitation)
-        when INITIALIZE, PING, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_PROGRESS, NOTIFICATIONS_CANCELLED
-          # No specific capability required for initialize, ping, progress or cancelled
+        when INITIALIZE, PING, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_ROOTS_LIST_CHANGED,
+             NOTIFICATIONS_PROGRESS, NOTIFICATIONS_CANCELLED, NOTIFICATIONS_ELICITATION_COMPLETE
+          # No specific capability required.
         end
       end
 

@@ -20,7 +20,8 @@ desc "Run MCP conformance tests (PORT, SCENARIO, SPEC_VERSION, VERBOSE)"
 task :conformance do |t|
   next unless npx_available?(t.name)
 
-  require_relative "conformance/runner"
+  require_relative "conformance/server_runner"
+  require_relative "conformance/client_runner"
 
   options = {}
   options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
@@ -28,7 +29,8 @@ task :conformance do |t|
   options[:spec_version] = ENV["SPEC_VERSION"] if ENV["SPEC_VERSION"]
   options[:verbose] = true if ENV["VERBOSE"]
 
-  Conformance::Runner.new(**options).run
+  Conformance::ServerRunner.new(**options).run
+  Conformance::ClientRunner.new(**options.except(:port)).run
 end
 
 desc "List available conformance scenarios"
@@ -36,6 +38,7 @@ task :conformance_list do |t|
   next unless npx_available?(t.name)
 
   system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--server")
+  system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--client")
 end
 
 desc "Start the conformance server (PORT)"

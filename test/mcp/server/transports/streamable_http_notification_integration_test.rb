@@ -15,7 +15,6 @@ module MCP
             resources: [],
           )
           @transport = StreamableHTTPTransport.new(@server)
-          @server.transport = @transport
         end
 
         test "server notification methods send SSE notifications through HTTP transport" do

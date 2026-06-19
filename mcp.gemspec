@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
   spec.summary       = "The official Ruby SDK for Model Context Protocol servers and clients"
   spec.description   = spec.summary
-  spec.homepage      = "https://github.com/modelcontextprotocol/ruby-sdk"
+  spec.homepage      = "https://ruby.sdk.modelcontextprotocol.io"
   spec.license       = "Apache-2.0"
 
   # Since this library is used by a broad range of users, it does not align its support policy with Ruby's EOL.
@@ -19,15 +19,16 @@ Gem::Specification.new do |spec|
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["changelog_uri"] = "https://github.com/modelcontextprotocol/ruby-sdk/releases/tag/v#{spec.version}"
   spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = spec.homepage
-  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
+  spec.metadata["source_code_uri"] = "https://github.com/modelcontextprotocol/ruby-sdk"
+  spec.metadata["bug_tracker_uri"] = "#{spec.metadata["source_code_uri"]}/issues"
   spec.metadata["documentation_uri"] = "https://rubydoc.info/gems/mcp"
 
-  spec.files = Dir["LICENSE", "README.md", "lib/**/*"]
+  spec.files = Dir["lib/**/*"]
+  spec.extra_rdoc_files = ["LICENSE", "README.md"]
 
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency("json-schema", ">= 4.1")
+  spec.add_dependency("json_schemer", ">= 2.4")
 end

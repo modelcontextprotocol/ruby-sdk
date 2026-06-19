@@ -122,6 +122,20 @@ module MCP
         assert_equal structured_content, actual[:structuredContent]
         refute actual[:isError]
       end
+
+      test "#to_h includes _meta when present" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        response = Response.new([{ type: "text", text: "ok" }], meta: meta)
+        actual = response.to_h
+
+        assert_equal meta, actual[:_meta]
+      end
+
+      test "#to_h omits _meta when nil" do
+        response = Response.new([{ type: "text", text: "ok" }])
+
+        refute response.to_h.key?(:_meta)
+      end
     end
   end
 end

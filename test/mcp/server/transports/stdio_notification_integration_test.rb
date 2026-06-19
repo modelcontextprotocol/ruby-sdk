@@ -61,7 +61,6 @@ module MCP
             resources: [],
           )
           @transport = StdioTransport.new(@server)
-          @server.transport = @transport
         end
 
         teardown do

@@ -6,20 +6,30 @@ module MCP
     SUPPORTED_STABLE_PROTOCOL_VERSIONS = [
       LATEST_STABLE_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05",
     ]
+    DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
 
-    attr_writer :exception_reporter, :instrumentation_callback
+    attr_writer :exception_reporter, :around_request
 
-    def initialize(exception_reporter: nil, instrumentation_callback: nil, protocol_version: nil,
-      validate_tool_call_arguments: true)
+    # @deprecated Use {#around_request=} instead. `instrumentation_callback`
+    #   fires only after a request completes and cannot wrap execution in a
+    #   surrounding block (e.g. for Application Performance Monitoring (APM) spans).
+    # @see #around_request=
+    attr_writer :instrumentation_callback
+
+    def initialize(exception_reporter: nil, around_request: nil, instrumentation_callback: nil, protocol_version: nil,
+      validate_tool_call_arguments: true, validate_tool_call_results: false)
       @exception_reporter = exception_reporter
+      @around_request = around_request
       @instrumentation_callback = instrumentation_callback
       @protocol_version = protocol_version
       if protocol_version
         validate_protocol_version!(protocol_version)
       end
       validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)
+      validate_value_of_validate_tool_call_results!(validate_tool_call_results)
 
       @validate_tool_call_arguments = validate_tool_call_arguments
+      @validate_tool_call_results = validate_tool_call_results
     end
 
     def protocol_version=(protocol_version)
@@ -32,6 +42,12 @@ module MCP
       validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)
 
       @validate_tool_call_arguments = validate_tool_call_arguments
+    end
+
+    def validate_tool_call_results=(validate_tool_call_results)
+      validate_value_of_validate_tool_call_results!(validate_tool_call_results)
+
+      @validate_tool_call_results = validate_tool_call_results
     end
 
     def protocol_version
@@ -50,18 +66,37 @@ module MCP
       !@exception_reporter.nil?
     end
 
+    def around_request
+      @around_request || default_around_request
+    end
+
+    def around_request?
+      !@around_request.nil?
+    end
+
+    # @deprecated Use {#around_request} instead. `instrumentation_callback`
+    #   fires only after a request completes and cannot wrap execution in a
+    #   surrounding block (e.g. for Application Performance Monitoring (APM) spans).
+    # @see #around_request
     def instrumentation_callback
       @instrumentation_callback || default_instrumentation_callback
     end
 
+    # @deprecated Use {#around_request?} instead.
+    # @see #around_request?
     def instrumentation_callback?
       !@instrumentation_callback.nil?
     end
 
     attr_reader :validate_tool_call_arguments
+    attr_reader :validate_tool_call_results
 
     def validate_tool_call_arguments?
       !!@validate_tool_call_arguments
+    end
+
+    def validate_tool_call_results?
+      !!@validate_tool_call_results
     end
 
     def merge(other)
@@ -72,23 +107,35 @@ module MCP
       else
         @exception_reporter
       end
+
+      around_request = if other.around_request?
+        other.around_request
+      else
+        @around_request
+      end
+
       instrumentation_callback = if other.instrumentation_callback?
         other.instrumentation_callback
       else
         @instrumentation_callback
       end
+
       protocol_version = if other.protocol_version?
         other.protocol_version
       else
         @protocol_version
       end
+
       validate_tool_call_arguments = other.validate_tool_call_arguments
+      validate_tool_call_results = other.validate_tool_call_results
 
       Configuration.new(
         exception_reporter: exception_reporter,
+        around_request: around_request,
         instrumentation_callback: instrumentation_callback,
         protocol_version: protocol_version,
         validate_tool_call_arguments: validate_tool_call_arguments,
+        validate_tool_call_results: validate_tool_call_results,
       )
     end
 
@@ -107,10 +154,21 @@ module MCP
       end
     end
 
+    def validate_value_of_validate_tool_call_results!(validate_tool_call_results)
+      unless validate_tool_call_results.is_a?(TrueClass) || validate_tool_call_results.is_a?(FalseClass)
+        raise ArgumentError, "validate_tool_call_results must be a boolean"
+      end
+    end
+
     def default_exception_reporter
       @default_exception_reporter ||= ->(exception, server_context) {}
     end
 
+    def default_around_request
+      @default_around_request ||= ->(_data, &request_handler) { request_handler.call }
+    end
+
+    # @deprecated Use {#default_around_request} instead.
     def default_instrumentation_callback
       @default_instrumentation_callback ||= ->(data) {}
     end

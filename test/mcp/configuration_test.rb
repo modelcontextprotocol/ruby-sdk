@@ -74,6 +74,14 @@ module MCP
       assert_equal("validate_tool_call_arguments must be a boolean", exception.message)
     end
 
+    test "raises ArgumentError when validate_tool_call_results is not a boolean value" do
+      config = Configuration.new
+      exception = assert_raises(ArgumentError) do
+        config.validate_tool_call_results = "true"
+      end
+      assert_equal("validate_tool_call_results must be a boolean", exception.message)
+    end
+
     test "merges protocol version from other configuration" do
       config1 = Configuration.new(protocol_version: "2025-03-26")
       config2 = Configuration.new(protocol_version: "2025-06-18")
@@ -123,6 +131,87 @@ module MCP
       refute merged.validate_tool_call_arguments
     end
 
+    test "defaults validate_tool_call_results to false" do
+      config = Configuration.new
+      refute config.validate_tool_call_results
+    end
+
+    test "can set validate_tool_call_results to true" do
+      config = Configuration.new(validate_tool_call_results: true)
+      assert config.validate_tool_call_results
+    end
+
+    test "validate_tool_call_results? returns false when not set" do
+      config = Configuration.new
+      refute config.validate_tool_call_results?
+    end
+
+    test "validate_tool_call_results? returns true when set" do
+      config = Configuration.new(validate_tool_call_results: true)
+      assert config.validate_tool_call_results?
+    end
+
+    test "merge preserves validate_tool_call_results from other config" do
+      config1 = Configuration.new(validate_tool_call_results: true)
+      config2 = Configuration.new
+      merged = config1.merge(config2)
+      refute merged.validate_tool_call_results?
+    end
+
+    test "merge preserves validate_tool_call_results from self when other set" do
+      config1 = Configuration.new(validate_tool_call_results: true)
+      config2 = Configuration.new
+      merged = config2.merge(config1)
+      assert merged.validate_tool_call_results
+    end
+
+    test "initializes with a default pass-through around_request" do
+      config = Configuration.new
+      called = false
+      config.around_request.call({}) { called = true }
+      assert called
+    end
+
+    test "allows setting a custom around_request" do
+      config = Configuration.new
+      call_log = []
+      config.around_request = ->(_data, &request_handler) {
+        call_log << :before
+        request_handler.call
+        call_log << :after
+      }
+
+      config.around_request.call({}) { call_log << :execute }
+      assert_equal([:before, :execute, :after], call_log)
+    end
+
+    test "around_request? returns false by default" do
+      config = Configuration.new
+      refute config.around_request?
+    end
+
+    test "around_request? returns true when set" do
+      config = Configuration.new
+      config.around_request = ->(_data, &request_handler) { request_handler.call }
+      assert config.around_request?
+    end
+
+    test "merge preserves around_request from other config" do
+      custom = ->(_data, &request_handler) { request_handler.call }
+      config1 = Configuration.new
+      config2 = Configuration.new(around_request: custom)
+      merged = config1.merge(config2)
+      assert_equal custom, merged.around_request
+    end
+
+    test "merge preserves around_request from self when other not set" do
+      custom = ->(_data, &request_handler) { request_handler.call }
+      config1 = Configuration.new(around_request: custom)
+      config2 = Configuration.new
+      merged = config1.merge(config2)
+      assert_equal custom, merged.around_request
+    end
+
     test "raises ArgumentError when protocol_version is not a supported value" do
       exception = assert_raises(ArgumentError) do
         Configuration.new(protocol_version: "1999-12-31")
@@ -135,6 +224,13 @@ module MCP
         Configuration.new(validate_tool_call_arguments: "true")
       end
       assert_equal("validate_tool_call_arguments must be a boolean", exception.message)
+    end
+
+    test "raises ArgumentError when validate_tool_call_results is not a boolean" do
+      exception = assert_raises(ArgumentError) do
+        Configuration.new(validate_tool_call_results: "true")
+      end
+      assert_equal("validate_tool_call_results must be a boolean", exception.message)
     end
   end
 end

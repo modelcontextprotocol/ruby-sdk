@@ -36,7 +36,6 @@ module MCP
       )
 
       @mock_transport = MockTransport.new(@server)
-      @server.transport = @mock_transport
     end
 
     test "#notify_tools_list_changed sends notification through transport" do
@@ -122,14 +121,13 @@ module MCP
     end
 
     test "notification methods handle transport errors gracefully" do
-      # Create a transport that raises errors
-      error_transport = Class.new(MockTransport) do
+      # Replace server's transport with one that raises on send_notification.
+      Class.new(MockTransport) do
         def send_notification(method, params = nil)
           raise StandardError, "Transport error"
         end
       end.new(@server)
 
-      @server.transport = error_transport
       @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
 
       # Mock the exception reporter
@@ -174,6 +172,24 @@ module MCP
       assert_equal Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED, notifications[1][:method]
       assert_equal Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED, notifications[2][:method]
       assert_equal Methods::NOTIFICATIONS_MESSAGE, notifications[3][:method]
+    end
+
+    test "server.notify_log_message works after logging/setLevel via session" do
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+
+      # Client sends logging/setLevel through session.
+      @server.handle(
+        { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "info" } },
+        session: session,
+      )
+
+      # Server-level broadcast should still work because logging level
+      # is stored on both the session and the server.
+      @server.notify_log_message(data: "broadcast log", level: "info")
+
+      log_notifications = @mock_transport.notifications.select { |n| n[:method] == Methods::NOTIFICATIONS_MESSAGE }
+      assert_equal 1, log_notifications.size
+      assert_equal "broadcast log", log_notifications.first[:params]["data"]
     end
   end
 end

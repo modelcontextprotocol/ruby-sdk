@@ -7,13 +7,18 @@ module MCP
     class InputSchemaTest < ActiveSupport::TestCase
       test "required arguments are converted to strings" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: [:message])
-        assert_equal ["message"], input_schema.schema[:required]
+        assert_equal ["message"], input_schema.to_h[:required]
       end
 
       test "to_h returns a hash representation of the input schema" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"])
         assert_equal(
-          { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { message: { type: "string" } },
+            required: ["message"],
+          },
           input_schema.to_h,
         )
       end
@@ -21,9 +26,50 @@ module MCP
       test "to_h returns a hash representation of the input schema with additionalProperties set to false" do
         input_schema = InputSchema.new(properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false)
         assert_equal(
-          { type: "object", properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false },
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { message: { type: "string" } },
+            required: ["message"],
+            additionalProperties: false,
+          },
           input_schema.to_h,
         )
+      end
+
+      test "to_h preserves user-supplied $schema dialect" do
+        input_schema = InputSchema.new(
+          "$schema": "https://json-schema.org/draft/2019-09/schema",
+          properties: { message: { type: "string" } },
+        )
+        assert_equal "https://json-schema.org/draft/2019-09/schema", input_schema.to_h[:"$schema"]
+      end
+
+      test "validate_arguments works when user supplies a 2020-12 $schema" do
+        input_schema = InputSchema.new(
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          properties: { foo: { type: "string" } },
+          required: ["foo"],
+        )
+        assert_nil(input_schema.validate_arguments(foo: "bar"))
+        assert_raises(InputSchema::ValidationError) do
+          input_schema.validate_arguments({ foo: 123 })
+        end
+      end
+
+      test "to_h preserves user-supplied $schema given via string key" do
+        # The initializer normalizes input through `JSON.parse(...,
+        # symbolize_names: true)`, so a string-keyed `"$schema"` should
+        # arrive at `schema_for_validation` the same as a symbol-keyed one.
+        input_schema = InputSchema.new(
+          {
+            "$schema" => "https://json-schema.org/draft/2020-12/schema",
+            "properties" => { "foo" => { "type" => "string" } },
+            "required" => ["foo"],
+          },
+        )
+        assert_equal "https://json-schema.org/draft/2020-12/schema", input_schema.to_h[:"$schema"]
+        assert_nil(input_schema.validate_arguments(foo: "bar"))
       end
 
       test "missing_required_arguments returns an array of missing required arguments" do
@@ -38,7 +84,15 @@ module MCP
 
       test "valid schema initialization" do
         schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
-        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: ["foo"] }, schema.to_h)
+        assert_equal(
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { foo: { type: "string" } },
+            required: ["foo"],
+          },
+          schema.to_h,
+        )
       end
 
       test "invalid schema raises argument error" do
@@ -85,10 +139,10 @@ module MCP
       test "unexpected errors bubble up from validate_arguments" do
         schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
-        JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
-          assert_raises(RuntimeError) do
-            schema.validate_arguments({ foo: "bar" })
-          end
+        JSONSchemer::Schema.any_instance.stubs(:validate).raises("unexpected error")
+
+        assert_raises(RuntimeError) do
+          schema.validate_arguments(foo: "bar")
         end
       end
 
@@ -145,6 +199,26 @@ module MCP
 
         schema6 = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"], additionalProperties: false)
         refute_equal schema1, schema6
+      end
+
+      test "format keyword is not enforced (legacy behavior)" do
+        schema = InputSchema.new(
+          properties: { email: { type: "string", format: "email" } },
+          required: ["email"],
+        )
+        assert_nil(schema.validate_arguments(email: "not_an_email"))
+      end
+
+      test "invalid pattern raises ArgumentError, not RegexpError" do
+        error = assert_raises(ArgumentError) do
+          InputSchema.new(properties: { id: { type: "string", pattern: "[" } })
+        end
+        assert_includes error.message, "Invalid JSON Schema"
+      end
+
+      test "Symbol values in arguments are treated as strings" do
+        schema = InputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
+        assert_nil(schema.validate_arguments(foo: :bar))
       end
     end
   end

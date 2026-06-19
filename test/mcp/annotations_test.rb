@@ -55,5 +55,31 @@ module MCP
 
       assert_equal({ lastModified: timestamp }, annotations.to_h)
     end
+
+    def test_valid_priority_at_lower_bound
+      assert_nothing_raised do
+        Annotations.new(priority: 0)
+      end
+    end
+
+    def test_valid_priority_at_upper_bound
+      assert_nothing_raised do
+        Annotations.new(priority: 1)
+      end
+    end
+
+    def test_invalid_priority_above_upper_bound
+      exception = assert_raises(ArgumentError) do
+        Annotations.new(priority: 1.5)
+      end
+      assert_equal("The value of priority must be between 0 and 1.", exception.message)
+    end
+
+    def test_invalid_priority_below_lower_bound
+      exception = assert_raises(ArgumentError) do
+        Annotations.new(priority: -0.1)
+      end
+      assert_equal("The value of priority must be between 0 and 1.", exception.message)
+    end
   end
 end

@@ -7,6 +7,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-14
+
+### Added
+
+- Support W3C Trace Context Propagation via `_meta` per SEP-414 (#397)
+- Support OAuth `client_credentials` grant in OAuth client (#399)
+- Add `annotations` field to `MCP::Resource` and `MCP::ResourceTemplate` per MCP specification (#403)
+
+### Changed
+
+- Re-run OAuth flow on 403 `insufficient_scope` (step-up) (#368)
+- Speed up `Tool::Schema` validation by 5x to 100x (#369)
+- Use JSON-RPC error envelope for `StreamableHTTPTransport` errors (#371)
+- Pin RFC 8414 default well-known suffix per SEP-2351 (#395)
+- Default missing `MCP-Protocol-Version` to `2025-03-26` in `StreamableHTTPTransport` (#392)
+
+### Fixed
+
+- Preserve the request ID in invalid request error responses (#400)
+- Standardize Resource Not Found errors on -32602 with URI data per SEP-2164 (#402)
+
+## [0.19.0] - 2026-06-13
+
+### Added
+
+- Support Client ID Metadata Documents in OAuth client (#361)
+- Request `offline_access` scope when supported (#365)
+- Add `size` field to `MCP::Resource` per MCP specification (#393)
+
+## [0.18.0] - 2026-05-30
+
+### Added
+
+- Support server-to-client `ping` per MCP specification (#358)
+
+### Changed
+
+- Warn on implicit stdio initialization (#338)
+- Cache `Tool::Schema` validation to avoid re-validating identical schemas (#363)
+
+### Fixed
+
+- Fix case-sensitive `Accept` header comparison (#359)
+
+## [0.17.0] - 2026-05-19
+
+### Added
+
+- Add OAuth 2.1 client support for MCP authorization flow (#353)
+
+### Fixed
+
+- Validate `MCP-Protocol-Version` header in `StreamableHTTPTransport` (#347)
+- Reject duplicate `initialize` requests (#350)
+- Reject non-Hash JSON-RPC bodies in `StreamableHTTPTransport` (#354)
+
+## [0.16.0] - 2026-05-14
+
+### Added
+
+- Add opt-in tool output validation (#344)
+
+### Changed
+
+- Advertise JSON Schema 2020-12 dialect on emitted tool schemas (#342)
+
+### Fixed
+
+- Preserve client tool output schemas (#343)
+- Fix missing `output_schema` argument in `define_tool` API (#301)
+
+## [0.15.0] - 2026-05-05
+
+### Added
+
+- Support `notifications/cancelled` per MCP specification (#332)
+- Add client-level `connect` for initialize handshake (#327)
+- Add client-level `connect` handshake to stdio transport (#336)
+
+### Changed
+
+- Return tool argument validation failures as tool execution errors (#333)
+
+### Removed
+
+- Remove obsolete `MCP::Transports` module (#331)
+
+## [0.14.0] - 2026-04-24
+
+### Added
+
+- Support pagination per MCP specification (#320)
+- Support resource subscriptions per MCP specification (#313)
+- Add `roots/list` and `notifications/roots/list_changed` support (#315)
+- Support JSON response mode for `StreamableHTTPTransport` (#328)
+- Add HTTP client close for explicit session termination (#326)
+- Track `Mcp-Session-Id` and protocol version in HTTP client (#325)
+- Support `ping` client API per MCP specification (#324)
+
+### Fixed
+
+- Handle 202 Accepted response in HTTP client (#323)
+
+### Changed
+
+- Parse SSE responses in HTTP client via `event_stream_parser` (#322)
+
+## [0.13.0] - 2026-04-16
+
+### Added
+
+- Make `StreamableHTTPTransport` a Rack application (#263)
+- Support `elicitation/create` per MCP specification (#312)
+- Add `around_request` hook for request instrumentation (#309)
+- Add `_meta` field to resource, content, and result classes (#310)
+
+### Removed
+
+- Remove `Server#create_sampling_message` direct call (#311)
+
+## [0.12.0] - 2026-04-11
+
+### Added
+
+- Support customizing the Faraday client in `MCP::Client::HTTP` (#306)
+
+### Changed
+
+- Auto-set `server.transport` in `Transport#initialize` (#305)
+
+### Fixed
+
+- Validate Content-Type on POST requests (#304)
+
+## [0.11.0] - 2026-04-06
+
+### Added
+
+- Support `sampling/createMessage` per MCP specification (#282)
+- Support `completion/complete` per MCP specification (#289)
+
+### Fixed
+
+- Support POST response SSE streams for server-to-client messages (#294)
+- Return protocol errors for invalid arguments and server errors (#285)
+- Fix client methods silently swallowing JSON-RPC error responses (#281)
+- Close streams outside mutex in session cleanup (#291)
+
+## [0.10.0] - 2026-03-30
+
+### Added
+
+- Session expiry controls for `StreamableHTTPTransport` via `session_idle_timeout:` option (#268)
+
+### Changed
+
+- `ServerSession` for per-connection state (#275)
+
+### Removed
+
+- Remove `Server#notify_progress` broadcast API (#276)
+- Remove undocumented handler override methods (#270)
+
+### Fixed
+
+- Reject POST requests without session ID in stateful mode (#274)
+
+## [0.9.2] - 2026-03-27
+
+### Fixed
+
+- Use accessor method in `server_context_with_meta` instead of ivar (#273)
+- Reject duplicate SSE connections with 409 to prevent stream hijacking
+
 ## [0.9.1] - 2026-03-23
 
 ### Added

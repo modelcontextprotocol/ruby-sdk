@@ -1,0 +1,117 @@
+<script>
+(function() {
+  const storageKey = "mcp-ruby-sdk-docs-theme";
+  const validPreferences = ["system", "light", "dark"];
+  const preferenceLabels = {
+    system: "System",
+    light: "Light",
+    dark: "Dark"
+  };
+  const mediaQuery = window.matchMedia ?
+    window.matchMedia("(prefers-color-scheme: dark)") :
+    { matches: false };
+
+  function isValidPreference(preference) {
+    return validPreferences.indexOf(preference) !== -1;
+  }
+
+  function getStoredPreference() {
+    try {
+      const preference = window.localStorage.getItem(storageKey);
+      return isValidPreference(preference) ? preference : "system";
+    } catch (error) {
+      return "system";
+    }
+  }
+
+  function savePreference(preference) {
+    try {
+      window.localStorage.setItem(storageKey, preference);
+    } catch (error) {
+      /* Ignore storage errors so private browsing modes still get theme switching. */
+    }
+  }
+
+  function resolvedTheme(preference) {
+    if (preference === "dark" || preference === "light") {
+      return preference;
+    }
+
+    return mediaQuery.matches ? "dark" : "light";
+  }
+
+  function nextPreference(preference) {
+    const index = validPreferences.indexOf(preference);
+    if (index === -1 || index === validPreferences.length - 1) {
+      return validPreferences[0];
+    }
+
+    return validPreferences[index + 1];
+  }
+
+  function setThemeToggleLabel(preference) {
+    const buttons = document.querySelectorAll("[data-theme-toggle]");
+    const label = "Theme: " + preferenceLabels[preference];
+    for (let index = 0; index < buttons.length; index += 1) {
+      buttons[index].setAttribute("aria-label", label);
+      buttons[index].setAttribute("title", label);
+    }
+  }
+
+  function applyPreference(preference) {
+    const safePreference = isValidPreference(preference) ? preference : "system";
+    const theme = resolvedTheme(safePreference);
+
+    if (window.jtd && typeof window.jtd.setTheme === "function") {
+      window.jtd.setTheme(theme);
+    }
+    document.documentElement.setAttribute("data-theme-preference", safePreference);
+    document.documentElement.setAttribute("data-theme", theme);
+    setThemeToggleLabel(safePreference);
+  }
+
+  window.mcpDocsTheme = {
+    apply: applyPreference,
+    getPreference: getStoredPreference,
+    save: function(preference) {
+      const safePreference = isValidPreference(preference) ? preference : "system";
+      savePreference(safePreference);
+      applyPreference(safePreference);
+    }
+  };
+
+  applyPreference(getStoredPreference());
+
+  function initThemeToggle() {
+    const buttons = document.querySelectorAll("[data-theme-toggle]");
+    if (buttons.length === 0) {
+      return;
+    }
+
+    setThemeToggleLabel(getStoredPreference());
+    for (let index = 0; index < buttons.length; index += 1) {
+      buttons[index].addEventListener("click", function() {
+        window.mcpDocsTheme.save(nextPreference(getStoredPreference()));
+      });
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initThemeToggle);
+  } else {
+    initThemeToggle();
+  }
+
+  function applySystemPreference() {
+    if (getStoredPreference() === "system") {
+      applyPreference("system");
+    }
+  }
+
+  if (mediaQuery.addEventListener) {
+    mediaQuery.addEventListener("change", applySystemPreference);
+  } else if (mediaQuery.addListener) {
+    mediaQuery.addListener(applySystemPreference);
+  }
+})();
+</script>

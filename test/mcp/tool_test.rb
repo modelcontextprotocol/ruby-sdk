@@ -33,7 +33,7 @@ module MCP
         title: "Mock Tool",
         description: "a mock tool for testing",
         icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
-        inputSchema: { type: "object" },
+        inputSchema: { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object" },
       }
       tool = Tool.define(
         name: "mock_tool",
@@ -109,7 +109,15 @@ module MCP
       tool = MockTool
       assert_equal "my_mock_tool",  tool.name_value
       assert_equal "a mock tool for testing", tool.description
-      assert_equal({ type: "object", properties: { message: { type: "string" } }, required: ["message"] }, tool.input_schema.to_h)
+      assert_equal(
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: { message: { type: "string" } },
+          required: ["message"],
+        },
+        tool.input_schema.to_h,
+      )
     end
 
     test "defaults to class name as tool name" do
@@ -126,7 +134,7 @@ module MCP
 
       tool = NoInputSchemaTool
 
-      expected = { type: "object" }
+      expected = { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object" }
       assert_equal expected, tool.input_schema.to_h
     end
 
@@ -137,7 +145,12 @@ module MCP
 
       tool = InputSchemaTool
 
-      expected = { type: "object", properties: { message: { type: "string" } }, required: ["message"] }
+      expected = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { message: { type: "string" } },
+        required: ["message"],
+      }
       assert_equal expected, tool.input_schema.to_h
     end
 
@@ -154,8 +167,8 @@ module MCP
       end
 
       assert_includes error.message, "Invalid JSON Schema"
-      assert_includes error.message, "#/properties/count/minimum"
-      assert_includes error.message, "string did not match the following type: number"
+      assert_includes error.message, "properties/count/minimum"
+      assert_includes error.message, "number"
     end
 
     test ".define allows definition of simple tools with a block" do
@@ -342,8 +355,13 @@ module MCP
         title: "Mock Tool",
         description: "a mock tool for testing",
         icons: [{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }],
-        inputSchema: { type: "object" },
-        outputSchema: { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
+        inputSchema: { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object" },
+        outputSchema: {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        },
       }
       tool = Tool.define(
         name: "mock_tool",
@@ -376,7 +394,12 @@ module MCP
       end
 
       tool = HashOutputSchemaTool
-      expected = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
+      expected = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { result: { type: "string" } },
+        required: ["result"],
+      }
       assert_equal expected, tool.output_schema.to_h
     end
 
@@ -386,7 +409,12 @@ module MCP
       end
 
       tool = OutputSchemaObjectTool
-      expected = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
+      expected = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { result: { type: "string" } },
+        required: ["result"],
+      }
       assert_equal expected, tool.output_schema.to_h
     end
 
@@ -403,8 +431,8 @@ module MCP
       end
 
       assert_includes error.message, "Invalid JSON Schema"
-      assert_includes error.message, "#/properties/count/minimum"
-      assert_includes error.message, "string did not match the following type: number"
+      assert_includes error.message, "properties/count/minimum"
+      assert_includes error.message, "number"
     end
 
     test "output_schema accepts $ref in schema" do
@@ -436,7 +464,12 @@ module MCP
       assert_equal "mock_tool", tool.name_value
       assert_equal "a mock tool for testing", tool.description
       assert_instance_of Tool::OutputSchema, tool.output_schema
-      expected_output_schema = { type: "object", properties: { result: { type: "string" } }, required: ["result"] }
+      expected_output_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { result: { type: "string" } },
+        required: ["result"],
+      }
       assert_equal expected_output_schema, tool.output_schema.to_h
     end
 
@@ -458,10 +491,20 @@ module MCP
       assert_equal "test_tool_with_output", tool.name_value
       assert_equal "a test tool with output schema", tool.description
 
-      expected_input = { type: "object", properties: { message: { type: "string" } }, required: ["message"] }
+      expected_input = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { message: { type: "string" } },
+        required: ["message"],
+      }
       assert_equal expected_input, tool.input_schema.to_h
 
-      expected_output = { type: "object", properties: { result: { type: "string" }, success: { type: "boolean" } }, required: ["result", "success"] }
+      expected_output = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { result: { type: "string" }, success: { type: "boolean" } },
+        required: ["result", "success"],
+      }
       assert_equal expected_output, tool.output_schema.to_h
     end
 

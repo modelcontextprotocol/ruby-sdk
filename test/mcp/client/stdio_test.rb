@@ -9,6 +9,9 @@ require "mcp/client/tool"
 module MCP
   class Client
     class StdioTest < Minitest::Test
+      IMPLICIT_CONNECT_DEPRECATION_WARNING =
+        /Calling `MCP::Client::Stdio#send_request` without calling `MCP::Client#connect` is deprecated\. Use `MCP::Client#connect` before sending requests instead\./.freeze
+
       def test_send_request_starts_process_and_returns_response
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe
@@ -25,7 +28,7 @@ module MCP
         }
 
         # Simulate server responses: initialize response, then tools/list response
-        Thread.new do
+        server_thread = Thread.new do
           # Read and respond to initialize request
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -56,16 +59,21 @@ module MCP
           stdout_write.flush
         end
 
-        response = transport.send_request(request: request)
+        response = nil
+        assert_implicit_connect_deprecation_warning do
+          response = transport.send_request(request: request)
+        end
 
         assert_equal("test-id", response["id"])
         assert_equal(1, response.dig("result", "tools").size)
         assert_equal("test_tool", response.dig("result", "tools", 0, "name"))
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
         stdout_write.close
+        stderr_read.close
       end
 
       def test_send_request_initializes_session_on_first_call
@@ -85,7 +93,7 @@ module MCP
 
         received_methods = []
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -122,10 +130,13 @@ module MCP
           stdout_write.flush
         end
 
-        transport.send_request(request: request)
+        assert_implicit_connect_deprecation_warning do
+          transport.send_request(request: request)
+        end
 
         assert_equal(["initialize", "notifications/initialized", "tools/list"], received_methods)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -147,7 +158,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -182,11 +193,15 @@ module MCP
           stdout_write.flush
         end
 
-        response = transport.send_request(request: request)
+        response = nil
+        assert_implicit_connect_deprecation_warning do
+          response = transport.send_request(request: request)
+        end
 
         assert_equal("test-id", response["id"])
-        assert_equal([], response.dig("result", "tools"))
+        assert_empty(response.dig("result", "tools"))
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -214,8 +229,11 @@ module MCP
           method: "tools/list",
         }
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Server process has exited", error.message)
@@ -242,7 +260,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -265,13 +283,17 @@ module MCP
           stdout_write.close
         end
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Server process closed stdout unexpectedly", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -330,7 +352,7 @@ module MCP
 
         received_methods = []
 
-        Thread.new do
+        server_thread = Thread.new do
           # First call: initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -376,7 +398,9 @@ module MCP
           stdout_write.flush
         end
 
-        transport.send_request(request: { jsonrpc: "2.0", id: "first", method: "tools/list" })
+        assert_implicit_connect_deprecation_warning do
+          transport.send_request(request: { jsonrpc: "2.0", id: "first", method: "tools/list" })
+        end
         transport.send_request(request: { jsonrpc: "2.0", id: "second", method: "tools/list" })
 
         assert_equal(
@@ -384,6 +408,7 @@ module MCP
           received_methods,
         )
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -415,7 +440,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -439,14 +464,18 @@ module MCP
           stdout_write.flush
         end
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Failed to parse server response", error.message)
         assert_equal(:internal_error, error.error_type)
         assert_instance_of(JSON::ParserError, error.original_error)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -468,7 +497,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request and return an error
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -480,13 +509,17 @@ module MCP
           stdout_write.flush
         end
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Server initialization failed: Invalid Request", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -534,7 +567,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Handle initialize handshake
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -556,13 +589,17 @@ module MCP
           stdin_read.gets
         end
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Timed out waiting for server response", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
@@ -608,7 +645,9 @@ module MCP
         end
 
         # Complete handshake with a successful request
-        transport.send_request(request: { jsonrpc: "2.0", id: "setup", method: "ping" })
+        assert_implicit_connect_deprecation_warning do
+          transport.send_request(request: { jsonrpc: "2.0", id: "setup", method: "ping" })
+        end
         server_thread.join
 
         # Now close stdin to simulate broken pipe
@@ -689,7 +728,7 @@ module MCP
           method: "tools/list",
         }
 
-        Thread.new do
+        server_thread = Thread.new do
           # Read initialize request and return a response without result
           init_line = stdin_read.gets
           init_request = JSON.parse(init_line)
@@ -700,20 +739,530 @@ module MCP
           stdout_write.flush
         end
 
-        error = assert_raises(RequestHandlerError) do
-          transport.send_request(request: request)
+        error = nil
+        assert_implicit_connect_deprecation_warning do
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: request)
+          end
         end
 
         assert_equal("Server initialization failed: missing result in response", error.message)
         assert_equal(:internal_error, error.error_type)
       ensure
+        server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
         stdout_write.close
       end
 
+      def test_connect_performs_initialize_handshake_explicitly
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        received_methods = []
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          received_methods << init_request["method"]
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: { tools: {} },
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          ))
+          stdout_write.flush
+
+          notification_line = stdin_read.gets
+          received_methods << JSON.parse(notification_line)["method"]
+        end
+
+        result = transport.connect
+
+        server_thread.join
+
+        assert_equal(["initialize", "notifications/initialized"], received_methods)
+        assert_equal("2025-11-25", result["protocolVersion"])
+        assert_equal({ "tools" => {} }, result["capabilities"])
+        assert_equal({ "name" => "test-server", "version" => "1.0.0" }, result["serverInfo"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_send_request_does_not_warn_after_explicit_connect
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          ))
+          stdout_write.flush
+
+          stdin_read.gets
+
+          ping_line = stdin_read.gets
+          ping_request = JSON.parse(ping_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: ping_request["id"],
+            result: {},
+          ))
+          stdout_write.flush
+        end
+
+        assert_silent do
+          transport.connect
+        end
+
+        response = nil
+        assert_silent do
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "ping-id", method: "ping" })
+        end
+
+        assert_equal("ping-id", response["id"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_caches_server_info
+        transport, server_thread, pipes = stub_successful_connect
+
+        transport.connect
+
+        assert_equal("2025-11-25", transport.server_info["protocolVersion"])
+        assert_equal({ "tools" => {} }, transport.server_info["capabilities"])
+      ensure
+        server_thread.join
+        pipes.each(&:close)
+      end
+
+      def test_connect_is_idempotent
+        transport, server_thread, pipes = stub_successful_connect
+
+        first_result = transport.connect
+        second_result = transport.connect
+
+        assert_same(first_result, second_result)
+      ensure
+        server_thread.join
+        pipes.each(&:close)
+      end
+
+      def test_connect_accepts_custom_parameters
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        sent_init_params = nil
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          sent_init_params = init_request["params"]
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2025-03-26" },
+          ))
+          stdout_write.flush
+          stdin_read.gets
+        end
+
+        transport.connect(
+          client_info: { name: "my-app", version: "9.9" },
+          protocol_version: "2025-03-26",
+          capabilities: { roots: { listChanged: true } },
+        )
+
+        assert_equal("2025-03-26", sent_init_params["protocolVersion"])
+        assert_equal({ "name" => "my-app", "version" => "9.9" }, sent_init_params["clientInfo"])
+        assert_equal({ "roots" => { "listChanged" => true } }, sent_init_params["capabilities"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_raises_on_jsonrpc_error_response
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            error: { code: -32602, message: "boom" },
+          ))
+          stdout_write.flush
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        assert_includes(error.message, "boom")
+        refute_predicate(transport, :connected?)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_raises_on_missing_result
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+          ))
+          stdout_write.flush
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        assert_includes(error.message, "missing result in response")
+        refute_predicate(transport, :connected?)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_raises_on_non_hash_result
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: [],
+          ))
+          stdout_write.flush
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        assert_includes(error.message, "missing result in response")
+        refute_predicate(transport, :connected?)
+        assert_nil(transport.server_info)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_clears_state_when_initialized_notification_fails
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          # Close stdin_read first so the next write to @stdin (the notification) raises EPIPE.
+          stdin_read.close
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2025-11-25" },
+          ))
+          stdout_write.flush
+        end
+
+        assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        refute_predicate(transport, :connected?)
+        assert_nil(transport.server_info)
+      ensure
+        server_thread.join
+        [stdin_read, stdin_write, stdout_read, stdout_write].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_connect_can_be_retried_after_failed_handshake
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          # First handshake: server returns an unsupported protocol version.
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "1999-01-01" },
+          ))
+          stdout_write.flush
+
+          # Second handshake: server returns a supported protocol version.
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2025-11-25" },
+          ))
+          stdout_write.flush
+          stdin_read.gets
+        end
+
+        assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        refute_predicate(transport, :connected?)
+        assert_nil(transport.server_info)
+
+        result = transport.connect
+
+        server_thread.join
+
+        assert_predicate(transport, :connected?)
+        assert_equal("2025-11-25", result["protocolVersion"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_raises_on_unsupported_protocol_version
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        sent_methods = []
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          sent_methods << init_request["method"]
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "1999-01-01" },
+          ))
+          stdout_write.flush
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          transport.connect
+        end
+
+        assert_includes(error.message, "unsupported protocol version")
+        assert_includes(error.message, "1999-01-01")
+        assert_equal(["initialize"], sent_methods)
+        refute_predicate(transport, :connected?)
+        assert_nil(transport.server_info)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connected_is_false_before_first_send_request
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        refute_predicate(transport, :connected?)
+      end
+
+      def test_connected_is_true_after_explicit_connect
+        transport, server_thread, pipes = stub_successful_connect
+
+        refute_predicate(transport, :connected?)
+
+        transport.connect
+
+        assert_predicate(transport, :connected?)
+      ensure
+        server_thread.join
+        pipes.each(&:close)
+      end
+
+      def test_connected_is_false_after_close
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, stderr_write = IO.pipe
+
+        wait_thread = mock("wait_thread")
+        wait_thread.stubs(:alive?).returns(true)
+        wait_thread.stubs(:value).returns(nil)
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+        transport.start
+        transport.instance_variable_set(:@initialized, true)
+
+        assert_predicate(transport, :connected?)
+
+        transport.close
+
+        refute_predicate(transport, :connected?)
+      ensure
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read, stderr_write].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_server_info_is_nil_before_connect
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        assert_nil(transport.server_info)
+      end
+
+      def test_server_info_is_cleared_after_close
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, stderr_write = IO.pipe
+
+        wait_thread = mock("wait_thread")
+        wait_thread.stubs(:alive?).returns(true)
+        wait_thread.stubs(:value).returns(nil)
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+        transport.start
+        transport.instance_variable_set(:@initialized, true)
+        transport.instance_variable_set(:@server_info, { "protocolVersion" => "2025-11-25" })
+
+        transport.close
+
+        assert_nil(transport.server_info)
+      ensure
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read, stderr_write].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
       private
+
+      def assert_implicit_connect_deprecation_warning(&block)
+        original_verbose = $VERBOSE
+        $VERBOSE = false
+        assert_output(nil, IMPLICIT_CONNECT_DEPRECATION_WARNING, &block)
+      ensure
+        $VERBOSE = original_verbose
+      end
+
+      def stub_successful_connect
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: { tools: {} },
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          ))
+          stdout_write.flush
+          stdin_read.gets
+        end
+
+        [transport, server_thread, [stdin_read, stdin_write, stdout_read, stdout_write]]
+      end
 
       def mock_wait_thread
         thread = mock("wait_thread")

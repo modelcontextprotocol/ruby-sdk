@@ -8,9 +8,36 @@ module MCP
       test "to_h returns a hash representation of the output schema" do
         output_schema = OutputSchema.new(properties: { result: { type: "string" } }, required: ["result"])
         assert_equal(
-          { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { result: { type: "string" } },
+            required: ["result"],
+          },
           output_schema.to_h,
         )
+      end
+
+      test "to_h preserves user-supplied $schema dialect" do
+        output_schema = OutputSchema.new(
+          "$schema": "https://json-schema.org/draft/2019-09/schema",
+          properties: { result: { type: "string" } },
+        )
+        assert_equal "https://json-schema.org/draft/2019-09/schema", output_schema.to_h[:"$schema"]
+      end
+
+      test "validate_result works when user supplies a 2020-12 $schema" do
+        output_schema = OutputSchema.new(
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+        )
+        assert_nothing_raised do
+          output_schema.validate_result({ result: "success" })
+        end
+        assert_raises(OutputSchema::ValidationError) do
+          output_schema.validate_result({ result: 123 })
+        end
       end
 
       test "validate_result validates result against the schema" do
@@ -57,7 +84,15 @@ module MCP
 
       test "valid schema initialization" do
         schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
-        assert_equal({ type: "object", properties: { foo: { type: "string" } }, required: ["foo"] }, schema.to_h)
+        assert_equal(
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { foo: { type: "string" } },
+            required: ["foo"],
+          },
+          schema.to_h,
+        )
       end
 
       test "invalid schema raises argument error" do
@@ -75,10 +110,10 @@ module MCP
       test "unexpected errors bubble up from validate_result" do
         schema = OutputSchema.new(properties: { foo: { type: "string" } }, required: ["foo"])
 
-        JSON::Validator.stub(:fully_validate, ->(*) { raise "unexpected error" }) do
-          assert_raises(RuntimeError) do
-            schema.validate_result({ foo: "bar" })
-          end
+        JSONSchemer::Schema.any_instance.stubs(:validate).raises("unexpected error")
+
+        assert_raises(RuntimeError) do
+          schema.validate_result(foo: "bar")
         end
       end
 
@@ -136,7 +171,10 @@ module MCP
 
       test "empty schema is valid" do
         schema = OutputSchema.new
-        assert_equal({ type: "object" }, schema.to_h)
+        assert_equal(
+          { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object" },
+          schema.to_h,
+        )
       end
 
       test "validates complex nested schemas" do
@@ -187,6 +225,7 @@ module MCP
         })
         assert_equal(
           {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
             type: "array",
             items: {
               properties: { foo: { type: "string" } },

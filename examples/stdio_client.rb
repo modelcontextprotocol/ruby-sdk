@@ -13,6 +13,9 @@ transport = MCP::Client::Stdio.new(command: "ruby", args: [server_script])
 client = MCP::Client.new(transport: transport)
 
 begin
+  # Perform the MCP initialization handshake before sending any requests.
+  client.connect
+
   # List available tools
   puts "=== Listing tools ==="
   tools = client.tools

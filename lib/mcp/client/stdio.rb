@@ -19,7 +19,7 @@ module MCP
       CLOSE_TIMEOUT = 2
       STDERR_READ_SIZE = 4096
 
-      attr_reader :command, :args, :env
+      attr_reader :command, :args, :env, :server_info
 
       def initialize(command:, args: [], env: nil, read_timeout: nil)
         @command = command
@@ -33,11 +33,111 @@ module MCP
         @stderr_thread = nil
         @started = false
         @initialized = false
+        @server_info = nil
+      end
+
+      # Performs the MCP `initialize` handshake: sends an `initialize` request
+      # followed by the required `notifications/initialized` notification. The
+      # server's `InitializeResult` (protocol version, capabilities, server
+      # info, instructions) is cached on the transport and returned.
+      #
+      # Idempotent: a second call returns the cached `InitializeResult` without
+      # contacting the server. After `close`, state is cleared and `connect`
+      # will handshake again. Spawns the subprocess via `start` if it has not
+      # been started yet.
+      #
+      # @param client_info [Hash, nil] `{ name:, version: }` identifying the client.
+      #   Defaults to `{ name: "mcp-ruby-client", version: MCP::VERSION }`.
+      # @param protocol_version [String, nil] Protocol version to offer. Defaults
+      #   to `MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION`.
+      # @param capabilities [Hash] Capabilities advertised by the client. Defaults to `{}`.
+      # @return [Hash] The server's `InitializeResult`.
+      # @raise [RequestHandlerError] If the server responds with a JSON-RPC error,
+      #   a malformed result, or an unsupported protocol version.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
+      def connect(client_info: nil, protocol_version: nil, capabilities: {})
+        return @server_info if @initialized
+
+        start unless @started
+
+        client_info ||= { name: "mcp-ruby-client", version: MCP::VERSION }
+        protocol_version ||= MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION
+
+        init_request = {
+          jsonrpc: JsonRpcHandler::Version::V2_0,
+          id: SecureRandom.uuid,
+          method: MCP::Methods::INITIALIZE,
+          params: {
+            protocolVersion: protocol_version,
+            capabilities: capabilities,
+            clientInfo: client_info,
+          },
+        }
+
+        write_message(init_request)
+        response = read_response(init_request)
+
+        if response.key?("error")
+          error = response["error"]
+          raise RequestHandlerError.new(
+            "Server initialization failed: #{error["message"]}",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        unless response["result"].is_a?(Hash)
+          raise RequestHandlerError.new(
+            "Server initialization failed: missing result in response",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        @server_info = response["result"]
+
+        negotiated_protocol_version = @server_info["protocolVersion"]
+        unless MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(negotiated_protocol_version)
+          # Per spec, if the client does not support the server's returned protocol version,
+          # the client SHOULD disconnect. Roll back the cached `InitializeResult` before
+          # raising so a retry starts without a stale `server_info`.
+          # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation
+          @server_info = nil
+          raise RequestHandlerError.new(
+            "Server initialization failed: unsupported protocol version #{negotiated_protocol_version.inspect}",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        begin
+          notification = {
+            jsonrpc: JsonRpcHandler::Version::V2_0,
+            method: MCP::Methods::NOTIFICATIONS_INITIALIZED,
+          }
+          write_message(notification)
+        rescue StandardError
+          @server_info = nil
+          raise
+        end
+
+        @initialized = true
+        @server_info
+      end
+
+      # Returns true once `connect` (or the implicit handshake on the first
+      # `send_request`) has completed. Returns false before the handshake
+      # and after `close`.
+      def connected?
+        @initialized
       end
 
       def send_request(request:)
         start unless @started
-        initialize_session unless @initialized
+        unless @initialized
+          warn("Calling `MCP::Client::Stdio#send_request` without calling `MCP::Client#connect` is deprecated. Use `MCP::Client#connect` before sending requests instead.", uplevel: 1)
+          connect
+        end
 
         write_message(request)
         read_response(request)
@@ -98,56 +198,10 @@ module MCP
         @stderr_thread.join(CLOSE_TIMEOUT)
         @started = false
         @initialized = false
+        @server_info = nil
       end
 
       private
-
-      # The client MUST send a protocol version it supports. This SHOULD be the latest version.
-      # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation
-      #
-      # Always sends `LATEST_STABLE_PROTOCOL_VERSION`, matching the Python and TypeScript SDKs:
-      # https://github.com/modelcontextprotocol/python-sdk/blob/v1.26.0/src/mcp/client/session.py#L175
-      # https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.27.1/src/client/index.ts#L495
-      def initialize_session
-        init_request = {
-          jsonrpc: JsonRpcHandler::Version::V2_0,
-          id: SecureRandom.uuid,
-          method: MCP::Methods::INITIALIZE,
-          params: {
-            protocolVersion: MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION,
-            capabilities: {},
-            clientInfo: { name: "mcp-ruby-client", version: MCP::VERSION },
-          },
-        }
-
-        write_message(init_request)
-        response = read_response(init_request)
-
-        if response.key?("error")
-          error = response["error"]
-          raise RequestHandlerError.new(
-            "Server initialization failed: #{error["message"]}",
-            { method: MCP::Methods::INITIALIZE },
-            error_type: :internal_error,
-          )
-        end
-
-        unless response.key?("result")
-          raise RequestHandlerError.new(
-            "Server initialization failed: missing result in response",
-            { method: MCP::Methods::INITIALIZE },
-            error_type: :internal_error,
-          )
-        end
-
-        notification = {
-          jsonrpc: JsonRpcHandler::Version::V2_0,
-          method: MCP::Methods::NOTIFICATIONS_INITIALIZED,
-        }
-        write_message(notification)
-
-        @initialized = true
-      end
 
       def write_message(message)
         ensure_running!

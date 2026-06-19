@@ -70,6 +70,78 @@ module MCP
         assert_equal({ uri: "test://binary", blob: "base64data" }, result)
         refute result.key?(:mimeType)
       end
+
+      test "Contents#to_h omits _meta when nil" do
+        contents = Resource::Contents.new(uri: "test://example", mime_type: "text/plain")
+
+        refute contents.to_h.key?(:_meta)
+      end
+
+      test "Contents#to_h includes _meta when present" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        contents = Resource::Contents.new(uri: "test://example", mime_type: "text/plain", meta: meta)
+
+        assert_equal meta, contents.to_h[:_meta]
+      end
+
+      test "TextContents#to_h includes _meta when present" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        text_contents = Resource::TextContents.new(
+          uri: "test://text",
+          mime_type: "text/plain",
+          text: "Hello",
+          meta: meta,
+        )
+
+        result = text_contents.to_h
+
+        assert_equal meta, result[:_meta]
+        assert_equal "Hello", result[:text]
+      end
+
+      test "TextContents#to_h omits _meta when nil" do
+        text_contents = Resource::TextContents.new(
+          uri: "test://text",
+          mime_type: "text/plain",
+          text: "Hello",
+        )
+
+        refute text_contents.to_h.key?(:_meta)
+      end
+
+      test "BlobContents#to_h includes _meta when present" do
+        meta = { "application/vnd.ant.mcp-app" => { "csp" => "default-src 'self'" } }
+        blob_contents = Resource::BlobContents.new(
+          uri: "test://binary",
+          mime_type: "image/png",
+          data: "base64data",
+          meta: meta,
+        )
+
+        result = blob_contents.to_h
+
+        assert_equal meta, result[:_meta]
+        assert_equal "base64data", result[:blob]
+      end
+
+      test "BlobContents#to_h omits _meta when nil" do
+        blob_contents = Resource::BlobContents.new(
+          uri: "test://binary",
+          mime_type: "image/png",
+          data: "base64data",
+        )
+
+        refute blob_contents.to_h.key?(:_meta)
+      end
+
+      test "Contents#to_h preserves empty _meta hash" do
+        contents = Resource::Contents.new(uri: "test://example", mime_type: "text/plain", meta: {})
+
+        result = contents.to_h
+
+        assert result.key?(:_meta)
+        assert_equal({}, result[:_meta])
+      end
     end
   end
 end

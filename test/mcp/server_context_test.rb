@@ -6,18 +6,18 @@ module MCP
   class ServerContextTest < ActiveSupport::TestCase
     test "ServerContext delegates method calls to the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_equal "test_user", server_context[:user]
     end
 
     test "ServerContext respond_to? returns true for methods on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_respond_to server_context, :[]
       assert_respond_to server_context, :keys
@@ -25,20 +25,168 @@ module MCP
 
     test "ServerContext respond_to? returns false for methods not on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       refute_respond_to server_context, :nonexistent_method
     end
 
     test "ServerContext raises NoMethodError for methods not on the underlying context" do
       context = { user: "test_user" }
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_raises(NoMethodError) { server_context.nonexistent_method }
+    end
+
+    test "ServerContext#list_roots delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:list_roots).with(
+        related_request_id: nil,
+      ).returns({ roots: [{ uri: "file:///project", name: "Project" }] })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.list_roots
+
+      assert_equal [{ uri: "file:///project", name: "Project" }], result[:roots]
+    end
+
+    test "ServerContext#list_roots raises NoMethodError when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      assert_raises(NoMethodError) { server_context.list_roots }
+    end
+
+    test "ServerContext#ping delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:ping).with(related_request_id: nil).returns({})
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.ping
+
+      assert_equal({}, result)
+    end
+
+    test "ServerContext#ping raises NoMethodError when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      assert_raises(NoMethodError) { server_context.ping }
+    end
+
+    test "ServerContext#create_sampling_message delegates to notification_target over context" do
+      notification_target = mock
+      notification_target.expects(:create_sampling_message).with(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+        related_request_id: nil,
+      ).returns({ role: "assistant", content: { type: "text", text: "Hi" } })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_sampling_message(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      )
+
+      assert_equal "Hi", result[:content][:text]
+    end
+
+    test "ServerContext#create_sampling_message falls back to context when notification_target does not respond" do
+      notification_target = mock
+      context = mock
+      context.expects(:create_sampling_message).with(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+        related_request_id: nil,
+      ).returns({ role: "assistant", content: { type: "text", text: "Fallback" } })
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_sampling_message(
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        max_tokens: 100,
+      )
+
+      assert_equal "Fallback", result[:content][:text]
+    end
+
+    test "ServerContext#create_form_elicitation delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:create_form_elicitation).with(
+        message: "Please provide your name",
+        requested_schema: { type: "object", properties: { name: { type: "string" } } },
+        related_request_id: nil,
+      ).returns(action: "accept", content: { name: "test_user" })
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_form_elicitation(
+        message: "Please provide your name",
+        requested_schema: { type: "object", properties: { name: { type: "string" } } },
+      )
+
+      assert_equal "accept", result[:action]
+    end
+
+    test "ServerContext#create_url_elicitation delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:create_url_elicitation).with(
+        message: "Please authorize",
+        url: "https://example.com/oauth",
+        elicitation_id: "abc-123",
+        related_request_id: nil,
+      ).returns(action: "accept")
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      result = server_context.create_url_elicitation(
+        message: "Please authorize",
+        url: "https://example.com/oauth",
+        elicitation_id: "abc-123",
+      )
+
+      assert_equal "accept", result[:action]
+    end
+
+    test "ServerContext#notify_elicitation_complete delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:notify_elicitation_complete).with(elicitation_id: "abc-123")
+
+      context = mock
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: notification_target)
+
+      server_context.notify_elicitation_complete(elicitation_id: "abc-123")
     end
 
     test "ServerContext delegates to custom object context" do
@@ -46,9 +194,9 @@ module MCP
       def context.custom_method
         "custom_value"
       end
-      progress = Progress.new(server: mock, progress_token: nil)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
 
-      server_context = ServerContext.new(context, progress: progress)
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
 
       assert_equal "custom_value", server_context.custom_method
     end
@@ -57,8 +205,32 @@ module MCP
       progress = mock
       progress.expects(:report).with(50, total: 100, message: nil).once
 
-      server_context = ServerContext.new(nil, progress: progress)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock)
       server_context.report_progress(50, total: 100)
+    end
+
+    test "ServerContext#notify_log_message is a no-op when notification_target is nil" do
+      progress = Progress.new(notification_target: nil, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: nil)
+
+      assert_nothing_raised { server_context.notify_log_message(data: "test", level: "info") }
+    end
+
+    test "ServerContext#notify_resources_updated delegates to notification_target" do
+      notification_target = mock
+      notification_target.expects(:notify_resources_updated).with(uri: "test://resource-1").once
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: notification_target)
+
+      server_context.notify_resources_updated(uri: "test://resource-1")
+    end
+
+    test "ServerContext#notify_resources_updated is a no-op when notification_target is nil" do
+      progress = Progress.new(notification_target: nil, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: nil)
+
+      assert_nothing_raised { server_context.notify_resources_updated(uri: "test://resource-1") }
     end
 
     # Tool without server_context parameter
@@ -192,7 +364,7 @@ module MCP
         response[:result][:content][0][:content]
     end
 
-    test "tool with required server_context fails when server has no context" do
+    test "tool with required server_context returns protocol error in JSON-RPC format when server has no context" do
       server_no_context = Server.new(
         name: "test_server_no_context",
         tools: [ToolWithRequiredContext],
@@ -210,10 +382,10 @@ module MCP
 
       response = server_no_context.handle(request)
 
-      assert_nil response[:error], "Expected no JSON-RPC error"
-      assert response[:result][:isError]
-      assert_equal "text", response[:result][:content][0][:type]
-      assert_match(/Internal error calling tool tool_with_required_context: /, response[:result][:content][0][:text])
+      assert_nil response[:result]
+      assert_equal(-32603, response[:error][:code])
+      assert_equal "Internal error", response[:error][:message]
+      assert_match(/Internal error calling tool tool_with_required_context: /, response[:error][:data])
     end
 
     test "call_tool_with_args correctly detects server_context parameter presence" do

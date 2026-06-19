@@ -38,11 +38,16 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports resource registration and retrieval
 - Supports stdio & Streamable HTTP (including SSE) transports
 - Supports notifications for list changes (tools, prompts, resources)
+- Supports roots (server-to-client filesystem boundary queries)
+- Supports sampling (server-to-client LLM completion requests)
+- Supports cursor-based pagination for list operations
+- Supports server-side cancellation of in-flight requests (notifications/cancelled)
 
 ### Supported Methods
 
 - `initialize` - Initializes the protocol and returns server capabilities
 - `ping` - Simple health check
+- `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas
 - `tools/call` - Invokes a specific tool with provided arguments
 - `prompts/list` - Lists all registered prompts and their schemas
@@ -50,286 +55,14 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/list` - Lists all registered resources and their schemas
 - `resources/read` - Retrieves a specific resource by name
 - `resources/templates/list` - Lists all registered resource templates and their schemas
-
-### Custom Methods
-
-The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-
-# Define a custom method that returns a result
-server.define_custom_method(method_name: "add") do |params|
-  params[:a] + params[:b]
-end
-
-# Define a custom notification method (returns nil)
-server.define_custom_method(method_name: "notify") do |params|
-  # Process notification
-  nil
-end
-```
-
-**Key Features:**
-
-- Accepts any method name as a string
-- Block receives the request parameters as a hash
-- Can handle both regular methods (with responses) and notifications
-- Prevents overriding existing MCP protocol methods
-- Supports instrumentation callbacks for monitoring
-
-**Usage Example:**
-
-```ruby
-# Client request
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "add",
-  "params": { "a": 5, "b": 3 }
-}
-
-# Server response
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": 8
-}
-```
-
-**Error Handling:**
-
-- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
-- Supports the same exception reporting and instrumentation as standard methods
-
-### Notifications
-
-The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
-
-#### Notification Methods
-
-The server provides the following notification methods:
-
-- `notify_tools_list_changed` - Send a notification when the tools list changes
-- `notify_prompts_list_changed` - Send a notification when the prompts list changes
-- `notify_resources_list_changed` - Send a notification when the resources list changes
-- `notify_progress` - Send a progress notification for long-running operations
-- `notify_log_message` - Send a structured logging notification message
-
-#### Notification Format
-
-Notifications follow the JSON-RPC 2.0 specification and use these method names:
-
-- `notifications/tools/list_changed`
-- `notifications/prompts/list_changed`
-- `notifications/resources/list_changed`
-- `notifications/progress`
-- `notifications/message`
-
-### Progress
-
-The MCP Ruby SDK supports progress tracking for long-running tool operations,
-following the [MCP Progress specification](https://modelcontextprotocol.io/specification/latest/server/utilities/progress).
-
-#### How Progress Works
-
-1. **Client Request**: The client sends a `progressToken` in the `_meta` field when calling a tool
-2. **Server Notification**: The server sends `notifications/progress` messages back to the client during tool execution
-3. **Tool Integration**: Tools call `server_context.report_progress` to report incremental progress
-
-#### Server-Side: Tool with Progress
-
-Tools that accept a `server_context:` parameter can call `report_progress` on it.
-The server automatically wraps the context in an `MCP::ServerContext` instance that provides this method:
-
-```ruby
-class LongRunningTool < MCP::Tool
-  description "A tool that reports progress during execution"
-  input_schema(
-    properties: {
-      count: { type: "integer" },
-    },
-    required: ["count"]
-  )
-
-  def self.call(count:, server_context:)
-    count.times do |i|
-      # Do work here.
-      server_context.report_progress(i + 1, total: count, message: "Processing item #{i + 1}")
-    end
-
-    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
-  end
-end
-```
-
-The `server_context.report_progress` method accepts:
-
-- `progress` (required) — current progress value (numeric)
-- `total:` (optional) — total expected value, so clients can display a percentage
-- `message:` (optional) — human-readable status message
-
-#### Server-Side: Direct `notify_progress` Usage
-
-You can also call `notify_progress` directly on the server instance:
-
-```ruby
-server.notify_progress(
-  progress_token: "token-123",
-  progress: 50,
-  total: 100,        # optional
-  message: "halfway" # optional
-)
-```
-
-**Key Features:**
-
-- Tools report progress via `server_context.report_progress`
-- `report_progress` is a no-op when no `progressToken` was provided by the client
-- `notify_progress` is a no-op when no transport is configured
-- Supports both numeric and string progress tokens
-
-### Logging
-
-The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
-
-The `notifications/message` notification is used for structured logging between client and server.
-
-#### Log Levels
-
-The SDK supports 8 log levels with increasing severity:
-
-- `debug` - Detailed debugging information
-- `info` - General informational messages
-- `notice` - Normal but significant events
-- `warning` - Warning conditions
-- `error` - Error conditions
-- `critical` - Critical conditions
-- `alert` - Action must be taken immediately
-- `emergency` - System is unusable
-
-#### How Logging Works
-
-1. **Client Configuration**: The client sends a `logging/setLevel` request to configure the minimum log level
-2. **Server Filtering**: The server only sends log messages at the configured level or higher severity
-3. **Notification Delivery**: Log messages are sent as `notifications/message` to the client
-
-For example, if the client sets the level to `"error"` (severity 4), the server will send messages with levels: `error`, `critical`, `alert`, and `emergency`.
-
-For more details, see the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
-
-**Usage Example:**
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-transport = MCP::Server::Transports::StdioTransport.new(server)
-server.transport = transport
-
-# The client first configures the logging level (on the client side):
-transport.send_request(
-  request: {
-    jsonrpc: "2.0",
-    method: "logging/setLevel",
-    params: { level: "info" },
-    id: session_id # Unique request ID within the session
-  }
-)
-
-# Send log messages at different severity levels
-server.notify_log_message(
-  data: { message: "Application started successfully" },
-  level: "info"
-)
-
-server.notify_log_message(
-  data: { message: "Configuration file not found, using defaults" },
-  level: "warning"
-)
-
-server.notify_log_message(
-  data: {
-    error: "Database connection failed",
-    details: { host: "localhost", port: 5432 }
-  },
-  level: "error",
-  logger: "DatabaseLogger" # Optional logger name
-)
-```
-
-**Key Features:**
-
-- Supports 8 log levels (debug, info, notice, warning, error, critical, alert, emergency) based on https://modelcontextprotocol.io/specification/2025-06-18/server/utilities/logging#log-levels
-- Server has capability `logging` to send log messages
-- Messages are only sent if a transport is configured
-- Messages are filtered based on the client's configured log level
-- If the log level hasn't been set by the client, no messages will be sent
-
-#### Transport Support
-
-- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
-- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
-
-#### Usage Example
-
-```ruby
-server = MCP::Server.new(name: "my_server")
-
-# Default Streamable HTTP - session oriented
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-
-server.transport = transport
-
-# When tools change, notify clients
-server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
-server.notify_tools_list_changed
-```
-
-You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
-This mode allows for easy multi-node deployment.
-Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` (`stateless` defaults to `false`):
-
-```ruby
-# Stateless Streamable HTTP - session-less
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
-```
-
-### Unsupported Features (to be implemented in future versions)
-
-- Resource subscriptions
-- Completions
-- Elicitation
+- `resources/subscribe` - Subscribes to updates for a specific resource
+- `resources/unsubscribe` - Unsubscribes from updates for a specific resource
+- `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
+- `roots/list` - Requests filesystem roots from the client (server-to-client)
+- `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
+- `elicitation/create` - Requests user input from the client (server-to-client)
 
 ### Usage
-
-#### Rails Controller
-
-When added to a Rails controller on a route that handles POST requests, your server will be compliant with non-streaming
-[Streamable HTTP](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http) transport
-requests.
-
-You can use `StreamableHTTPTransport#handle_request` to handle requests with proper HTTP
-status codes (e.g., 202 Accepted for notifications).
-
-```ruby
-class McpController < ActionController::Base
-  def create
-    server = MCP::Server.new(
-      name: "my_server",
-      title: "Example Server Display Name",
-      version: "1.0.0",
-      instructions: "Use the tools of this server as a last resort",
-      tools: [SomeTool, AnotherTool],
-      prompts: [MyPrompt],
-      server_context: { user_id: current_user.id },
-    )
-    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
-    server.transport = transport
-    status, headers, body = transport.handle_request(request)
-
-    render(json: body.first, status: status, headers: headers)
-  end
-end
-```
 
 #### Stdio Transport
 
@@ -378,6 +111,78 @@ $ ruby examples/stdio_server.rb
 {"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"example_tool","arguments":{"message":"Hello"}}}
 ```
 
+#### Streamable HTTP Transport
+
+`MCP::Server::Transports::StreamableHTTPTransport` is a standard Rack app, so it can be mounted in any Rack-compatible framework.
+The following examples show two common integration styles in Rails.
+
+> [!IMPORTANT]
+> `MCP::Server::Transports::StreamableHTTPTransport` stores session and SSE stream state in memory,
+> so it must run in a single process. Use a single-process server (e.g., Puma with `workers 0`).
+> Multi-process configurations (Unicorn, or Puma with `workers > 0`) fork separate processes that
+> do not share memory, which breaks session management and SSE connections.
+>
+> When running multiple server instances behind a load balancer, configure your load balancer to use
+> sticky sessions (session affinity) so that requests with the same `Mcp-Session-Id` header are always
+> routed to the same instance.
+>
+> Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
+
+##### Rails (mount)
+
+`StreamableHTTPTransport` is a Rack app that can be mounted directly in Rails routes:
+
+```ruby
+# config/routes.rb
+server = MCP::Server.new(
+  name: "my_server",
+  title: "Example Server Display Name",
+  version: "1.0.0",
+  instructions: "Use the tools of this server as a last resort",
+  tools: [SomeTool, AnotherTool],
+  prompts: [MyPrompt],
+)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+Rails.application.routes.draw do
+  mount transport => "/mcp"
+end
+```
+
+`mount` directs all HTTP methods on `/mcp` to the transport. `StreamableHTTPTransport` internally dispatches
+`POST` (client-to-server JSON-RPC messages, with responses optionally streamed via SSE),
+`GET` (optional standalone SSE stream for server-to-client messages), and `DELETE` (session termination) per
+the [MCP Streamable HTTP transport spec](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http),
+so no additional route configuration is needed.
+
+##### Rails (controller)
+
+While the mount approach creates a single server at boot time, the controller approach creates a new server per request.
+This allows you to customize tools, prompts, or configuration based on the request (e.g., different tools per route).
+
+`StreamableHTTPTransport#handle_request` returns proper HTTP status codes (e.g., 202 Accepted for notifications):
+
+```ruby
+class McpController < ActionController::API
+  def create
+    server = MCP::Server.new(
+      name: "my_server",
+      title: "Example Server Display Name",
+      version: "1.0.0",
+      instructions: "Use the tools of this server as a last resort",
+      tools: [SomeTool, AnotherTool],
+      prompts: [MyPrompt],
+      server_context: { user_id: current_user.id },
+    )
+    # Since the `MCP-Session-Id` is not shared across requests, `stateless: true` is set.
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+    status, headers, body = transport.handle_request(request)
+
+    render(json: body.first, status: status, headers: headers)
+  end
+end
+```
+
 ### Configuration
 
 The gem can be configured using the `MCP.configure` block:
@@ -392,15 +197,17 @@ MCP.configure do |config|
     end
   }
 
-  config.instrumentation_callback = ->(data) {
-    puts "Got instrumentation data #{data.inspect}"
+  config.around_request = ->(data, &request_handler) {
+    logger.info("Start: #{data[:method]}")
+    request_handler.call
+    logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
   }
 end
 ```
 
 or by creating an explicit configuration and passing it into the server.
 This is useful for systems where an application hosts more than one MCP server but
-they might require different instrumentation callbacks.
+they might require different configurations.
 
 ```ruby
 configuration = MCP::Configuration.new
@@ -412,8 +219,10 @@ configuration.exception_reporter = ->(exception, server_context) {
   end
 }
 
-configuration.instrumentation_callback = ->(data) {
-  puts "Got instrumentation data #{data.inspect}"
+configuration.around_request = ->(data, &request_handler) {
+  logger.info("Start: #{data[:method]}")
+  request_handler.call
+  logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
 }
 
 server = MCP::Server.new(
@@ -422,11 +231,37 @@ server = MCP::Server.new(
 )
 ```
 
+### Capability Extensions
+
+Per SEP-2133, both clients and servers can declare protocol extensions under the `extensions` member of their capabilities.
+Keys are extension identifiers using the reverse-DNS prefix convention (e.g. `"io.modelcontextprotocol/tasks"`, `"com.example/feature"`);
+values are extension-defined configuration objects, with `{}` meaning "supported with no settings".
+
+On the server, declare extensions through the `capabilities` keyword, either as a plain hash or via the `MCP::Server::Capabilities` builder:
+
+```ruby
+capabilities = MCP::Server::Capabilities.new
+capabilities.support_tools
+capabilities.support_extensions("com.example/feature" => { enabled: true })
+
+server = MCP::Server.new(name: "my_server", capabilities: capabilities)
+```
+
+The declared extensions appear in the `initialize` result's `capabilities.extensions`. Extensions the client declared during `initialize` are
+readable via `server.client_capabilities[:extensions]` (or `session.client_capabilities[:extensions]` for per-session transports).
+
+On the client, pass extensions through `connect`:
+
+```ruby
+client.connect(capabilities: { extensions: { "com.example/feature" => {} } })
+```
+
 ### Server Context and Configuration Block Data
 
 #### `server_context`
 
-The `server_context` is a user-defined hash that is passed into the server instance and made available to tools, prompts, and exception/instrumentation callbacks. It can be used to provide contextual information such as authentication state, user IDs, or request-specific data.
+The `server_context` is a user-defined hash that is passed into the server instance and made available to tool and prompt calls.
+It can be used to provide contextual information such as authentication state, user IDs, or request-specific data.
 
 **Type:**
 
@@ -443,11 +278,18 @@ server = MCP::Server.new(
 )
 ```
 
-This hash is then passed as the `server_context` argument to tool and prompt calls, and is included in exception and instrumentation callbacks.
+This hash is then passed as the `server_context` keyword argument to tool and prompt calls.
+Note that exception and instrumentation callbacks do not receive this user-defined hash.
+See the relevant sections below for the arguments they receive.
 
 #### Request-specific `_meta` Parameter
 
 The MCP protocol supports a special [`_meta` parameter](https://modelcontextprotocol.io/specification/2025-06-18/basic#general-fields) in requests that allows clients to pass request-specific metadata. The server automatically extracts this parameter and makes it available to tools and prompts as a nested field within the `server_context`.
+
+> [!NOTE]
+> `_meta` is only merged when `server_context` is a `Hash` (or `nil`, in which case a new `{ _meta: ... }` hash is synthesized).
+> If you assign a non-`Hash` value to `server_context`, `_meta` is not merged and tools will not see it
+> under `server_context[:_meta]`. Keep `server_context` as a `Hash` if your tools need access to `_meta`.
 
 **Access Pattern:**
 
@@ -489,6 +331,36 @@ end
 }
 ```
 
+**Distributed Tracing (W3C Trace Context):**
+
+Per SEP-414, the keys `traceparent`, `tracestate`, and `baggage` are reserved un-prefixed `_meta` keys for propagating
+[W3C Trace Context](https://www.w3.org/TR/trace-context/) across MCP requests. The SDK guarantees these keys pass through
+incoming request `_meta` untouched, and exposes their names as constants on `MCP::TraceContext` (`TRACEPARENT_META_KEY`,
+`TRACESTATE_META_KEY`, `BAGGAGE_META_KEY`, and `META_KEYS`). The SDK does not depend on OpenTelemetry; bridge the values
+to your tracing system yourself:
+
+```ruby
+class TracedTool < MCP::Tool
+  def self.call(message:, server_context:)
+    traceparent = server_context.dig(:_meta, :traceparent)
+    # Hand traceparent/tracestate/baggage to your tracing library
+    # (e.g. the opentelemetry-ruby gems) to continue the caller's trace.
+
+    MCP::Tool::Response.new([{ type: "text", text: "ok" }])
+  end
+end
+```
+
+On the client side, every request method (`call_tool`, `read_resource`, `get_prompt`, `complete`, `ping`, and the `list_*` methods)
+accepts a `meta:` keyword to inject these keys into the outgoing request, so trace context can flow on every request:
+
+```ruby
+meta = { MCP::TraceContext::TRACEPARENT_META_KEY => "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" }
+
+client.call_tool(tool: tool, arguments: { message: "Hello" }, meta: meta)
+client.read_resource(uri: "file:///report.txt", meta: meta)
+```
+
 #### Configuration Block Data
 
 ##### Exception Reporter
@@ -496,7 +368,9 @@ end
 The exception reporter receives:
 
 - `exception`: The Ruby exception object that was raised
-- `server_context`: The context hash provided to the server
+- `server_context`: A hash describing where the failure occurred (e.g., `{ request: <raw JSON-RPC request> }`
+  for request handling, `{ notification: "tools_list_changed" }` for notification delivery).
+  This is not the user-defined `server_context` passed to `Server.new`.
 
 **Signature:**
 
@@ -504,9 +378,67 @@ The exception reporter receives:
 exception_reporter = ->(exception, server_context) { ... }
 ```
 
-##### Instrumentation Callback
+##### Around Request
 
-The instrumentation callback receives a hash with the following possible keys:
+The `around_request` hook wraps request handling, allowing you to execute code before and after each request.
+This is useful for Application Performance Monitoring (APM) tracing, logging, or other observability needs.
+
+The hook receives a `data` hash and a `request_handler` block. You must call `request_handler.call` to execute the request:
+
+**Signature:**
+
+```ruby
+around_request = ->(data, &request_handler) { request_handler.call }
+```
+
+**`data` availability by timing:**
+
+- Before `request_handler.call`: `method`
+- After `request_handler.call`: `tool_name`, `tool_arguments`, `prompt_name`, `resource_uri`, `error`, `client`
+- Not available inside `around_request`: `duration` (added after `around_request` returns)
+
+> [!NOTE]
+> `tool_name`, `prompt_name` and `resource_uri` may only be populated for the corresponding request methods
+> (`tools/call`, `prompts/get`, `resources/read`), and may not be set depending on how the request is handled
+> (for example, `prompt_name` is not recorded when the prompt is not found).
+> `duration` is added after `around_request` returns, so it is not visible from within the hook.
+
+**Example:**
+
+```ruby
+MCP.configure do |config|
+  config.around_request = ->(data, &request_handler) {
+    logger.info("Start: #{data[:method]}")
+    request_handler.call
+    logger.info("Done: #{data[:method]}, tool: #{data[:tool_name]}")
+  }
+end
+```
+
+##### Instrumentation Callback (soft-deprecated)
+
+> [!NOTE]
+> `instrumentation_callback` is soft-deprecated. Use `around_request` instead.
+>
+> To migrate, wrap the call in `begin/ensure` so the callback still runs when the request fails:
+>
+> ```ruby
+> # Before
+> config.instrumentation_callback = ->(data) { log(data) }
+>
+> # After
+> config.around_request = ->(data, &request_handler) do
+>   request_handler.call
+> ensure
+>   log(data)
+> end
+> ```
+>
+> Note that `data[:duration]` is not available inside `around_request`.
+> If you need it, measure elapsed time yourself within the hook, or keep using `instrumentation_callback`.
+
+The instrumentation callback is called after each request finishes, whether successfully or with an error.
+It receives a hash with the following possible keys:
 
 - `method`: (String) The protocol method called (e.g., "ping", "tools/list")
 - `tool_name`: (String, optional) The name of the tool called
@@ -517,25 +449,10 @@ The instrumentation callback receives a hash with the following possible keys:
 - `duration`: (Float) Duration of the call in seconds
 - `client`: (Hash, optional) Client information with `name` and `version` keys, from the initialize request
 
-> [!NOTE]
-> `tool_name`, `prompt_name` and `resource_uri` are only populated if a matching handler is registered.
-> This is to avoid potential issues with metric cardinality.
-
-**Type:**
+**Signature:**
 
 ```ruby
 instrumentation_callback = ->(data) { ... }
-# where data is a Hash with keys as described above
-```
-
-**Example:**
-
-```ruby
-MCP.configure do |config|
-  config.instrumentation_callback = ->(data) {
-    puts "Instrumentation: #{data.inspect}"
-  }
-end
 ```
 
 ### Server Protocol Version
@@ -567,10 +484,10 @@ The exception reporter receives two arguments:
 - `exception`: The Ruby exception object that was raised
 - `server_context`: A hash containing contextual information about where the error occurred
 
-The server_context hash includes:
+The `server_context` hash includes:
 
-- For tool calls: `{ tool_name: "name", arguments: { ... } }`
-- For general request handling: `{ request: { ... } }`
+- For request handling failures: `{ request: { ... } }` (the raw JSON-RPC request hash)
+- For notification delivery failures: `{ notification: "tools_list_changed" }` (or the relevant notification name)
 
 When an exception occurs:
 
@@ -656,6 +573,10 @@ end
 
 The server_context parameter is the server_context passed into the server and can be used to pass per request information,
 e.g. around authentication state.
+
+Tool arguments arrive as a `Hash` with symbol keys at every nesting level, because the transports parse JSON with `symbolize_names: true`.
+Read nested objects with symbol keys (`payload[:subject]`, not `payload["subject"]`).
+See [Tool argument keys](docs/building-servers.md#tool-argument-keys) for details and a testing tip.
 
 ### Tool Annotations
 
@@ -788,6 +709,19 @@ MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/l
 - **Backward Compatibility**: Tools returning structured content SHOULD also include serialized JSON in a TextContent block
 
 The output schema follows standard JSON Schema format and helps ensure consistent data exchange between MCP servers and clients.
+
+By default, server-side validation of tool results against `output_schema` is disabled for backwards compatibility. To validate successful tool responses, enable `validate_tool_call_results`:
+
+```ruby
+configuration = MCP::Configuration.new(validate_tool_call_results: true)
+server = MCP::Server.new(
+  name: "example_server",
+  tools: [WeatherTool],
+  configuration: configuration
+)
+```
+
+When enabled, successful tool responses for tools with an `output_schema` must include `structured_content` that conforms to the schema. Error responses are not validated against the output schema.
 
 ### Tool Responses with Structured Content
 
@@ -1022,6 +956,19 @@ end
 
 otherwise `resources/read` requests will be a no-op.
 
+For unknown URIs, raise `MCP::Server::ResourceNotFoundError` from the handler.
+Per SEP-2164, the server then responds with the standard JSON-RPC Invalid Params error (`-32602`)
+carrying the requested URI in the error `data` member:
+
+```ruby
+server.resources_read_handler do |params|
+  resource = lookup(params[:uri])
+  raise MCP::Server::ResourceNotFoundError.new(params[:uri], params) unless resource
+
+  [{ uri: params[:uri], mimeType: resource.mime_type, text: resource.body }]
+end
+```
+
 ### Resource Templates
 
 The `MCP::ResourceTemplate` class provides a way to register resource templates with the server.
@@ -1041,19 +988,863 @@ server = MCP::Server.new(
 )
 ```
 
+### Roots
+
+The Model Context Protocol allows servers to request filesystem roots from clients through the `roots/list` method.
+Roots define the boundaries of where a server can operate, providing a list of directories and files the client has made available.
+
+**Key Concepts:**
+
+- **Server-to-Client Request**: Like sampling, roots listing is initiated by the server
+- **Client Capability**: Clients must declare `roots` capability during initialization
+- **Change Notifications**: Clients that support `roots.listChanged` send `notifications/roots/list_changed` when roots change
+
+**Using Roots in Tools:**
+
+Tools that accept a `server_context:` parameter can call `list_roots` on it.
+The request is automatically routed to the correct client session:
+
+```ruby
+class FileSearchTool < MCP::Tool
+  description "Search files within the client's project roots"
+  input_schema(
+    properties: {
+      query: { type: "string" }
+    },
+    required: ["query"]
+  )
+
+  def self.call(query:, server_context:)
+    roots = server_context.list_roots
+    root_uris = roots[:roots].map { |root| root[:uri] }
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: "Searching in roots: #{root_uris.join(", ")}"
+    }])
+  end
+end
+```
+
+Result contains an array of root objects:
+
+```ruby
+{
+  roots: [
+    { uri: "file:///home/user/projects/myproject", name: "My Project" },
+    { uri: "file:///home/user/repos/backend", name: "Backend Repository" }
+  ]
+}
+```
+
+**Handling Root Changes:**
+
+Register a callback to be notified when the client's roots change:
+
+```ruby
+server.roots_list_changed_handler do
+  puts "Client's roots have changed, tools will see updated roots on next call."
+end
+```
+
+**Error Handling:**
+
+- Raises `RuntimeError` if client does not support `roots` capability
+- Raises `StandardError` if client returns an error response
+
+### Resource Subscriptions
+
+Resource subscriptions allow clients to monitor specific resources for changes.
+When a subscribed resource is updated, the server sends a notification to the client.
+
+The SDK does not track subscription state internally.
+Server developers register handlers and manage their own subscription state.
+Three methods are provided:
+
+- `Server#resources_subscribe_handler` - registers a handler for `resources/subscribe` requests
+- `Server#resources_unsubscribe_handler` - registers a handler for `resources/unsubscribe` requests
+- `ServerContext#notify_resources_updated` - sends a `notifications/resources/updated` notification to the subscribing client
+
+```ruby
+subscribed_uris = Set.new
+
+server = MCP::Server.new(
+  name: "my_server",
+  resources: [my_resource],
+  capabilities: { resources: { subscribe: true } },
+)
+
+server.resources_subscribe_handler do |params|
+  subscribed_uris.add(params[:uri].to_s)
+end
+
+server.resources_unsubscribe_handler do |params|
+  subscribed_uris.delete(params[:uri].to_s)
+end
+
+server.define_tool(name: "update_resource") do |server_context:, **args|
+  if subscribed_uris.include?("test://my-resource")
+    server_context.notify_resources_updated(uri: "test://my-resource")
+  end
+  MCP::Tool::Response.new([MCP::Content::Text.new("Resource updated").to_h])
+end
+```
+
+### Sampling
+
+The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.
+This enables servers to leverage the client's LLM capabilities without needing direct access to AI models.
+
+**Key Concepts:**
+
+- **Server-to-Client Request**: Unlike typical MCP methods (client to server), sampling is initiated by the server
+- **Client Capability**: Clients must declare `sampling` capability during initialization
+- **Tool Support**: When using tools in sampling requests, clients must declare `sampling.tools` capability
+- **Human-in-the-Loop**: Clients can implement user approval before forwarding requests to LLMs
+
+**Using Sampling in Tools:**
+
+Tools that accept a `server_context:` parameter can call `create_sampling_message` on it.
+The request is automatically routed to the correct client session:
+
+```ruby
+class SummarizeTool < MCP::Tool
+  description "Summarize text using LLM"
+  input_schema(
+    properties: {
+      text: { type: "string" }
+    },
+    required: ["text"]
+  )
+
+  def self.call(text:, server_context:)
+    result = server_context.create_sampling_message(
+      messages: [
+        { role: "user", content: { type: "text", text: "Please summarize: #{text}" } }
+      ],
+      max_tokens: 500
+    )
+
+    MCP::Tool::Response.new([{
+      type: "text",
+      text: result[:content][:text]
+    }])
+  end
+end
+
+server = MCP::Server.new(name: "my_server", tools: [SummarizeTool])
+```
+
+**Parameters:**
+
+Required:
+
+- `messages:` (Array) - Array of message objects with `role` and `content`
+- `max_tokens:` (Integer) - Maximum tokens in the response
+
+Optional:
+
+- `system_prompt:` (String) - System prompt for the LLM
+- `model_preferences:` (Hash) - Model selection preferences (e.g., `{ intelligencePriority: 0.8 }`)
+- `include_context:` (String) - Context inclusion: `"none"`, `"thisServer"`, or `"allServers"` (soft-deprecated)
+- `temperature:` (Float) - Sampling temperature
+- `stop_sequences:` (Array) - Sequences that stop generation
+- `metadata:` (Hash) - Additional metadata
+- `tools:` (Array) - Tools available to the LLM (requires `sampling.tools` capability)
+- `tool_choice:` (Hash) - Tool selection mode (e.g., `{ mode: "auto" }`)
+
+**Error Handling:**
+
+- Raises `RuntimeError` if client does not support `sampling` capability
+- Raises `RuntimeError` if `tools` are used but client lacks `sampling.tools` capability
+- Raises `StandardError` if client returns an error response
+
+### Notifications
+
+The server supports sending notifications to clients when lists of tools, prompts, or resources change. This enables real-time updates without polling.
+
+#### Notification Methods
+
+The server provides the following notification methods:
+
+- `notify_tools_list_changed` - Send a notification when the tools list changes
+- `notify_prompts_list_changed` - Send a notification when the prompts list changes
+- `notify_resources_list_changed` - Send a notification when the resources list changes
+- `notify_log_message` - Send a structured logging notification message
+
+#### Session Scoping
+
+When using Streamable HTTP transport with multiple clients, each client connection gets its own session. Notifications are scoped as follows:
+
+- **`report_progress`** and **`notify_log_message`** called via `server_context` inside a tool handler are automatically sent only to the requesting client.
+No extra configuration is needed.
+- **`notify_tools_list_changed`**, **`notify_prompts_list_changed`**, and **`notify_resources_list_changed`** are always broadcast to all connected clients,
+as they represent server-wide state changes. These should be called on the `server` instance directly.
+
+#### Notification Format
+
+Notifications follow the JSON-RPC 2.0 specification and use these method names:
+
+- `notifications/tools/list_changed`
+- `notifications/prompts/list_changed`
+- `notifications/resources/list_changed`
+- `notifications/cancelled`
+- `notifications/progress`
+- `notifications/message`
+
+### Cancellation
+
+The MCP Ruby SDK supports server-side handling of the
+[MCP `notifications/cancelled` utility](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation).
+When a client sends `notifications/cancelled` for an in-flight request, the server stops
+processing cooperatively and suppresses the JSON-RPC response for that request.
+
+Cancellation is cooperative: the SDK does not forcibly terminate tool code. Instead,
+a `MCP::Cancellation` token is threaded through `server_context`, and long-running tools
+poll it to exit early. When a tool returns after cancellation has been observed,
+the server suppresses the JSON-RPC response, matching the spec. The `initialize` request
+is never cancellable per the spec.
+
+> [!NOTE]
+> Client-initiated cancellation (`Client#cancel` equivalent that would also abort
+> the calling thread's wait) is not yet implemented. Sending `notifications/cancelled`
+> from the client side can be done by constructing the notification payload and writing it
+> directly through the transport, but the calling thread does not yet unwind automatically.
+> This is tracked as a follow-up.
+
+#### Server-Side: Handlers that Check for Cancellation
+
+Any handler that opts in to `server_context:` - tools (`Tool.call`), prompt templates,
+`resources_read_handler`, `completion_handler`, `resources_subscribe_handler`,
+`resources_unsubscribe_handler`, and `define_custom_method` blocks - receives
+an `MCP::ServerContext` wired to the in-flight request's cancellation token.
+Handlers check `cancelled?` in their work loop, or call `raise_if_cancelled!` to raise
+`MCP::CancelledError` at a safe point:
+
+```ruby
+class LongRunningTool < MCP::Tool
+  description "A tool that supports cancellation"
+  input_schema(properties: { count: { type: "integer" } }, required: ["count"])
+
+  def self.call(count:, server_context:)
+    count.times do |i|
+      # Exit early if the client has sent `notifications/cancelled`.
+      break if server_context.cancelled?
+
+      do_work(i)
+    end
+
+    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
+  end
+end
+```
+
+Alternatively, raise at the next safe point with `raise_if_cancelled!`:
+
+```ruby
+def self.call(count:, server_context:)
+  count.times do |i|
+    server_context.raise_if_cancelled!
+
+    do_work(i)
+  end
+
+  MCP::Tool::Response.new([{ type: "text", text: "Done" }])
+end
+```
+
+When a handler observes cancellation (either by returning early with `cancelled?` or
+by raising `MCP::CancelledError` via `raise_if_cancelled!`), the server drops the response and
+no JSON-RPC result is sent to the client.
+
+The same pattern works for other handler types:
+
+```ruby
+# resources/read
+server.resources_read_handler do |params, server_context:|
+  server_context.raise_if_cancelled!
+  # read the resource
+end
+
+# completion/complete
+server.completion_handler do |params, server_context:|
+  server_context.raise_if_cancelled!
+  # compute completions
+end
+
+# custom method
+server.define_custom_method(method_name: "custom/slow") do |params, server_context:|
+  server_context.raise_if_cancelled!
+  # do work
+end
+
+# prompts (via Prompt subclass)
+class SlowPrompt < MCP::Prompt
+  prompt_name "slow_prompt"
+
+  def self.template(args, server_context:)
+    server_context.raise_if_cancelled!
+    MCP::Prompt::Result.new(messages: [])
+  end
+end
+```
+
+Handlers that do not declare a `server_context:` keyword continue to work unchanged -
+the opt-in detection only wraps the context when the block signature asks for it.
+
+#### Nested Server-to-Client Requests Are Cancelled Automatically
+
+When a tool handler is waiting on a nested server-to-client request
+(`server_context.create_sampling_message`, `create_form_elicitation`, or
+`create_url_elicitation`), cancelling the parent tool call automatically raises
+`MCP::CancelledError` from the nested call, so the tool does not need to wrap it
+in its own `cancelled?` checks:
+
+```ruby
+def self.call(server_context:)
+  result = server_context.create_sampling_message(messages: messages, max_tokens: 100)
+  # If the parent tools/call is cancelled while waiting above, MCP::CancelledError
+  # is raised here and the tool can let it propagate or clean up as needed.
+  MCP::Tool::Response.new([{ type: "text", text: result[:content][:text] }])
+rescue MCP::CancelledError
+  # Optional: run cleanup. Re-raising (or letting it propagate) is fine; the server
+  # will still suppress the JSON-RPC response per the MCP spec.
+  raise
+end
+```
+
+Nested cancellation propagation is supported on `StreamableHTTPTransport` only.
+`StdioTransport` is single-threaded and blocks on `$stdin.gets`, so a nested
+`server_context.create_sampling_message` inside a tool runs to completion even if
+the parent `tools/call` is cancelled. The parent tool itself still observes cancellation
+via `server_context.cancelled?` between nested calls.
+
+### Ping
+
+The MCP Ruby SDK supports the
+[MCP `ping` utility](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping),
+which allows either side of the connection to verify that the peer is still responsive.
+A `ping` request has no parameters, and the receiver MUST respond promptly with an empty result.
+
+#### Server-Side
+
+Servers respond to incoming `ping` requests automatically - no setup is required.
+Any `MCP::Server` instance replies with an empty result.
+
+Servers can also send `ping` requests to the client via `ServerSession#ping`.
+Inside a tool handler that receives `server_context:`, call `ping` on it:
+
+```ruby
+class HealthCheckTool < MCP::Tool
+  description "Verifies the client is still responsive"
+
+  def self.call(server_context:)
+    server_context.ping # => {} on success
+
+    MCP::Tool::Response.new([{ type: "text", text: "client is alive" }])
+  end
+end
+```
+
+`#ping` raises `MCP::Server::ValidationError` when the client returns a `result`
+that is not a Hash. Transport-level errors (e.g., the client returning a JSON-RPC error)
+propagate as exceptions raised by the transport layer.
+
+#### Client-Side
+
+`MCP::Client` exposes `ping` to send a ping to the server:
+
+```ruby
+client = MCP::Client.new(transport: transport)
+client.ping # => {} on success
+```
+
+`#ping` raises `MCP::Client::ServerError` when the server returns a JSON-RPC error.
+It raises `MCP::Client::ValidationError` when the response `result` is missing or
+is not a Hash (matching the spec requirement that `result` be an object).
+Transport-level errors (for example, `MCP::Client::Stdio`'s `read_timeout:` firing)
+propagate as exceptions raised by the transport layer.
+
+### Progress
+
+The MCP Ruby SDK supports progress tracking for long-running tool operations,
+following the [MCP Progress specification](https://modelcontextprotocol.io/specification/latest/server/utilities/progress).
+
+#### How Progress Works
+
+1. **Client Request**: The client sends a `progressToken` in the `_meta` field when calling a tool
+2. **Server Notification**: The server sends `notifications/progress` messages back to the client during tool execution
+3. **Tool Integration**: Tools call `server_context.report_progress` to report incremental progress
+
+#### Server-Side: Tool with Progress
+
+Tools that accept a `server_context:` parameter can call `report_progress` on it.
+The server automatically wraps the context in an `MCP::ServerContext` instance that provides this method:
+
+```ruby
+class LongRunningTool < MCP::Tool
+  description "A tool that reports progress during execution"
+  input_schema(
+    properties: {
+      count: { type: "integer" },
+    },
+    required: ["count"]
+  )
+
+  def self.call(count:, server_context:)
+    count.times do |i|
+      # Do work here.
+      server_context.report_progress(i + 1, total: count, message: "Processing item #{i + 1}")
+    end
+
+    MCP::Tool::Response.new([{ type: "text", text: "Done" }])
+  end
+end
+```
+
+The `server_context.report_progress` method accepts:
+
+- `progress` (required) — current progress value (numeric)
+- `total:` (optional) — total expected value, so clients can display a percentage
+- `message:` (optional) — human-readable status message
+
+**Key Features:**
+
+- Tools report progress via `server_context.report_progress`
+- `report_progress` is a no-op when no `progressToken` was provided by the client
+- Supports both numeric and string progress tokens
+
+### Completions
+
+MCP spec includes [Completions](https://modelcontextprotocol.io/specification/latest/server/utilities/completion),
+which enable servers to provide autocompletion suggestions for prompt arguments and resource URIs.
+
+To enable completions, declare the `completions` capability and register a handler:
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  prompts: [CodeReviewPrompt],
+  resource_templates: [FileTemplate],
+  capabilities: { completions: {} },
+)
+
+server.completion_handler do |params|
+  ref = params[:ref]
+  argument = params[:argument]
+  value = argument[:value]
+
+  case ref[:type]
+  when "ref/prompt"
+    values = case argument[:name]
+    when "language"
+      ["python", "pytorch", "pyside"].select { |v| v.start_with?(value) }
+    else
+      []
+    end
+    { completion: { values: values, hasMore: false } }
+  when "ref/resource"
+    { completion: { values: [], hasMore: false } }
+  end
+end
+```
+
+The handler receives a `params` hash with:
+
+- `ref` - The reference (`{ type: "ref/prompt", name: "..." }` or `{ type: "ref/resource", uri: "..." }`)
+- `argument` - The argument being completed (`{ name: "...", value: "..." }`)
+- `context` (optional) - Previously resolved arguments (`{ arguments: { ... } }`)
+
+The handler must return a hash with a `completion` key containing `values` (array of strings), and optionally `total` and `hasMore`.
+The SDK automatically enforces the 100-item limit per the MCP specification.
+
+The server validates that the referenced prompt, resource, or resource template is registered before calling the handler.
+Requests for unknown references return an error.
+
+### Elicitation
+
+The MCP Ruby SDK supports [elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation),
+which allows servers to request additional information from users through the client during tool execution.
+
+Elicitation is a **server-to-client request**. The server sends a request and blocks until the user responds via the client.
+
+#### Capabilities
+
+Clients must declare the `elicitation` capability during initialization. The server checks this before sending any elicitation request
+and raises a `RuntimeError` if the client does not support it.
+
+For URL mode support, the client must also declare `elicitation.url` capability.
+
+#### Using Elicitation in Tools
+
+Tools that accept a `server_context:` parameter can call `create_form_elicitation` on it:
+
+```ruby
+server.define_tool(name: "collect_info", description: "Collect user info") do |server_context:|
+  result = server_context.create_form_elicitation(
+    message: "Please provide your name",
+    requested_schema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    },
+  )
+
+  MCP::Tool::Response.new([{ type: "text", text: "Hello, #{result[:content][:name]}" }])
+end
+```
+
+#### Form Mode
+
+Form mode collects structured data from the user directly through the MCP client:
+
+```ruby
+server.define_tool(name: "collect_contact", description: "Collect contact info") do |server_context:|
+  result = server_context.create_form_elicitation(
+    message: "Please provide your contact information",
+    requested_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Your full name" },
+        email: { type: "string", format: "email", description: "Your email address" },
+      },
+      required: ["name", "email"],
+    },
+  )
+
+  text = case result[:action]
+  when "accept"
+    "Hello, #{result[:content][:name]} (#{result[:content][:email]})"
+  when "decline"
+    "User declined"
+  when "cancel"
+    "User cancelled"
+  end
+
+  MCP::Tool::Response.new([{ type: "text", text: text }])
+end
+```
+
+#### URL Mode
+
+URL mode directs the user to an external URL for out-of-band interactions such as OAuth flows:
+
+```ruby
+server.define_tool(name: "authorize_github", description: "Authorize GitHub") do |server_context:|
+  elicitation_id = SecureRandom.uuid
+
+  result = server_context.create_url_elicitation(
+    message: "Please authorize access to your GitHub account",
+    url: "https://example.com/oauth/authorize?elicitation_id=#{elicitation_id}",
+    elicitation_id: elicitation_id,
+  )
+
+  server_context.notify_elicitation_complete(elicitation_id: elicitation_id)
+
+  MCP::Tool::Response.new([{ type: "text", text: "Authorization complete" }])
+end
+```
+
+#### URLElicitationRequiredError
+
+When a tool cannot proceed until an out-of-band elicitation is completed, raise `MCP::Server::URLElicitationRequiredError`.
+This returns a JSON-RPC error with code `-32042` to the client:
+
+```ruby
+server.define_tool(name: "access_github", description: "Access GitHub") do |server_context:|
+  raise MCP::Server::URLElicitationRequiredError.new([
+    {
+      mode: "url",
+      elicitationId: SecureRandom.uuid,
+      url: "https://example.com/oauth/authorize",
+      message: "GitHub authorization is required.",
+    },
+  ])
+end
+```
+
+### Logging
+
+The MCP Ruby SDK supports structured logging through the `notify_log_message` method, following the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+The `notifications/message` notification is used for structured logging between client and server.
+
+#### Log Levels
+
+The SDK supports 8 log levels with increasing severity:
+
+- `debug` - Detailed debugging information
+- `info` - General informational messages
+- `notice` - Normal but significant events
+- `warning` - Warning conditions
+- `error` - Error conditions
+- `critical` - Critical conditions
+- `alert` - Action must be taken immediately
+- `emergency` - System is unusable
+
+#### How Logging Works
+
+1. **Client Configuration**: The client sends a `logging/setLevel` request to configure the minimum log level
+2. **Server Filtering**: The server only sends log messages at the configured level or higher severity
+3. **Notification Delivery**: Log messages are sent as `notifications/message` to the client
+
+For example, if the client sets the level to `"error"` (severity 4), the server will send messages with levels: `error`, `critical`, `alert`, and `emergency`.
+
+For more details, see the [MCP Logging specification](https://modelcontextprotocol.io/specification/latest/server/utilities/logging).
+
+**Usage Example:**
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+transport = MCP::Server::Transports::StdioTransport.new(server)
+
+# The client first configures the logging level (on the client side):
+transport.send_request(
+  request: {
+    jsonrpc: "2.0",
+    method: "logging/setLevel",
+    params: { level: "info" },
+    id: session_id # Unique request ID within the session
+  }
+)
+
+# Send log messages at different severity levels
+server.notify_log_message(
+  data: { message: "Application started successfully" },
+  level: "info"
+)
+
+server.notify_log_message(
+  data: { message: "Configuration file not found, using defaults" },
+  level: "warning"
+)
+
+server.notify_log_message(
+  data: {
+    error: "Database connection failed",
+    details: { host: "localhost", port: 5432 }
+  },
+  level: "error",
+  logger: "DatabaseLogger" # Optional logger name
+)
+```
+
+**Key Features:**
+
+- Supports 8 log levels (debug, info, notice, warning, error, critical, alert, emergency) based on https://modelcontextprotocol.io/specification/2025-06-18/server/utilities/logging#log-levels
+- Server has capability `logging` to send log messages
+- Messages are only sent if a transport is configured
+- Messages are filtered based on the client's configured log level
+- If the log level hasn't been set by the client, no messages will be sent
+
+#### Transport Support
+
+- **stdio**: Notifications are sent as JSON-RPC 2.0 messages to stdout
+- **Streamable HTTP**: Notifications are sent as JSON-RPC 2.0 messages over HTTP with streaming (chunked transfer or SSE)
+
+#### Usage Example
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Default Streamable HTTP - session oriented
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+
+# When tools change, notify clients
+server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
+server.notify_tools_list_changed
+```
+
+You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
+This mode allows for easy multi-node deployment.
+Set `stateless: true` in `MCP::Server::Transports::StreamableHTTPTransport.new` (`stateless` defaults to `false`):
+
+```ruby
+# Stateless Streamable HTTP - session-less
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+```
+
+In stateless mode, each POST is fully self-contained per SEP-2567: no `Mcp-Session-Id` is issued or required,
+handlers run against an ephemeral per-request session (so client identity never leaks across requests or onto the shared server),
+and repeated `initialize` requests are permitted. Request-scoped notifications such as progress and log messages are skipped
+(there is no stream to deliver them), while server-to-client requests (`sampling/createMessage`, `roots/list`, `elicitation/create`) raise an error.
+
+You can enable JSON response mode, where the server returns `application/json` instead of `text/event-stream`.
+Set `enable_json_response: true` in `MCP::Server::Transports::StreamableHTTPTransport.new`:
+
+```ruby
+# JSON response mode
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, enable_json_response: true)
+```
+
+In JSON response mode, the POST response is a single JSON object, so server-to-client messages
+that need to arrive during request processing are not supported:
+request-scoped notifications (`progress`, `log`) are silently dropped, and all server-to-client requests
+(`sampling/createMessage`, `roots/list`, `elicitation/create`) raise an error.
+Session-scoped standalone notifications (`resources/updated`, `elicitation/complete`) and
+broadcast notifications (`tools/list_changed`, etc.) still flow to clients connected to the GET SSE stream.
+This mode is suitable for simple tool servers that do not need server-initiated requests.
+
+By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
+When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
+
+```ruby
+# Session timeout of 30 minutes
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
+```
+
+### Pagination
+
+The MCP Ruby SDK supports [pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
+for list operations that may return large result sets. Pagination uses string cursor tokens carrying a zero-based offset,
+treated as opaque by clients: the server decides page size, and the client follows `nextCursor` until the server omits it.
+
+Pagination applies to `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list`.
+
+#### Server-Side: Enabling Pagination
+
+Pass `page_size:` to `MCP::Server.new` to split list responses into pages. When `page_size` is omitted (the default),
+list responses contain all items in a single response, preserving the pre-pagination behavior.
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  tools: tools,
+  page_size: 50,
+)
+```
+
+When `page_size` is set, list responses include a `nextCursor` field whenever more pages are available:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      { "name": "example_tool" }
+    ],
+    "nextCursor": "50"
+  }
+}
+```
+
+Invalid cursors (e.g. non-numeric, negative, or out-of-range) are rejected with JSON-RPC error code `-32602 (Invalid params)` per the MCP specification.
+
+#### Client-Side: Iterating Pages
+
+`MCP::Client` exposes `list_tools`, `list_prompts`, `list_resources`, and `list_resource_templates`.
+**Each call issues exactly one `*/list` JSON-RPC request and returns exactly one page** — not the full collection.
+The returned result object (`MCP::Client::ListToolsResult` etc.) exposes the page items and the next cursor as method accessors:
+
+```ruby
+client = MCP::Client.new(transport: transport)
+
+cursor = nil
+loop do
+  page = client.list_tools(cursor: cursor)
+  page.tools.each { |tool| process(tool) }
+  cursor = page.next_cursor
+  break unless cursor
+end
+```
+
+The same pattern applies to `list_prompts` (`page.prompts`), `list_resources` (`page.resources`), and
+`list_resource_templates` (`page.resource_templates`). `next_cursor` is `nil` on the final page.
+
+Because a single call returns a single page, how many items come back depends on the server's `page_size` configuration:
+
+| Server `page_size` | `client.list_tools(cursor: nil)`                                    |
+|--------------------|---------------------------------------------------------------------|
+| Not set (default)  | Returns every item in one response. `next_cursor` is `nil`.         |
+| Set to `N`         | Returns the first `N` items. `next_cursor` is set for continuation. |
+
+If your application needs the complete collection regardless of how the server is configured, either loop on
+`next_cursor` as shown above, or use the whole-collection methods described below.
+
+#### Fetching the Complete Collection
+
+`client.tools`, `client.resources`, `client.resource_templates`, and `client.prompts` auto-iterate
+through all pages and return a plain array of items, guaranteeing the full collection regardless
+of the server's `page_size` setting. When a server paginates, they issue multiple JSON-RPC round
+trips per call and break out of the pagination loop if the server returns the same `nextCursor`
+twice in a row as a safety measure.
+
+```ruby
+tools = client.tools # => Array<MCP::Client::Tool> of every tool on the server.
+```
+
+Use these when you want the complete list; use `list_tools(cursor:)` etc. when you need
+fine-grained iteration (e.g. to stream-process pages without loading everything into memory).
+
+### Advanced
+
+#### Custom Methods
+
+The server allows you to define custom JSON-RPC methods beyond the standard MCP protocol methods using the `define_custom_method` method:
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+
+# Define a custom method that returns a result
+server.define_custom_method(method_name: "add") do |params|
+  params[:a] + params[:b]
+end
+
+# Define a custom notification method (returns nil)
+server.define_custom_method(method_name: "notify") do |params|
+  # Process notification
+  nil
+end
+```
+
+**Key Features:**
+
+- Accepts any method name as a string
+- Block receives the request parameters as a hash
+- Can handle both regular methods (with responses) and notifications
+- Prevents overriding existing MCP protocol methods
+- Supports instrumentation callbacks for monitoring
+
+**Usage Example:**
+
+```ruby
+# Client request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "add",
+  "params": { "a": 5, "b": 3 }
+}
+
+# Server response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": 8
+}
+```
+
+**Error Handling:**
+
+- Raises `MCP::Server::MethodAlreadyDefinedError` if trying to override an existing method
+- Supports the same exception reporting and instrumentation as standard methods
+
 ## Building an MCP Client
 
 The `MCP::Client` class provides an interface for interacting with MCP servers.
 
 This class supports:
 
+- Liveness check via the `ping` method (`MCP::Client#ping`)
 - Tool listing via the `tools/list` method (`MCP::Client#tools`)
-- Tool invocation via the `tools/call` method (`MCP::Client#call_tools`)
+- Tool invocation via the `tools/call` method (`MCP::Client#call_tool`)
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
 - Resource template listing via the `resources/templates/list` method (`MCP::Client#resource_templates`)
-- Resource reading via the `resources/read` method (`MCP::Client#read_resources`)
+- Resource reading via the `resources/read` method (`MCP::Client#read_resource`)
 - Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
 - Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
+- Completion requests via the `completion/complete` method (`MCP::Client#complete`)
 - Automatic JSON-RPC 2.0 message formatting
 - UUID request ID generation
 
@@ -1106,6 +1897,9 @@ stdio_transport = MCP::Client::Stdio.new(
 )
 client = MCP::Client.new(transport: stdio_transport)
 
+# Perform the MCP initialization handshake before sending any requests.
+client.connect
+
 # List available tools.
 tools = client.tools
 tools.each do |tool|
@@ -1132,11 +1926,12 @@ The stdio transport automatically handles:
 
 Use the `MCP::Client::HTTP` transport to interact with MCP servers using simple HTTP requests.
 
-You'll need to add `faraday` as a dependency in order to use the HTTP transport layer:
+You'll need to add `faraday` as a dependency in order to use the HTTP transport layer. Add `event_stream_parser` as well if the server uses SSE (`text/event-stream`) responses:
 
 ```ruby
 gem 'mcp'
 gem 'faraday', '>= 2.0'
+gem 'event_stream_parser', '>= 1.0' # optional, required only for SSE responses
 ```
 
 Example usage:
@@ -1144,6 +1939,9 @@ Example usage:
 ```ruby
 http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 client = MCP::Client.new(transport: http_transport)
+
+# Perform the MCP initialization handshake before sending any requests.
+client.connect
 
 # List available tools
 tools = client.tools
@@ -1188,6 +1986,170 @@ client.tools # will make the call using Bearer auth
 ```
 
 You can add any custom headers needed for your authentication scheme, or for any other purpose. The client will include these headers on every request.
+
+#### OAuth 2.1 Authorization
+
+When an MCP server enforces the [MCP Authorization spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
+pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Authorization` header. The transport will:
+
+- Send `Authorization: Bearer <access_token>` on every request when a token is available.
+- On a `401 Unauthorized`, parse the `WWW-Authenticate` header, discover the authorization server (Protected Resource Metadata + RFC 8414 Authorization Server Metadata),
+  perform Dynamic Client Registration if needed, run the OAuth 2.1 Authorization Code flow with PKCE (S256), and retry the failed request with the acquired token.
+- Fall back to the legacy 2025-03-26 discovery when the server publishes no Protected Resource Metadata, matching the TypeScript and Python SDKs: the MCP server's origin acts
+  as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` without the RFC 8414 issuer byte-match (which the legacy spec predates),
+  and when even that is absent the spec's default endpoints `/authorize`, `/token`, and `/register` at the origin are used with PKCE S256 assumed.
+- On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
+- On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
+  run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
+  The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
+- Request the `offline_access` scope when `client_metadata[:grant_types]` includes `refresh_token` and the authorization server advertises `offline_access` in its metadata
+  `scopes_supported` (SEP-2207). This is what lets the server issue the `refresh_token` used above. As an SDK-level safeguard, when the authorization server does not advertise
+  `offline_access` the scope is also stripped from any other source (challenge, PRM, or provider-supplied scope) so a server that does not support it never receives it.
+
+```ruby
+require "mcp"
+
+provider = MCP::Client::OAuth::Provider.new(
+  client_metadata: {
+    client_name: "My MCP App",
+    redirect_uris: ["http://localhost:3030/callback"],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  },
+  redirect_uri: "http://localhost:3030/callback",
+  redirect_handler: ->(authorization_url) {
+    # Send the user to the authorization URL - typically `Launchy.open(authorization_url)`
+    # or a manual `puts authorization_url` in CLI tools.
+  },
+  callback_handler: -> {
+    # Capture the redirect (for example, by running a small HTTP listener on
+    # `redirect_uri`) and return [code, state] from the query string.
+  },
+)
+
+transport = MCP::Client::HTTP.new(
+  url: "https://api.example.com/mcp",
+  oauth: provider,
+)
+client = MCP::Client.new(transport: transport)
+client.connect # `initialize` is sent here; if the server replies 401 the OAuth flow runs and the handshake is retried with the acquired token
+client.tools
+```
+
+Required keyword arguments to `Provider.new`:
+
+- `client_metadata`: Hash sent to the authorization server's Dynamic Client Registration endpoint. Must include `redirect_uris`, `grant_types`, `response_types`,
+  `token_endpoint_auth_method`. `redirect_uri` (below) must appear in this list, otherwise the constructor raises `Provider::UnregisteredRedirectURIError`.
+  When `application_type` is omitted, the SDK infers `"native"` or `"web"` from `redirect_uris` per SEP-837 before registering (loopback or custom-scheme URIs are native);
+  an explicit value always wins.
+- `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
+- `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
+- `callback_handler`: Callable that returns `[code, state]` after the user is redirected back to `redirect_uri`.
+
+Optional keyword arguments:
+
+- `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
+- `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
+  which keeps credentials in process memory only.
+- `client_id_metadata_document_url`: URL where you publish a Client ID Metadata Document
+  (`draft-ietf-oauth-client-id-metadata-document` and the MCP authorization specification).
+  When the authorization server advertises `client_id_metadata_document_supported: true`,
+  the SDK uses this URL as the OAuth `client_id` and skips Dynamic Client Registration.
+  Spec-required: the URL MUST be `https://` with a non-root path and MUST NOT include a fragment,
+  userinfo, or `.`/`..` segments. The SDK additionally rejects query strings (the draft only marks
+  them SHOULD NOT include, but the SDK refuses to send any) for `client_id` stability.
+  Any of these failures raise `Provider::InvalidClientIDMetadataDocumentURLError`. The CIMD document
+  served at the URL is a separate JSON artifact from the `client_metadata` keyword above:
+  the DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include
+  `client_id` set to the document URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
+
+To persist credentials across restarts, supply your own storage:
+
+```ruby
+class FileTokenStorage
+  def initialize(path)
+    @path = path
+  end
+
+  def tokens
+    read["tokens"]
+  end
+
+  def save_tokens(value)
+    write("tokens" => value)
+  end
+
+  def client_information
+    read["client"]
+  end
+
+  def save_client_information(value)
+    write("client" => value)
+  end
+
+  private
+
+  def read
+    File.exist?(@path) ? JSON.parse(File.read(@path)) : {}
+  end
+
+  def write(updates)
+    File.write(@path, JSON.dump(read.merge(updates)))
+  end
+end
+
+provider = MCP::Client::OAuth::Provider.new(
+  # ... required keywords ...
+  storage: FileTokenStorage.new(File.expand_path("~/.config/my-app/oauth.json")),
+)
+```
+
+##### Client Credentials Grant
+
+For a confidential machine-to-machine client (no user, no browser redirect), use `MCP::Client::OAuth::ClientCredentialsProvider` instead of `Provider`.
+The transport discovers the authorization server the same way, then exchanges the OAuth 2.1 `client_credentials` grant (RFC 6749 Section 4.4) at
+the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant does not issue a refresh token.
+
+```ruby
+provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
+  client_id: "my-service",
+  client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  # token_endpoint_auth_method: "client_secret_basic" (default) or "client_secret_post"
+  # scope: "mcp:read mcp:write" (optional; used when the server does not advertise scopes)
+)
+
+transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp", oauth: provider)
+```
+
+Keyword arguments:
+
+- `client_id`, `client_secret`: Required. The grant is for confidential clients, so a credential is mandatory.
+- `token_endpoint_auth_method`: `"client_secret_basic"` (default) or `"client_secret_post"`. `"none"` is rejected with `ClientCredentialsProvider::InvalidCredentialsError`.
+- `scope`, `storage`: Optional, same meaning as on `Provider`.
+
+##### Communication Security
+
+When `oauth:` is set, the MCP transport URL and every OAuth-facing URL (PRM, Authorization Server metadata, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`,
+`redirect_uri`) must use HTTPS or a loopback host. Non-loopback `http://` URLs are rejected at the SDK boundary so a bearer token is never sent over plain HTTP to a remote host.
+
+The transport also snapshots the canonicalized origin, path, and query string of the MCP URL at `initialize` time and re-checks them on every outgoing request through
+a Faraday middleware that runs after any user-supplied customizer. That means any URL swap raises `MCP::Client::HTTP::InsecureURLError` before the request reaches the adapter,
+whether the swap was triggered by
+`instance_variable_set(:@url, ...)`, by a Faraday customizer rewriting `url_prefix`, or by a custom middleware rewriting `env.url` (including just `env.url.query`) at request time,
+and whether the new URL is `http://` *or* `https://` to a different host or tenant.
+
+#### Customizing the Faraday Connection
+
+You can pass a block to `MCP::Client::HTTP.new` to customize the underlying Faraday connection.
+The block is called after the default middleware is configured, so you can add middleware or swap the HTTP adapter:
+
+```ruby
+http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp") do |faraday|
+  faraday.use MyApp::Middleware::HttpRecorder
+  faraday.adapter :typhoeus
+end
+```
 
 ### Tool Objects
 

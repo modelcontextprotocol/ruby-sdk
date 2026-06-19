@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 module MCP
   class Transport
     # Initialize the transport with the server instance
     def initialize(server)
       @server = server
+      server.transport = self
     end
 
     # Send a response to the client
@@ -36,10 +39,21 @@ module MCP
       send_response(response) if response
     end
 
-    # Send a notification to the client
-    # Returns true if the notification was sent successfully
+    # Send a notification to the client.
+    # Returns true if the notification was sent successfully.
     def send_notification(method, params = nil)
       raise NotImplementedError, "Subclasses must implement send_notification"
+    end
+
+    # Send a JSON-RPC request to the client and wait for a response.
+    def send_request(method, params = nil)
+      raise NotImplementedError, "Subclasses must implement send_request"
+    end
+
+    private
+
+    def generate_request_id
+      SecureRandom.uuid
     end
   end
 end

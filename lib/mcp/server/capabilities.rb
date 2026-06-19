@@ -6,6 +6,7 @@ module MCP
       def initialize(capabilities_hash = nil)
         @completions = nil
         @experimental = nil
+        @extensions = nil
         @logging = nil
         @prompts = nil
         @resources = nil
@@ -14,6 +15,7 @@ module MCP
         if capabilities_hash
           support_completions if capabilities_hash.key?(:completions)
           support_experimental(capabilities_hash[:experimental]) if capabilities_hash.key?(:experimental)
+          support_extensions(capabilities_hash[:extensions]) if capabilities_hash.key?(:extensions)
           support_logging if capabilities_hash.key?(:logging)
 
           if capabilities_hash.key?(:prompts)
@@ -43,6 +45,17 @@ module MCP
 
       def support_experimental(config = {})
         @experimental = config || {}
+      end
+
+      # Declares support for capability extensions per SEP-2133. Keys are
+      # extension identifiers using the reverse-DNS prefix convention
+      # (e.g. `"io.modelcontextprotocol/tasks"`, `"com.example/feature"`);
+      # values are arbitrary extension-defined configuration objects,
+      # with an empty hash meaning "supported with no settings".
+      # Repeated calls merge, so several extensions can be declared independently.
+      # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2133
+      def support_extensions(extensions = {})
+        @extensions = (@extensions || {}).merge(extensions || {})
       end
 
       def support_logging
@@ -85,6 +98,7 @@ module MCP
         {
           completions: @completions,
           experimental: @experimental,
+          extensions: @extensions,
           logging: @logging,
           prompts: @prompts,
           resources: @resources,
