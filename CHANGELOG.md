@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-06-20
+
+### Added
+
+- Support capability extensions per SEP-2133 (#405)
+- Add range validation for `MCP::Annotations#priority` per MCP specification (#410)
+- Isolate stateless requests in ephemeral sessions per SEP-2567 (#415)
+
+### Changed
+
+- Set OIDC `application_type` on Dynamic Client Registration per SEP-837 (#408)
+- Fall back to legacy 2025-03-26 OAuth discovery for servers without PRM (#414)
+
 ## [0.20.0] - 2026-06-14
 
 ### Added
