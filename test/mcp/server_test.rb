@@ -2884,6 +2884,58 @@ module MCP
       end
     end
 
+    test "#handle tools/call mirrors non-object structuredContent into serialized text content" do
+      # Per SEP-2106, `structuredContent` may be any JSON value. Older clients may only read `content`,
+      # so the server adds a serialized fallback when the tool provided no content blocks.
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "array_tool") do
+        Tool::Response.new(nil, structured_content: [1, 2])
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "array_tool", arguments: {} },
+      })
+
+      assert_equal [1, 2], response.dig(:result, :structuredContent)
+      assert_equal [{ type: "text", text: "[1,2]" }], response.dig(:result, :content)
+    end
+
+    test "#handle tools/call does not overwrite explicit content when structuredContent is non-object" do
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "array_tool") do
+        Tool::Response.new([{ type: "text", text: "two items" }], structured_content: [1, 2])
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "array_tool", arguments: {} },
+      })
+
+      assert_equal [{ type: "text", text: "two items" }], response.dig(:result, :content)
+    end
+
+    test "#handle tools/call leaves object structuredContent without a text fallback" do
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "object_tool") do
+        Tool::Response.new(nil, structured_content: { answer: 42 })
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "object_tool", arguments: {} },
+      })
+
+      assert_equal({ answer: 42 }, response.dig(:result, :structuredContent))
+      assert_empty response.dig(:result, :content)
+    end
+
     test "#handle tools/list returns paginated results when page_size is set" do
       tool_a = Tool.define(name: "tool_a", title: "Tool A", description: "Tool A")
       tool_b = Tool.define(name: "tool_b", title: "Tool B", description: "Tool B")

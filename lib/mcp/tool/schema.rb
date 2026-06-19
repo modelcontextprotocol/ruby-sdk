@@ -36,16 +36,29 @@ module MCP
       end
       VALIDATION_CACHE = ValidationCache.new
 
-      # JSON Schema 2020-12 is the default dialect for MCP schema definitions
-      # per MCP 2025-11-25 (SEP-1613). Note: emission only — runtime validation
-      # is still performed against the JSON Schema draft-04 metaschema.
+      # JSON Schema 2020-12 is the default dialect for MCP schema definitions per MCP 2025-11-25 (SEP-1613),
+      # and SEP-2106 requires tool schemas to conform to the full 2020-12 vocabulary. Both emission and
+      # runtime validation use this dialect. Because MCP mandates 2020-12, the SDK validates against it
+      # regardless of any `$schema` a document embeds; for compliant schemas this is the same dialect
+      # the Python SDK's `jsonschema.validate` resolves to.
       JSON_SCHEMA_2020_12_URI = "https://json-schema.org/draft/2020-12/schema"
 
-      DRAFT4_META_SCHEMA_URI = "http://json-schema.org/draft-04/schema#"
+      # Resource bounds for schema compilation, mirroring the TypeScript SDK's schema bounds (SEP-2106):
+      # schemas may use the full JSON Schema 2020-12 vocabulary including composition keywords and `$ref`,
+      # so adversarial documents must be rejected before they can cause excessive validation cost.
+      # Only same-document references (starting with `#`) are accepted, so schema handling can never trigger network
+      # or file access.
+      MAX_SCHEMA_DEPTH = 64
+      MAX_SUBSCHEMA_COUNT = 10_000
+
+      # Reference keywords whose targets the SDK refuses to dereference. Both `$ref` and `$dynamicRef` may carry
+      # an absolute URI under JSON Schema 2020-12, so a non-same-document value is an external reference.
+      REFERENCE_KEYWORDS = [:"$ref", :"$dynamicRef"].freeze
 
       def initialize(schema = {})
         @schema = JSON.parse(JSON.dump(schema), symbolize_names: true)
-        @schema[:type] ||= "object"
+        apply_default_root_type!
+        validate_schema_bounds!
         validate_schema!
       end
 
@@ -60,6 +73,48 @@ module MCP
       end
 
       private
+
+      # Root-type defaulting hook. The base class preserves the historical behavior of defaulting the root
+      # to an object schema; `OutputSchema` overrides this because SEP-2106 allows any root schema there.
+      def apply_default_root_type!
+        @schema[:type] ||= "object"
+      end
+
+      # Enforces `MAX_SCHEMA_DEPTH` / `MAX_SUBSCHEMA_COUNT` and the same-document reference rule over
+      # the whole schema document.
+      def validate_schema_bounds!
+        subschema_count = 0
+        stack = [[@schema, 1]]
+
+        until stack.empty?
+          node, depth = stack.pop
+          if depth > MAX_SCHEMA_DEPTH
+            raise ArgumentError,
+              "Invalid JSON Schema: nesting exceeds the maximum depth of #{MAX_SCHEMA_DEPTH}."
+          end
+
+          case node
+          when Hash
+            subschema_count += 1
+            if subschema_count > MAX_SUBSCHEMA_COUNT
+              raise ArgumentError,
+                "Invalid JSON Schema: document exceeds the maximum of #{MAX_SUBSCHEMA_COUNT} subschema objects."
+            end
+
+            REFERENCE_KEYWORDS.each do |keyword|
+              ref = node[keyword]
+              next unless ref.is_a?(String) && !ref.start_with?("#")
+
+              raise ArgumentError,
+                "Invalid JSON Schema: only same-document #{keyword} (starting with '#') is supported, got #{ref.inspect}."
+            end
+
+            node.each_value { |child| stack << [child, depth + 1] }
+          when Array
+            node.each { |child| stack << [child, depth + 1] }
+          end
+        end
+      end
 
       def stringify(obj)
         case obj
@@ -78,13 +133,16 @@ module MCP
       # Memoized per Schema instance because schema content is fixed at construction,
       # so the compiled schemer is reusable across many `fully_validate` calls.
       #
+      # Validated against the JSON Schema 2020-12 metaschema per SEP-2106, so `$defs`/`$ref` and
+      # the rest of the 2020-12 vocabulary resolve natively.
+      #
       # `format: false` preserves the legacy behavior of the previous `json-schema` based implementation,
       # which did not enforce `format` keywords. `RegexpError` from a malformed `pattern` is re-raised as
       # `ArgumentError` so callers see the same exception class they used to.
       def schemer
         @schemer ||= JSONSchemer.schema(
           stringify(schema_for_validation),
-          meta_schema: DRAFT4_META_SCHEMA_URI,
+          meta_schema: JSON_SCHEMA_2020_12_URI,
           format: false,
         )
       rescue RegexpError => e
@@ -112,8 +170,8 @@ module MCP
         VALIDATION_CACHE.store(key)
       end
 
-      # `json_schemer` is pinned to the draft-04 metaschema, so strip top-level `$schema` before validation:
-      # this preserves the legacy behavior of ignoring the advertised dialect URI when the SDK validates schemas.
+      # Strip the top-level `$schema` before validation so the SDK always validates against
+      # the 2020-12 metaschema (SEP-2106) regardless of any dialect URI a caller embedded in the document.
       def schema_for_validation
         return @schema unless @schema.key?(:"$schema")
 

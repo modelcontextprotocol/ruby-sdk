@@ -101,6 +101,22 @@ module MCP
         end
       end
 
+      test "rejects a draft-04-only boolean exclusiveMinimum under the 2020-12 dialect" do
+        # SEP-2106 validates tool schemas against the JSON Schema 2020-12 metaschema,
+        # where `exclusiveMinimum` must be a number. The draft-04 boolean form (deprecated since draft-06)
+        # is rejected at construction, matching the Python SDK's `jsonschema` validator selection.
+        error = assert_raises(ArgumentError) do
+          InputSchema.new(properties: { age: { type: "integer", minimum: 0, exclusiveMinimum: true } })
+        end
+        assert_includes error.message, "Invalid JSON Schema"
+      end
+
+      test "accepts the 2020-12 numeric exclusiveMinimum form" do
+        assert_nothing_raised do
+          InputSchema.new(properties: { age: { type: "integer", exclusiveMinimum: 0 } })
+        end
+      end
+
       test "schema without required arguments is valid" do
         assert_nothing_raised do
           InputSchema.new(properties: { foo: { type: "string" } })
@@ -181,6 +197,26 @@ module MCP
           },
         })
         assert_equal "#/definitions/bar", schema.to_h[:properties][:foo][:$ref]
+      end
+
+      test "keeps the object root type while accepting 2020-12 composition keywords" do
+        # Per SEP-2106, an input schema root must stay `type: "object"` but may use
+        # the full 2020-12 vocabulary below the root.
+        schema = InputSchema.new(
+          "$defs": { name: { type: "string", minLength: 1 } },
+          properties: {
+            name: { "$ref": "#/$defs/name" },
+            value: { oneOf: [{ type: "string" }, { type: "integer" }] },
+          },
+          if: { properties: { value: { type: "integer" } } },
+          then: { required: ["name"] },
+          allOf: [{ properties: { extra: { type: "boolean" } } }],
+        )
+
+        assert_equal "object", schema.to_h[:type]
+        assert schema.to_h.key?(:"$defs")
+        assert schema.to_h.key?(:if)
+        assert schema.to_h.key?(:allOf)
       end
 
       test "== compares two input schemas with the same properties, required fields" do

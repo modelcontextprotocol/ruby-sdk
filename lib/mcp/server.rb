@@ -636,7 +636,7 @@ module MCP
         tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id, cancellation: cancellation
       )
       validate_tool_call_result!(tool, result)
-      result
+      serialize_structured_content_fallback(result)
     rescue RequestHandlerError, CancelledError
       # CancelledError is intentionally not wrapped so `handle_request` can turn it into
       # `JsonRpcHandler::NO_RESPONSE` per the MCP cancellation spec.
@@ -799,6 +799,18 @@ module MCP
       return if result[:isError]
 
       tool.output_schema.validate_result(result[:structuredContent])
+    end
+
+    # Per SEP-2106, `structuredContent` may be any JSON value, not only an object.
+    # Clients on older protocol versions may only read `content`,
+    # so when a tool returns non-object structured content without providing
+    # any content blocks, mirror the value into `content` as serialized JSON text.
+    def serialize_structured_content_fallback(result)
+      structured = result[:structuredContent]
+      return result if structured.nil? || structured.is_a?(Hash)
+      return result unless result[:content].nil? || result[:content].empty?
+
+      result.merge(content: [{ type: "text", text: JSON.generate(structured) }])
     end
 
     # Whether a tool/prompt handler opts in to receiving an `MCP::ServerContext`.

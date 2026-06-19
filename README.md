@@ -698,8 +698,28 @@ class WeatherTool < MCP::Tool
 end
 ```
 
-Please note: in this case, you must provide `type: "array"`. The default type
-for output schemas is `object`.
+Please note: in this case, you must provide `type: "array"`. The default type for output schemas is `object`,
+applied only when the schema declares no root keyword (`type`, `$ref`, `oneOf`, `anyOf`, `allOf`, `not`, `if`, `const`, `enum`).
+
+Per SEP-2106, an output schema may be any valid JSON Schema 2020-12 document, including a primitive root
+(`{ type: "string" }`) or a root-level composition:
+
+```ruby
+class FlexibleTool < MCP::Tool
+  output_schema(
+    oneOf: [
+      { type: "string" },
+      { type: "array", items: { type: "number" } }
+    ]
+  )
+end
+```
+
+Input schemas keep `type: "object"` at the root but accept the full 2020-12 vocabulary below it
+(`$defs`/`$ref`, `oneOf`/`anyOf`/`allOf`/`not`, `if`/`then`/`else`). Two resource bounds apply to
+all tool schemas: only same-document `$ref`s (starting with `#`) are accepted, and documents are
+capped at `MCP::Tool::Schema::MAX_SCHEMA_DEPTH` nesting levels and `MCP::Tool::Schema::MAX_SUBSCHEMA_COUNT` subschema objects;
+violations raise `ArgumentError` at construction time.
 
 MCP spec for the [Output Schema](https://modelcontextprotocol.io/specification/latest/server/tools#output-schema) specifies that:
 
@@ -728,6 +748,10 @@ When enabled, successful tool responses for tools with an `output_schema` must i
 Tools can return structured data alongside text content using the `structured_content` parameter.
 
 The structured content will be included in the JSON-RPC response as the `structuredContent` field.
+
+Per SEP-2106, `structured_content` may be any JSON value, not only an object. When a tool returns a non-object value (e.g. an array)
+without providing any content blocks, the server automatically mirrors it into `content` as serialized JSON text so older clients
+that only read `content` still receive the data.
 
 ```ruby
 class WeatherTool < MCP::Tool

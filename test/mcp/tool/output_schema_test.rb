@@ -215,6 +215,51 @@ module MCP
         end
       end
 
+      test "does not inject a root type into a root-level oneOf schema" do
+        # Per SEP-2106, an output schema may be any JSON Schema 2020-12 document.
+        # Merging `type: "object"` into a root combinator would produce a wrong schema.
+        schema = OutputSchema.new(oneOf: [{ type: "string" }, { type: "integer" }])
+
+        refute schema.to_h.key?(:type)
+        assert_equal [{ type: "string" }, { type: "integer" }], schema.to_h[:oneOf]
+        assert_nothing_raised { schema.validate_result("text") }
+        assert_nothing_raised { schema.validate_result(42) }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result(1.5) }
+      end
+
+      test "does not inject a root type into a root-level $ref schema" do
+        schema = OutputSchema.new(
+          "$ref": "#/$defs/result",
+          "$defs": { result: { type: "string" } },
+        )
+
+        refute schema.to_h.key?(:type)
+        assert_nothing_raised { schema.validate_result("text") }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result(42) }
+      end
+
+      test "allows primitive root schemas" do
+        schema = OutputSchema.new(type: "string")
+
+        assert_nothing_raised { schema.validate_result("text") }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result(42) }
+      end
+
+      test "does not inject a root type into a root-level enum schema" do
+        schema = OutputSchema.new(enum: ["red", "green", "blue"])
+
+        refute schema.to_h.key?(:type)
+        assert_nothing_raised { schema.validate_result("red") }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result("yellow") }
+      end
+
+      test "defaults a properties-only schema to a root object" do
+        # Wire-format regression: the common shorthand keeps serializing with the injected `type: "object"`.
+        schema = OutputSchema.new(properties: { result: { type: "string" } })
+
+        assert_equal "object", schema.to_h[:type]
+      end
+
       test "allow to declare array schemas" do
         schema = OutputSchema.new({
           type: "array",
