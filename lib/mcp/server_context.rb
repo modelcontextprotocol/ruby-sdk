@@ -130,9 +130,14 @@ module MCP
       end
     end
 
-    def method_missing(name, ...)
+    # Forward arguments explicitly with `*args, **kwargs, &block` rather than the `...` forwarding syntax.
+    # The gem supports Ruby 2.7.0 (see `required_ruby_version`), but RuboCop's Parser backend only runs on Ruby 2.7.8,
+    # so leading-argument forwarding like `def method_missing(name, ...)` is allowed by the linter even though it
+    # raises a `SyntaxError` on Ruby 2.7.0 through 2.7.2 (it was added in Ruby 2.7.3). Explicit forwarding keeps
+    # this method loadable on Ruby 2.7.0.
+    def method_missing(name, *args, **kwargs, &block)
       if @context.respond_to?(name)
-        @context.public_send(name, ...)
+        @context.public_send(name, *args, **kwargs, &block)
       else
         super
       end
