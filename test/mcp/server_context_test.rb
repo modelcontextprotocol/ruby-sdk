@@ -201,6 +201,20 @@ module MCP
       assert_equal "custom_value", server_context.custom_method
     end
 
+    test "ServerContext forwards positional, keyword, and block arguments to the context" do
+      context = Object.new
+      def context.combine(prefix, suffix:, &block)
+        block.call("#{prefix}-#{suffix}")
+      end
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(context, progress: progress, notification_target: mock)
+
+      result = server_context.combine("a", suffix: "b", &:upcase)
+
+      assert_equal "A-B", result
+    end
+
     test "ServerContext#report_progress works with nil context" do
       progress = mock
       progress.expects(:report).with(50, total: 100, message: nil).once
