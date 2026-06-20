@@ -5,6 +5,7 @@ require "test_helper"
 module MCP
   class ServerSamplingTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
+    include DeprecationWarningTestHelper
 
     class MockTransport < Transport
       attr_reader :requests
@@ -62,6 +63,28 @@ module MCP
       assert_equal "Response from LLM", result[:content][:text]
     end
 
+    test "create_sampling_message warns when session negotiated protocol version is 2026-07-28" do
+      @session.mark_initialized!(protocol_version: "2026-07-28")
+
+      assert_deprecation_warning(/MCP Sampling .*2026-07-28/) do
+        @session.create_sampling_message(
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
+    end
+
+    test "create_sampling_message does not warn when session negotiated protocol version is older" do
+      @session.mark_initialized!(protocol_version: "2025-11-25")
+
+      assert_no_deprecation_warning do
+        @session.create_sampling_message(
+          messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+          max_tokens: 100,
+        )
+      end
+    end
+
     test "create_sampling_message sends all optional params" do
       @session.create_sampling_message(
         messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
@@ -93,6 +116,23 @@ module MCP
           messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
           max_tokens: 100,
         )
+      end
+
+      assert_equal("Client does not support sampling.", error.message)
+    end
+
+    test "create_sampling_message warns when negotiated protocol version is 2026-07-28 and client lacks sampling" do
+      @session.store_client_info(client: { name: "test-client" }, capabilities: {})
+      @session.mark_initialized!(protocol_version: "2026-07-28")
+
+      error = nil
+      assert_deprecation_warning(/MCP Sampling .*2026-07-28/) do
+        error = assert_raises(RuntimeError) do
+          @session.create_sampling_message(
+            messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+            max_tokens: 100,
+          )
+        end
       end
 
       assert_equal("Client does not support sampling.", error.message)

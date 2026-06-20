@@ -4,6 +4,7 @@ require "securerandom"
 require_relative "../../json_rpc_handler"
 require_relative "../configuration"
 require_relative "../methods"
+require_relative "../protocol_deprecations"
 require_relative "../version"
 
 module MCP
@@ -155,6 +156,8 @@ module MCP
             error_type: :internal_error,
           )
         end
+
+        MCP::ProtocolDeprecations.warn_for_client_capabilities(capabilities, protocol_version: negotiated_protocol_version, uplevel: 1)
 
         begin
           send_request(request: {

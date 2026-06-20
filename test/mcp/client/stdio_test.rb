@@ -9,6 +9,8 @@ require "mcp/client/tool"
 module MCP
   class Client
     class StdioTest < Minitest::Test
+      include DeprecationWarningTestHelper
+
       IMPLICIT_CONNECT_DEPRECATION_WARNING =
         /Calling `MCP::Client::Stdio#send_request` without calling `MCP::Client#connect` is deprecated\. Use `MCP::Client#connect` before sending requests instead\./.freeze
 
@@ -912,6 +914,38 @@ module MCP
         assert_equal("2025-03-26", sent_init_params["protocolVersion"])
         assert_equal({ "name" => "my-app", "version" => "9.9" }, sent_init_params["clientInfo"])
         assert_equal({ "roots" => { "listChanged" => true } }, sent_init_params["capabilities"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_warns_for_deprecated_capabilities_when_negotiated_protocol_version_is_2026_07_28
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2026-07-28" },
+          ))
+          stdout_write.flush
+          stdin_read.gets
+        end
+
+        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
+          transport.connect(capabilities: { roots: { listChanged: true }, sampling: {} })
+        end
       ensure
         server_thread.join
         stdin_read.close
