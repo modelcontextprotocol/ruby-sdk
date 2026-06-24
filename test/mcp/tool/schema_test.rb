@@ -51,24 +51,58 @@ module MCP
         assert_raises(ArgumentError) { InputSchema.new(invalid) }
       end
 
-      test "a schema at the normalization depth limit is cached without a nesting error" do
-        # The deepest schema the initializer can still normalize via JSON.dump/parse.
-        # The cache key must tolerate the same depth; the default JSON.generate
-        # nesting limit (100) is stricter than normalization and would raise here.
-        schema = { properties: { leaf: { type: "string" } } }
-        loop do
-          candidate = { properties: { child: schema } }
-          JSON.parse(JSON.dump(candidate))
-          schema = candidate
-        rescue JSON::NestingError
-          break
+      test "a schema nested deeper than MAX_SCHEMA_DEPTH raises" do
+        # SEP-2106 resource bounds: unbounded nesting would make downstream validation arbitrarily expensive.
+        # Each wrapping adds two levels (the schema hash and its `properties` hash), so this is the smallest
+        # nesting that exceeds MAX_SCHEMA_DEPTH.
+        wrappings = Schema::MAX_SCHEMA_DEPTH / 2 + 1
+        schema = { type: "string" }
+        wrappings.times do
+          schema = { type: "object", properties: { child: schema } }
         end
 
-        JSONSchemer::Schema.any_instance.stubs(:validate_schema).returns([])
+        error = assert_raises(ArgumentError) { InputSchema.new(schema) }
+        assert_match(/maximum depth/, error.message)
+      end
 
+      test "a schema with more subschema objects than MAX_SUBSCHEMA_COUNT raises" do
+        properties = {}
+        (Schema::MAX_SUBSCHEMA_COUNT + 1).times do |i|
+          properties[:"property_#{i}"] = { type: "string" }
+        end
+
+        error = assert_raises(ArgumentError) { InputSchema.new(properties: properties) }
+        assert_match(/subschema/, error.message)
+      end
+
+      test "rejects a $ref pointing outside the schema document" do
+        # SEP-2106 requires same-document `$ref` resolution only; a remote URI or a sibling file must never trigger network
+        # or file access.
+        error = assert_raises(ArgumentError) do
+          InputSchema.new(properties: { foo: { "$ref": "https://example.com/schema.json#/defs/bar" } })
+        end
+        assert_match(/same-document/, error.message)
+
+        assert_raises(ArgumentError) do
+          InputSchema.new(properties: { foo: { "$ref": "other.json#/defs/bar" } })
+        end
+      end
+
+      test "rejects a $dynamicRef pointing outside the schema document" do
+        # 2020-12 allows `$dynamicRef` to carry an absolute URI too, so the same-document restriction must cover it as well as `$ref`.
+        error = assert_raises(ArgumentError) do
+          InputSchema.new(properties: { foo: { "$dynamicRef": "https://example.com/schema.json#meta" } })
+        end
+        assert_match(/same-document/, error.message)
+        assert_match(/\$dynamicRef/, error.message)
+      end
+
+      test "accepts a same-document $ref" do
         assert_nothing_raised do
-          InputSchema.new(schema)
-          InputSchema.new(schema)
+          InputSchema.new(
+            "$defs": { bar: { type: "string" } },
+            properties: { foo: { "$ref": "#/$defs/bar" } },
+          )
         end
       end
 
