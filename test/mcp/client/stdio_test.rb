@@ -1226,6 +1226,121 @@ module MCP
         end
       end
 
+      def test_send_notification_writes_json_line_without_waiting_for_response
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        notification = {
+          jsonrpc: "2.0",
+          method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+          params: { requestId: "abc-123", reason: "user cancel" },
+        }
+
+        # Server: respond to initialize, then read the notification line.
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "test", version: "1.0.0" } },
+          }))
+          stdout_write.flush
+
+          stdin_read.gets # skip initialized notification
+
+          stdin_read.gets # read the cancellation notification line we are testing
+        end
+
+        result = transport.send_notification(notification: notification)
+
+        assert_nil(result, "send_notification must return nil (no response expected)")
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_concurrent_write_message_does_not_interleave_lines
+        # Regression: cancellation can call `send_notification` from a thread while `send_request` is mid-flight
+        # on another thread. The two writes must serialize so JSON-RPC lines do not interleave on stdin.
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        # Server: respond to initialize, then accept multiple lines.
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "t", version: "1.0.0" } },
+          }))
+          stdout_write.flush
+          stdin_read.gets # initialized
+        end
+
+        # Force initialization synchronously.
+        notification = {
+          jsonrpc: "2.0",
+          method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+          params: { requestId: "warmup" },
+        }
+        transport.send_notification(notification: notification)
+        server_thread.join
+
+        # Now hammer send_notification from many threads concurrently. Each line is one JSON object terminated by `\n`;
+        # if writes interleave, the received text would not be one valid JSON object per line.
+        threads = 8.times.map do |i|
+          Thread.new do
+            10.times do |j|
+              transport.send_notification(
+                notification: {
+                  jsonrpc: "2.0",
+                  method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+                  params: { requestId: "t#{i}-#{j}" },
+                },
+              )
+            end
+          end
+        end
+        threads.each(&:join)
+
+        # Drain everything written to stdin and verify each line parses as JSON.
+        stdin_write.close
+        lines = []
+        until stdin_read.eof?
+          line = stdin_read.gets
+          break if line.nil?
+
+          lines << line
+        end
+        lines.each do |line|
+          assert(JSON.parse(line.strip), "interleaved write produced unparseable line: #{line.inspect}")
+        end
+        assert_operator(lines.size, :>=, 80, "expected at least 80 notification lines")
+      ensure
+        stdout_read.close
+        stdout_write.close
+        begin
+          stderr_read.close
+        rescue
+          nil
+        end
+      end
+
       private
 
       def assert_implicit_connect_deprecation_warning(&block)

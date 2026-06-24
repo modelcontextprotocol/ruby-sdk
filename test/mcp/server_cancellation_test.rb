@@ -118,7 +118,7 @@ module MCP
     end
 
     test "CancelledError raised from nested server-to-client call suppresses response" do
-      @server.define_tool(name: "nesting") do |server_context:| # rubocop:disable Lint/UnusedBlockArgument
+      @server.define_tool(name: "nesting") do |**|
         # Simulate a transport-level CancelledError coming back from a nested
         # send_request (e.g. sampling/createMessage after parent was cancelled).
         raise MCP::CancelledError.new(request_id: "nested-xyz", reason: "parent aborted")

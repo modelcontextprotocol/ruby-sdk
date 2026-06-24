@@ -178,9 +178,18 @@ module MCP
       end
 
       # Sends a JSON-RPC request and returns the parsed response body.
-      # After a successful `initialize` handshake, the session ID and protocol
-      # version returned by the server are captured and automatically included
-      # on subsequent requests.
+      # After a successful `initialize` handshake, the session ID and protocol version returned by
+      # the server are captured and automatically included on subsequent requests.
+      #
+      # If a block is given, it is invoked just before Faraday's `post` is called.
+      # Faraday's synchronous `post` does not expose a post-write / pre-response hook,
+      # so this is the latest send-boundary signal the adapter exposes; the actual TCP write happens
+      # inside `post`. `MCP::Client#dispatch_with_cancellation` uses this yield to release
+      # the cancel-dispatch thread, which then issues a separate `notifications/cancelled` POST
+      # that may overlap with the original request on the network. The spec covers this:
+      # the sender has issued the request and still believes it in-progress, and receivers MAY ignore
+      # a cancellation referring to an unknown request id when the cancel POST happens to arrive first.
+      # https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation
       def send_request(request:)
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
@@ -188,6 +197,7 @@ module MCP
         step_up_retried = false
 
         begin
+          yield if block_given?
           response = client.post("", request, session_headers)
           body = parse_response_body(response, method, params)
 
@@ -272,6 +282,23 @@ module MCP
             original_error: e,
           )
         end
+      end
+
+      # Sends a JSON-RPC notification (no response expected). Used by `Client#cancel` to deliver
+      # `notifications/cancelled` for an in-flight request. The server acknowledges with HTTP 202 Accepted
+      # per the Streamable HTTP spec.
+      def send_notification(notification:)
+        method = notification[:method] || notification["method"]
+
+        client.post("", notification, session_headers)
+        nil
+      rescue Faraday::Error => e
+        raise RequestHandlerError.new(
+          "Failed to send #{method} notification",
+          { method: method },
+          error_type: :internal_error,
+          original_error: e,
+        )
       end
 
       # Terminates the session by sending an HTTP DELETE to the MCP endpoint
