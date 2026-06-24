@@ -16,6 +16,8 @@ module MCP
       ACCEPT_HEADER = "application/json, text/event-stream"
       SESSION_ID_HEADER = "Mcp-Session-Id"
       PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
+      METHOD_HEADER = "Mcp-Method"
+      NAME_HEADER = "Mcp-Name"
 
       # Raised when an `oauth:` provider is paired with an MCP URL that is neither HTTPS nor
       # a loopback `http://` URL, since a bearer token sent over plain HTTP to a remote host
@@ -198,7 +200,7 @@ module MCP
 
         begin
           yield if block_given?
-          response = client.post("", request, session_headers)
+          response = client.post("", request, session_headers.merge(request_metadata_headers(method, params)))
           body = parse_response_body(response, method, params)
 
           capture_session_info(method, response, body)
@@ -366,6 +368,39 @@ module MCP
           request_headers["Authorization"] = "Bearer #{token}"
         end
         request_headers
+      end
+
+      # Per SEP-2243, mirror the JSON-RPC method and target name/uri into HTTP headers so intermediaries
+      # can route and inspect requests without parsing the body. `Mcp-Name` comes from `params.name`
+      # (tools, prompts) or, when absent, `params.uri` (resources).
+      #
+      # https://modelcontextprotocol.io/specification/draft/basic/transports/streamable-http#request-metadata
+      def request_metadata_headers(method, params)
+        return {} unless method
+
+        metadata_headers = { METHOD_HEADER => method }
+        if params.is_a?(Hash)
+          name = params[:name] || params["name"]
+          name = params[:uri] || params["uri"] unless name.is_a?(String)
+          metadata_headers[NAME_HEADER] = encode_header_value(name) if name.is_a?(String)
+        end
+
+        metadata_headers
+      end
+
+      # A header value that is not safe to transmit as-is - non-ASCII, control characters (including CR/LF,
+      # which would otherwise allow header injection), or significant leading/trailing whitespace - is wrapped as
+      # `=?base64?<base64>?=`. Safe ASCII values are sent unchanged.
+      def encode_header_value(value)
+        return value if safe_header_value?(value)
+
+        "=?base64?#{[value].pack("m0")}?="
+      end
+
+      def safe_header_value?(value)
+        value.bytes.all? { |byte| byte.between?(0x20, 0x7e) } &&
+          (value.empty? || (!value.start_with?(" ", "\t") && !value.end_with?(" ", "\t"))) &&
+          !(value.start_with?("=?base64?") && value.end_with?("?="))
       end
 
       # Drives the OAuth orchestrator on a 401 from the MCP endpoint.

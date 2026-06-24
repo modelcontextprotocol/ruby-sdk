@@ -123,6 +123,238 @@ module MCP
         custom_client.send_request(request: request)
       end
 
+      def test_mcp_method_and_name_headers_for_tools_call
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "get_weather", arguments: { city: "Tokyo" } },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "get_weather" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_falls_back_to_uri_for_resources_read
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "resources/read",
+          params: { uri: "file:///README.md" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "resources/read", "Mcp-Name" => "file:///README.md" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_method_and_name_headers_for_prompts_get
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "prompts/get",
+          params: { name: "greeting" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "prompts/get", "Mcp-Name" => "greeting" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_method_header_without_name_when_params_lack_name_and_uri
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/list" },
+        ) do |req|
+          !req.headers.key?("Mcp-Name")
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { tools: [] } }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_is_base64_encoded_when_unsafe
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "café" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "=?base64?Y2Fmw6k=?=" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_method_header_for_notification_without_id
+        request = {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "notifications/initialized" },
+        ) do |req|
+          !req.headers.key?("Mcp-Name")
+        end.to_return(
+          status: 202,
+          headers: { "Content-Type" => "application/json" },
+          body: "",
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_method_header_for_initialize_without_params
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "initialize",
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "initialize" },
+        ) do |req|
+          !req.headers.key?("Mcp-Name")
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_with_string_keyed_params
+        request = {
+          "jsonrpc" => "2.0",
+          "id" => "test_id",
+          "method" => "tools/call",
+          "params" => { "name" => "get_weather" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "get_weather" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_is_base64_encoded_when_value_has_surrounding_whitespace
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: " padded " },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "=?base64?IHBhZGRlZCA=?=" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_is_base64_encoded_when_value_has_crlf
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "evil\r\nX-Injected: 1" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "=?base64?ZXZpbA0KWC1JbmplY3RlZDogMQ==?=" },
+        ) do |req|
+          !req.headers.key?("X-Injected")
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_name_header_re_encodes_value_matching_base64_sentinel
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "=?base64?literal?=" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "tools/call", "Mcp-Name" => "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?=" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
+      def test_mcp_method_header_without_name_for_non_hash_params
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "custom/method",
+          params: ["positional"],
+        }
+
+        stub_request(:post, url).with(headers: { "Mcp-Method" => "custom/method" }) do |req|
+          !req.headers.key?("Mcp-Name")
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
       def test_send_request_returns_faraday_response
         request = {
           jsonrpc: "2.0",
