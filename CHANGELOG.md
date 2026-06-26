@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-06-27
+
+### Added
+
+- Add `audience` role validation for `MCP::Annotations` per MCP specification (#422)
+- Send SEP-2243 `Mcp-Method` and `Mcp-Name` headers per MCP specification (#423)
+- Support client-side `notifications/cancelled` per MCP specification (#425)
+
+### Changed
+
+- Conform Tool Schemas to JSON Schema 2020-12 per SEP-2106 (#417)
+
+### Fixed
+
+- Fix a `SyntaxError` on Ruby 2.7.0 caused by arguments forwarding syntax (#419)
+
 ## [0.21.0] - 2026-06-20
 
 ### Added
