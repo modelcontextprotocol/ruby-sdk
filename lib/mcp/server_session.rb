@@ -98,6 +98,10 @@ module MCP
     end
 
     # Sends a `roots/list` request scoped to this session.
+    # @deprecated MCP Roots (`roots/list` and
+    #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
+    #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
+    #   server configuration, or environment variables instead.
     def list_roots(related_request_id: nil)
       unless client_capabilities&.dig(:roots)
         raise "Client does not support roots."
@@ -115,6 +119,9 @@ module MCP
     end
 
     # Sends a `sampling/createMessage` request scoped to this session.
+    # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
+    #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
+    #   APIs instead.
     def create_sampling_message(related_request_id: nil, **kwargs)
       params = @server.build_sampling_params(client_capabilities, **kwargs)
       send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
@@ -188,6 +195,9 @@ module MCP
     end
 
     # Sends a log message notification to this session only.
+    # @deprecated MCP Logging (`logging/setLevel` and `notifications/message`)
+    #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
       effective_logging = @logging_message_notification || @server.logging_message_notification
       return unless effective_logging&.should_notify?(level)

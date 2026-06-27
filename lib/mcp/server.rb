@@ -256,6 +256,9 @@ module MCP
       report_exception(e, { notification: "resources_list_changed" })
     end
 
+    # @deprecated MCP Logging (`logging/setLevel` and `notifications/message`)
+    #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil)
       return unless @transport
       return unless logging_message_notification&.should_notify?(level)
@@ -272,6 +275,10 @@ module MCP
     # Called when a client notifies the server that its filesystem roots have changed.
     #
     # @yield [params] The notification params (typically `nil`).
+    # @deprecated MCP Roots (`roots/list` and
+    #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
+    #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
+    #   server configuration, or environment variables instead.
     def roots_list_changed_handler(&block)
       @handlers[Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED] = block
     end
