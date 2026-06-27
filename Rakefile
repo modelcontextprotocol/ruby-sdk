@@ -30,7 +30,7 @@ task :conformance do |t|
   options[:verbose] = true if ENV["VERBOSE"]
 
   Conformance::ServerRunner.new(**options).run
-  Conformance::ClientRunner.new(**options.except(:port)).run
+  Conformance::ClientRunner.new(**options.reject { |key, _value| key == :port }).run
 end
 
 desc "List available conformance scenarios"
