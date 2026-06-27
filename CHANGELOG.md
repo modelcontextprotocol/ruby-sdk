@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- Annotate Roots, Sampling, and Logging APIs as deprecated per SEP-2577 (#429)
+
 ## [0.22.0] - 2026-06-27
 
 ### Added
