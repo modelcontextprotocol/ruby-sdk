@@ -128,9 +128,7 @@ module MCP
         @server_info
       end
 
-      # Returns true once `connect` (or the implicit handshake on the first
-      # `send_request`) has completed. Returns false before the handshake
-      # and after `close`.
+      # Returns true once `connect` has completed the handshake. Returns false before the handshake and after `close`.
       def connected?
         @initialized
       end
@@ -140,11 +138,7 @@ module MCP
       # write does not race ahead of the request write on the wire. The yield happens inside `@write_mutex`,
       # so any subsequent `send_notification` write waits for the mutex and is guaranteed to land after the request.
       def send_request(request:)
-        start unless @started
-        unless @initialized
-          warn("Calling `MCP::Client::Stdio#send_request` without calling `MCP::Client#connect` is deprecated. Use `MCP::Client#connect` before sending requests instead.", uplevel: 1)
-          connect
-        end
+        raise "MCP::Client#connect must be called before sending requests." unless @initialized
 
         @write_mutex.synchronize do
           write_message(request)
