@@ -21,8 +21,9 @@ module MCP
       # - `redirect_handler` - Callable invoked with the fully-built authorization
       #   URL (a `URI`). Implementations typically open the user's browser.
       # - `callback_handler` - Callable invoked after `redirect_handler`. Returns
-      #   `[code, state]` where `code` is the authorization code and `state` is
-      #   the `state` parameter received on the redirect URI.
+      #   `[code, state]` or `[code, state, iss]` where `code` is the authorization
+      #   code, `state` is the `state` parameter, and `iss` is the optional,
+      #   URL-form-decoded RFC 9207 issuer parameter received on the redirect URI.
       #
       # Optional keyword arguments:
       # - `scope`   - String of space-separated scopes to request when the server's

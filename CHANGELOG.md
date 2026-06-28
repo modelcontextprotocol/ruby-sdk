@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Validate RFC 9207 `iss` authorization response parameters in OAuth client flows per SEP-2468
+
 ### Deprecated
 
 - Annotate Roots, Sampling, and Logging APIs as deprecated per SEP-2577 (#429)

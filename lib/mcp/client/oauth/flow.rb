@@ -74,12 +74,14 @@ module MCP
           )
 
           @provider.redirect_handler.call(authorization_url)
-          code, returned_state = Array(@provider.callback_handler.call)
+          code, returned_state, returned_iss = Array(@provider.callback_handler.call)
           raise AuthorizationError, "Authorization callback did not return an authorization code." unless code
 
           unless states_match?(returned_state, state)
             raise AuthorizationError, "OAuth state mismatch (CSRF protection)."
           end
+
+          ensure_authorization_response_issuer_matches!(as_metadata: as_metadata, returned: returned_iss)
 
           tokens = exchange_authorization_code(
             as_metadata: as_metadata,
@@ -408,6 +410,26 @@ module MCP
 
           raise AuthorizationError,
             "Authorization server metadata `issuer` does not match the discovery URL " \
+              "(expected #{expected.inspect}, got #{returned.inspect})."
+        end
+
+        # SEP-2468 / RFC 9207: bind the authorization response to the AS identity.
+        # The callback handler owns redirect parsing, so `returned` is expected to
+        # be the URL-form-decoded `iss` value from the authorization response.
+        def ensure_authorization_response_issuer_matches!(as_metadata:, returned:)
+          if as_metadata["authorization_response_iss_parameter_supported"] == true && returned.nil?
+            raise AuthorizationError,
+              "Authorization server advertises authorization_response_iss_parameter_supported " \
+                "but no `iss` parameter was received."
+          end
+
+          return if returned.nil?
+
+          expected = as_metadata["issuer"]
+          return if expected.to_s == returned.to_s
+
+          raise AuthorizationError,
+            "Authorization response `iss` does not match the expected issuer " \
               "(expected #{expected.inspect}, got #{returned.inspect})."
         end
 

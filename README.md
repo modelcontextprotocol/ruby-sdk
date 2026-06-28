@@ -2075,6 +2075,9 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
   The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
+- Validate the URL-form-decoded RFC 9207 `iss` parameter from authorization responses before exchanging the authorization code.
+  Any returned `iss` must exactly match the discovered issuer, even when the authorization server has not advertised support.
+  If the server advertises `authorization_response_iss_parameter_supported: true`, the callback must return the `iss` value.
 - Request the `offline_access` scope when `client_metadata[:grant_types]` includes `refresh_token` and the authorization server advertises `offline_access` in its metadata
   `scopes_supported` (SEP-2207). This is what lets the server issue the `refresh_token` used above. As an SDK-level safeguard, when the authorization server does not advertise
   `offline_access` the scope is also stripped from any other source (challenge, PRM, or provider-supplied scope) so a server that does not support it never receives it.
@@ -2097,7 +2100,10 @@ provider = MCP::Client::OAuth::Provider.new(
   },
   callback_handler: -> {
     # Capture the redirect (for example, by running a small HTTP listener on
-    # `redirect_uri`) and return [code, state] from the query string.
+    # `redirect_uri`) and return URL-form-decoded [code, state, iss] values
+    # from the query string.
+    # The `iss` value is optional unless the authorization server advertises
+    # `authorization_response_iss_parameter_supported: true`.
   },
 )
 
@@ -2118,7 +2124,8 @@ Required keyword arguments to `Provider.new`:
   an explicit value always wins.
 - `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
 - `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
-- `callback_handler`: Callable that returns `[code, state]` after the user is redirected back to `redirect_uri`.
+- `callback_handler`: Callable that returns `[code, state]` or `[code, state, iss]` after the user is redirected back to `redirect_uri`.
+  Return URL-form-decoded query values, including the RFC 9207 `iss` parameter when present; the SDK rejects mismatched values and rejects missing `iss` when the authorization server advertises support.
 
 Optional keyword arguments:
 

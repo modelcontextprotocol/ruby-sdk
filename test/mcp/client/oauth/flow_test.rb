@@ -76,6 +76,23 @@ module MCP
           )
         end
 
+        def authorization_response_iss_provider(iss)
+          state_holder = {}
+          Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state], iss] },
+          )
+        end
+
         # Runs the full authorization flow and returns the `scope` query parameter
         # sent on the authorization request. The caller stubs the AS metadata;
         # this helper supplies a provider whose `grant_types` and optional pre-set
@@ -1530,6 +1547,74 @@ module MCP
           end
 
           assert_match(/issuer/i, error.message)
+        end
+
+        def test_run_accepts_matching_authorization_response_iss
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              authorization_response_iss_parameter_supported: true,
+            ),
+          )
+
+          provider = authorization_response_iss_provider(@auth_base)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+        end
+
+        def test_run_requires_authorization_response_iss_when_advertised
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              authorization_response_iss_parameter_supported: true,
+            ),
+          )
+
+          provider = authorization_response_iss_provider(nil)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/iss/i, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_accepts_matching_authorization_response_iss_without_advertisement
+          provider = authorization_response_iss_provider(@auth_base)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+        end
+
+        def test_run_rejects_authorization_response_iss_mismatch
+          provider = authorization_response_iss_provider("https://attacker.example.com")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/iss.*does not match/i, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
         end
 
         def test_run_rejects_non_https_authorization_server
