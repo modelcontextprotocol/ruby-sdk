@@ -5,6 +5,7 @@ require_relative "oauth/flow"
 require_relative "oauth/in_memory_storage"
 require_relative "oauth/pkce"
 require_relative "oauth/storage_backed_provider"
+require_relative "oauth/jwt_client_assertion"
 require_relative "oauth/provider"
 require_relative "oauth/client_credentials_provider"
 

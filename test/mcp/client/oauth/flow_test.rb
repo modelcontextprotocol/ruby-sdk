@@ -175,6 +175,57 @@ module MCP
           end
         end
 
+        def test_run_client_credentials_with_private_key_jwt_sends_signed_assertion
+          # SEP-1046 / RFC 7523 Section 2.2: the token request authenticates
+          # with a signed JWT assertion; `client_id` and any shared secret are
+          # absent from the body, and the assertion's audience is the AS issuer.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              token_endpoint: "#{@auth_base}/token",
+              grant_types_supported: ["client_credentials"],
+              token_endpoint_auth_methods_supported: ["private_key_jwt"],
+              token_endpoint_auth_signing_alg_values_supported: ["ES256"],
+            ),
+          )
+
+          # `OpenSSL::PKey::EC.generate` only exists from the openssl gem 2.2 (Ruby 3.0);
+          # fall back to the pre-3.0 API on older Rubies.
+          key = if OpenSSL::PKey::EC.respond_to?(:generate)
+            OpenSSL::PKey::EC.generate("prime256v1")
+          else
+            OpenSSL::PKey::EC.new("prime256v1").tap(&:generate_key)
+          end
+          provider = ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            token_endpoint_auth_method: "private_key_jwt",
+            private_key: key,
+            signing_algorithm: "ES256",
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            payload_segment = form["client_assertion"].to_s.split(".")[1].to_s
+            claims = JSON.parse(Base64.urlsafe_decode64(payload_segment + "=" * (-payload_segment.length % 4)))
+
+            form["grant_type"] == "client_credentials" &&
+              form["client_assertion_type"] == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" &&
+              !form.key?("client_id") &&
+              !form.key?("client_secret") &&
+              req.headers["Authorization"].nil? &&
+              claims["iss"] == "cc-client" &&
+              claims["sub"] == "cc-client" &&
+              claims["aud"] == @auth_base &&
+              form["resource"] == "https://srv.example.com/mcp"
+          end
+        end
+
         def test_run_uses_authorization_code_grant_for_default_provider
           # A standard `Provider` declares `authorization_flow == :authorization_code`,
           # so `Flow` runs the interactive grant regardless of what `client_metadata[:grant_types]` happens to list.

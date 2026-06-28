@@ -66,13 +66,25 @@ def storage_for(context)
 end
 
 # Builds a `client_credentials`-only provider (machine-to-machine, no redirect).
-# The pre-registered credentials are injected by the harness via context.
+# The pre-registered credentials are injected by the harness via context:
+# a shared secret for the basic scenario, or a PEM private key plus signing algorithm
+# (default ES256, matching the TypeScript and Python conformance clients)
+# for the `private_key_jwt` scenario.
 def build_client_credentials_provider(context)
-  MCP::Client::OAuth::ClientCredentialsProvider.new(
-    client_id: context["client_id"],
-    client_secret: context["client_secret"],
-    token_endpoint_auth_method: context["token_endpoint_auth_method"] || "client_secret_basic",
-  )
+  if context["private_key_pem"]
+    MCP::Client::OAuth::ClientCredentialsProvider.new(
+      client_id: context["client_id"],
+      token_endpoint_auth_method: "private_key_jwt",
+      private_key: context["private_key_pem"],
+      signing_algorithm: context["signing_algorithm"] || "ES256",
+    )
+  else
+    MCP::Client::OAuth::ClientCredentialsProvider.new(
+      client_id: context["client_id"],
+      client_secret: context["client_secret"],
+      token_endpoint_auth_method: context["token_endpoint_auth_method"] || "client_secret_basic",
+    )
+  end
 end
 
 # Builds an OAuth provider that drives the authorization code + PKCE + DCR flow
