@@ -5,6 +5,7 @@ require_relative "client/stdio"
 require_relative "client/http"
 require_relative "client/paginated_result"
 require_relative "client/tool"
+require_relative "result_type"
 
 module MCP
   class Client
@@ -33,6 +34,25 @@ module MCP
     # whose `result` field is missing or has the wrong type. This is distinct from a
     # server-returned JSON-RPC error, which is raised as `ServerError`.
     class ValidationError < StandardError; end
+
+    # Raised when a server answers with a SEP-2322 Multi Round-Trip `input_required` result instead of
+    # a final result. The result is not an error on the wire: it asks the client to fulfill the server's
+    # `inputRequests` (a map of id => `{ "method" => ..., "params" => ... }` request objects with
+    # `sampling/createMessage`, `roots/list`, or `elicitation/create` shapes) and re-issue
+    # the original request with `inputResponses` plus the echoed opaque `requestState`.
+    # This SDK does not yet drive that resume loop automatically; callers can inspect `input_requests`
+    # and respond manually.
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322
+    class InputRequiredError < StandardError
+      attr_reader :input_requests, :request_state, :result
+
+      def initialize(message, input_requests:, request_state: nil, result: nil)
+        super(message)
+        @input_requests = input_requests
+        @request_state = request_state
+        @result = result
+      end
+    end
 
     # Raised when the server responds 404 to a request containing a session ID,
     # indicating the session has expired. Inherits from `RequestHandlerError` for
@@ -422,7 +442,24 @@ module MCP
         raise ServerError.new(error["message"], code: error["code"], data: error["data"])
       end
 
+      raise_on_input_required(response)
+
       response
+    end
+
+    # Recognizes a SEP-2322 `input_required` result and raises rather than returning it as if it were a final result.
+    # Servers on stable protocol versions never emit `resultType`, so this is a no-op for them.
+    def raise_on_input_required(response)
+      result = response.is_a?(Hash) ? response["result"] : nil
+      return unless result.is_a?(Hash) && result["resultType"] == ResultType::INPUT_REQUIRED
+
+      raise InputRequiredError.new(
+        "Server returned `input_required`; this SDK does not yet resume multi-round-trip requests (SEP-2322). " \
+          "Inspect `input_requests` to respond manually.",
+        input_requests: result["inputRequests"] || {},
+        request_state: result["requestState"],
+        result: result,
+      )
     end
 
     # Generates a fresh JSON-RPC request id for an outgoing request.
