@@ -80,6 +80,38 @@ module MCP
           assert_equal({}, body["result"])
         end
 
+        test "id-bearing notification message is rejected with Method not found" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+            },
+            { jsonrpc: "2.0", method: "notifications/cancelled", id: "123" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+
+          io = StringIO.new
+          response[2].call(io)
+          body = JSON.parse(io.string.match(/^data: (.+)$/)[1])
+
+          assert_equal "123", body["id"]
+          refute body.key?("result")
+          assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, body["error"]["code"]
+        end
+
         test "handles POST request with invalid JSON" do
           request = create_rack_request(
             "POST",

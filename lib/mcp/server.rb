@@ -423,6 +423,13 @@ module MCP
     end
 
     def handle_request(request, method, session: nil, related_request_id: nil)
+      # A well-formed notification carries no JSON-RPC id and receives no response.
+      # If a client erroneously sends a notification-only method with an id, the message
+      # is framed as a request; since notification methods have no request handler,
+      # returning `nil` here makes `JsonRpcHandler` report "Method not found", matching
+      # the TypeScript and Python SDKs rather than emitting a spurious `result: null`.
+      return if Methods.notification?(method) && !related_request_id.nil?
+
       # `notifications/cancelled` is dispatched directly: it is a notification (no JSON-RPC id)
       # and intentionally bypasses the `@handlers` lookup, capability check, in-flight registry,
       # and rescue blocks below.
