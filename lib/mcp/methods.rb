@@ -47,6 +47,10 @@ module MCP
     end
 
     class << self
+      def notification?(method)
+        method.is_a?(String) && method.start_with?("notifications/")
+      end
+
       def ensure_capability!(method, capabilities)
         case method
         when PROMPTS_GET, PROMPTS_LIST

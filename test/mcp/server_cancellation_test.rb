@@ -144,6 +144,96 @@ module MCP
       assert_nil response
     end
 
+    test "id-bearing notifications/cancelled is rejected with Method not found, not result: null" do
+      response = @session.handle(
+        jsonrpc: "2.0",
+        id: 1001,
+        method: Methods::NOTIFICATIONS_CANCELLED,
+      )
+
+      assert_equal 1001, response[:id]
+      refute response.key?(:result)
+      assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code)
+    end
+
+    test "id-bearing notifications/initialized is rejected with Method not found" do
+      response = @session.handle(
+        jsonrpc: "2.0",
+        id: 1002,
+        method: Methods::NOTIFICATIONS_INITIALIZED,
+      )
+
+      assert_equal 1002, response[:id]
+      refute response.key?(:result)
+      assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code)
+    end
+
+    test "id-bearing notifications/progress is rejected with Method not found" do
+      response = @session.handle(
+        jsonrpc: "2.0",
+        id: 1003,
+        method: Methods::NOTIFICATIONS_PROGRESS,
+        params: { progressToken: "tok", progress: 1 },
+      )
+
+      assert_equal 1003, response[:id]
+      refute response.key?(:result)
+      assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code)
+    end
+
+    test "well-formed notifications/initialized still receives no response" do
+      response = @session.handle(
+        jsonrpc: "2.0",
+        method: Methods::NOTIFICATIONS_INITIALIZED,
+      )
+
+      assert_nil response
+    end
+
+    test "id-bearing notification mixed into a batch yields only its Method not found error" do
+      responses = @session.handle([
+        { jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: "x" } },
+        { jsonrpc: "2.0", id: 2001, method: Methods::NOTIFICATIONS_CANCELLED },
+        { jsonrpc: "2.0", id: 2002, method: Methods::PING },
+      ])
+
+      cancelled_error = responses.find { |response| response[:id] == 2001 }
+      assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, cancelled_error.dig(:error, :code)
+
+      ping_response = responses.find { |response| response[:id] == 2002 }
+      assert_equal({}, ping_response[:result])
+
+      # The well-formed notification carries no id and contributes no response.
+      assert_equal 2, responses.size
+    end
+
+    test "id-bearing custom notifications/* method is rejected with Method not found" do
+      called = false
+      @server.define_custom_method(method_name: "notifications/custom") { called = true }
+
+      response = @session.handle(
+        jsonrpc: "2.0",
+        id: 3001,
+        method: "notifications/custom",
+      )
+
+      assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code)
+      refute called
+    end
+
+    test "well-formed custom notifications/* method is dispatched without a response" do
+      called = false
+      @server.define_custom_method(method_name: "notifications/custom") { called = true }
+
+      response = @session.handle(
+        jsonrpc: "2.0",
+        method: "notifications/custom",
+      )
+
+      assert_nil response
+      assert called
+    end
+
     test "duplicate cancellation for the same in-flight request is idempotent" do
       @server.define_tool(name: "slow_dup") do |server_context:|
         20.times do
