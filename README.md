@@ -1850,6 +1850,40 @@ tools = client.tools # => Array<MCP::Client::Tool> of every tool on the server.
 Use these when you want the complete list; use `list_tools(cursor:)` etc. when you need
 fine-grained iteration (e.g. to stream-process pages without loading everything into memory).
 
+#### List Result Caching (`ttlMs` / `cacheScope`)
+
+Per SEP-2549, list and read results can carry cache hints telling clients how long a result stays fresh (`ttlMs`, max-age semantics in milliseconds;
+`0` means do not cache) and whether shared intermediaries may cache it (`cacheScope`: `"public"` or `"private"`).
+
+Emission is opt-in: pass `ttl_ms:` and/or `cache_scope:` to `MCP::Server.new` and both fields are added to `tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list`, and `resources/read` results (a missing field is filled with the defaults `ttlMs: 0` / `cacheScope: "public"`).
+When neither is set, responses are serialized exactly as before.
+
+```ruby
+server = MCP::Server.new(
+  name: "my_server",
+  tools: tools,
+  ttl_ms: 60_000,        # results stay fresh for one minute
+  cache_scope: "private", # only the requesting client may cache them
+)
+```
+
+A `resources_read_handler` can override the hints per result by returning a full result hash instead of bare contents:
+
+```ruby
+server.resources_read_handler do |params|
+  { contents: [{ uri: params[:uri], mimeType: "text/plain", text: "..." }], ttlMs: 5_000 }
+end
+```
+
+On the client, the values are surfaced on the paginated result structs as `ttl_ms` and `cache_scope`:
+
+```ruby
+page = client.list_tools
+page.ttl_ms      # => 60000 (nil when the server sent no hint)
+page.cache_scope # => "private"
+```
+
 ### Advanced
 
 #### Custom Methods
