@@ -21,8 +21,13 @@ module MCP
       # - `redirect_handler` - Callable invoked with the fully-built authorization
       #   URL (a `URI`). Implementations typically open the user's browser.
       # - `callback_handler` - Callable invoked after `redirect_handler`. Returns
-      #   `[code, state]` where `code` is the authorization code and `state` is
-      #   the `state` parameter received on the redirect URI.
+      #   `[code, state]` or `[code, state, iss]`, where `code` is the authorization code,
+      #   `state` is the `state` parameter received on the redirect URI, and `iss` is
+      #   the RFC 9207 `iss` parameter (or nil when the authorization response carried none).
+      #   Returning the 3-element form opts into SEP-2468 issuer validation: a present `iss`
+      #   must match the authorization server's issuer, and a nil `iss` is
+      #   rejected when the AS advertises `authorization_response_iss_parameter_supported`.
+      #   The 2-element form skips the check for backward compatibility.
       #
       # Optional keyword arguments:
       # - `scope`   - String of space-separated scopes to request when the server's
