@@ -24,7 +24,23 @@ module MCP
           "Connection" => "keep-alive",
         }.freeze
 
-        def initialize(server, stateless: false, enable_json_response: false, session_idle_timeout: nil)
+        # Secure defaults for stateful mode. Without a finite idle timeout, sessions live until an explicit client DELETE,
+        # so an unauthenticated `initialize` flood retains unbounded `ServerSession` objects until memory is exhausted.
+        # These defaults expire idle sessions and cap the concurrent count, like the C# SDK (the only reference SDK that
+        # hardens this by default, with a 2h idle timeout and a 10k idle-session count). One difference: at the cap this transport
+        # rejects a new `initialize` with 503 (after reclaiming any already-expired slots), whereas the C# SDK evicts
+        # the oldest idle session. Rejecting keeps established sessions stable and avoids evicting a legitimate idle session on
+        # an attacker's behalf, at the cost of refusing new sessions while genuinely full. Pass `session_idle_timeout: nil` to
+        # opt out of expiry and `max_sessions: nil` to opt out of the cap.
+        DEFAULT_SESSION_IDLE_TIMEOUT = 1800
+        DEFAULT_MAX_SESSIONS = 10_000
+
+        # Distinguishes "argument omitted, apply the secure default" from an explicit `nil` (opt out of expiry).
+        UNSET_IDLE_TIMEOUT = Object.new.freeze
+        private_constant :UNSET_IDLE_TIMEOUT
+
+        def initialize(server, stateless: false, enable_json_response: false,
+          session_idle_timeout: UNSET_IDLE_TIMEOUT, max_sessions: DEFAULT_MAX_SESSIONS)
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
@@ -32,8 +48,15 @@ module MCP
 
           @stateless = stateless
           @enable_json_response = enable_json_response
-          @session_idle_timeout = session_idle_timeout
           @pending_responses = {}
+
+          # Resolve the idle timeout: an explicit value (including `nil` to opt out) wins; otherwise apply the secure default,
+          # which does not apply to stateless mode since it retains no sessions.
+          @session_idle_timeout = if session_idle_timeout.equal?(UNSET_IDLE_TIMEOUT)
+            stateless ? nil : DEFAULT_SESSION_IDLE_TIMEOUT
+          else
+            session_idle_timeout
+          end
 
           if @session_idle_timeout
             if @stateless
@@ -42,6 +65,13 @@ module MCP
               raise ArgumentError, "session_idle_timeout must be a positive number."
             end
           end
+
+          unless max_sessions.nil? || (max_sessions.is_a?(Integer) && max_sessions > 0)
+            raise ArgumentError, "max_sessions must be a positive Integer or nil"
+          end
+
+          # The cap guards the stateful session store; stateless mode keeps none.
+          @max_sessions = stateless ? nil : max_sessions
 
           start_reaper_thread if @session_idle_timeout
         end
@@ -622,13 +652,30 @@ module MCP
             session_id = SecureRandom.uuid
             server_session = ServerSession.new(server: @server, transport: self, session_id: session_id)
 
-            @mutex.synchronize do
+            # Cap the concurrent session count so an `initialize` flood cannot retain unbounded sessions until memory is exhausted.
+            # The check and insert share the mutex so concurrent initializes cannot race past the limit.
+            reclaimed = []
+            inserted = @mutex.synchronize do
+              # When at the cap, first reclaim slots held by already-expired sessions the 60s reaper has not yet collected,
+              # so the cap rejects only when genuinely full rather than up to a reaper interval after sessions expired.
+              if @max_sessions && @sessions.size >= @max_sessions
+                @sessions.each_key.select { |id| session_expired?(@sessions[id]) }.each do |id|
+                  cleanup_and_collect_stream(id, reclaimed)
+                end
+              end
+
+              next false if @max_sessions && @sessions.size >= @max_sessions
+
               @sessions[session_id] = {
                 get_sse_stream: nil,
                 server_session: server_session,
                 last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
               }
+              true
             end
+
+            reclaimed.each { |stream| close_stream_safely(stream) }
+            return too_many_sessions_response unless inserted
           end
 
           response = server_session.handle_json(body_string)
@@ -653,6 +700,14 @@ module MCP
 
         def handle_accepted
           [202, {}, []]
+        end
+
+        def too_many_sessions_response
+          json_rpc_error_response(
+            status: 503,
+            code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+            message: "Service unavailable: maximum concurrent sessions (#{@max_sessions}) reached",
+          )
         end
 
         def handle_regular_request(body_string, session_id, related_request_id: nil)
