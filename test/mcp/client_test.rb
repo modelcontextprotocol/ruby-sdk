@@ -164,6 +164,83 @@ module MCP
       assert_equal([{ type: "text", text: "Hello, world!" }], content)
     end
 
+    def test_call_tool_raises_input_required_error_when_result_type_is_input_required
+      # Per SEP-2322, a result with `resultType: "input_required"` is not a final result;
+      # surface it instead of returning it as a normal result.
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      mock_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => {
+            "1" => { "method" => "elicitation/create", "params" => { "mode" => "form", "message" => "Name?" } },
+          },
+          "requestState" => "opaque-state",
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      error = assert_raises(Client::InputRequiredError) do
+        client.call_tool(tool: tool, arguments: {})
+      end
+
+      assert_equal(
+        { "1" => { "method" => "elicitation/create", "params" => { "mode" => "form", "message" => "Name?" } } },
+        error.input_requests,
+      )
+      assert_equal("opaque-state", error.request_state)
+      assert_equal(mock_response["result"], error.result)
+    end
+
+    def test_call_tool_returns_normally_when_result_type_is_complete
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      mock_response = {
+        "result" => {
+          "resultType" => "complete",
+          "content" => [{ "type" => "text", "text" => "done" }],
+        },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.call_tool(tool: tool, arguments: {})
+
+      assert_equal("done", result.dig("result", "content", 0, "text"))
+    end
+
+    def test_call_tool_returns_normally_when_result_type_is_absent
+      # Regression guard: stable-protocol servers never send `resultType`.
+      transport = mock
+      tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
+      mock_response = {
+        "result" => { "content" => [{ "type" => "text", "text" => "done" }] },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      result = client.call_tool(tool: tool, arguments: {})
+
+      assert_equal("done", result.dig("result", "content", 0, "text"))
+    end
+
+    def test_list_tools_raises_input_required_error_for_input_required_results
+      # The recognition lives in the shared request path, so every client method is covered, not only tools/call.
+      transport = mock
+      mock_response = {
+        "result" => { "resultType" => "input_required", "inputRequests" => {} },
+      }
+
+      transport.expects(:send_request).returns(mock_response).once
+
+      client = Client.new(transport: transport)
+      assert_raises(Client::InputRequiredError) { client.list_tools }
+    end
+
     def test_call_tool_raises_when_no_name_or_tool
       client = Client.new(transport: mock)
 

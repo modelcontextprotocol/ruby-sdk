@@ -16,6 +16,7 @@ module MCP
   autoload :Prompt, "mcp/prompt"
   autoload :Resource, "mcp/resource"
   autoload :ResourceTemplate, "mcp/resource_template"
+  autoload :ResultType, "mcp/result_type"
   autoload :Server, "mcp/server"
   autoload :ServerSession, "mcp/server_session"
   autoload :Tool, "mcp/tool"
