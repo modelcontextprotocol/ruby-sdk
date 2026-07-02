@@ -505,6 +505,80 @@ module MCP
       assert_equal "input_required", response.dig(:result, :resultType)
     end
 
+    test "#handle seals and unseals requestState transparently when request_state_security is set" do
+      security = Server::RequestStateSecurity.new(key: "k" * 32)
+      server = Server.new(name: "mrtr_test", tools: [], request_state_security: security)
+      seen_state = nil
+      server.define_tool(name: "mrtr_tool") do |server_context:|
+        if server_context.request_state
+          seen_state = server_context.request_state
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(request_state: "plain-state")
+        end
+      end
+
+      first = server.handle(modern_request("tools/call", { name: "mrtr_tool", arguments: {} }))
+      sealed = first.dig(:result, :requestState)
+
+      assert sealed.start_with?("v1.")
+      refute_equal "plain-state", sealed
+
+      retry_response = server.handle(modern_request("tools/call", {
+        name: "mrtr_tool",
+        arguments: {},
+        requestState: sealed,
+      }))
+
+      refute_nil retry_response[:result]
+      # The handler reads the plaintext it originally wrote.
+      assert_equal "plain-state", seen_state
+    end
+
+    test "#handle rejects a tampered or cross-call requestState echo with -32602" do
+      security = Server::RequestStateSecurity.new(key: "k" * 32)
+      server = Server.new(name: "mrtr_test", tools: [], request_state_security: security)
+      server.define_tool(name: "mrtr_tool") do |server_context:|
+        if server_context.request_state
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(request_state: "plain-state")
+        end
+      end
+
+      first = server.handle(modern_request("tools/call", { name: "mrtr_tool", arguments: {} }))
+      sealed = first.dig(:result, :requestState)
+
+      tampered = server.handle(modern_request("tools/call", {
+        name: "mrtr_tool",
+        arguments: {},
+        requestState: sealed.sub("v1.", "v1.x"),
+      }))
+      # Different arguments than the sealing call: the digest claim no longer matches.
+      cross_call = server.handle(modern_request("tools/call", {
+        name: "mrtr_tool",
+        arguments: { other: true },
+        requestState: sealed,
+      }))
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, tampered.dig(:error, :code)
+      assert_equal "Invalid or expired requestState", tampered.dig(:error, :message)
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, cross_call.dig(:error, :code)
+    end
+
+    test "#handle passes requestState through untouched without request_state_security" do
+      server = Server.new(name: "mrtr_test", tools: [])
+      seen_state = nil
+      server.define_tool(name: "mrtr_tool") do |server_context:|
+        seen_state = server_context.request_state
+        Tool::Response.new([{ type: "text", text: "done" }])
+      end
+
+      server.handle(modern_request("tools/call", { name: "mrtr_tool", requestState: "raw-state" }))
+
+      assert_equal "raw-state", seen_state
+    end
+
     test "#handle prompts/get serializes an input_required result on a modern request" do
       server = Server.new(name: "mrtr_test")
       server.define_prompt(name: "mrtr_prompt", arguments: []) do |_args, server_context:|
