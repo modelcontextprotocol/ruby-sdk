@@ -149,6 +149,21 @@ module MCP
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
         DEFAULT_LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"].freeze
 
+        # JSON-RPC methods whose target name is mirrored into the `Mcp-Name` header (SEP-2575).
+        NAME_BEARING_METHODS = [Methods::TOOLS_CALL, Methods::RESOURCES_READ, Methods::PROMPTS_GET].freeze
+
+        # JSON-RPC error codes that surface as HTTP 400 on the modern path. `-32601` maps to 404
+        # (disambiguating an unknown method from a legacy HTTP+SSE 404) and everything else, including internal errors,
+        # stays 200, matching the Python SDK's status ladder.
+        MODERN_BAD_REQUEST_CODES = [
+          ErrorCodes::HEADER_MISMATCH,
+          ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+          ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION,
+          JsonRpcHandler::ErrorCode::PARSE_ERROR,
+          JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+          JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+        ].freeze
+
         # Rack app interface. This transport can be mounted as a Rack app.
         def call(env)
           handle_request(Rack::Request.new(env))
@@ -157,6 +172,41 @@ module MCP
         def handle_request(request)
           rebinding_error = validate_dns_rebinding(request)
           return rebinding_error if rebinding_error
+
+          # Header-primary era routing (SEP-2575). An `MCP-Protocol-Version` header naming a version outside
+          # every supported list routes to the sessionless modern path, so an unknown future version receives
+          # the spec-mandated `-32022` with the supported list instead of the legacy path's generic invalid-request error.
+          # Requests without the header, or with a stable-only version, take the existing paths untouched.
+          # An empty header value is malformed rather than a version claim, so it stays on the legacy path
+          # and fails legacy header validation as before.
+          #
+          # 2026-07-28 serves both lifecycles of the dual-era model, so for that header value the version
+          # alone cannot decide the era: an `Mcp-Session-Id` binds the request to an established legacy session
+          # (POST requests, the GET SSE stream, and DELETE termination keep working), and a session-less POST whose
+          # body is `initialize` is the legacy-distinctive handshake. Everything else under a dual-era header is
+          # sessionless modern traffic (`server/discover`, envelope-carrying requests, and envelope-missing requests
+          # that get the modern path's error shape).
+          header_version = request.env["HTTP_MCP_PROTOCOL_VERSION"]
+          if header_version && !header_version.empty? && !stable_only_version?(header_version)
+            unless MCP::Configuration.modern_protocol_version?(header_version)
+              return handle_modern(request, header_version)
+            end
+
+            if extract_session_id(request).nil?
+              return handle_modern(request, header_version) unless request.env["REQUEST_METHOD"] == "POST"
+
+              # The body is readable only once (Rack 3 inputs need not be rewindable), so the era sniff reads it here,
+              # bounded, and hands the string to whichever path serves the request.
+              body_string = read_bounded_body(request)
+              return payload_too_large_response if body_string.nil?
+
+              unless legacy_handshake_body?(body_string)
+                return handle_modern(request, header_version, body_string: body_string)
+              end
+
+              return handle_post(request, body_string: body_string)
+            end
+          end
 
           case request.env["REQUEST_METHOD"]
           when "POST"
@@ -457,7 +507,158 @@ module MCP
           stream.flush
         end
 
-        def handle_post(request)
+        # Serves one request of the stateless modern lifecycle (MCP 2026-07-28, SEP-2575):
+        # a single POST/JSON exchange with no session. The modern path never consults
+        # `@stateless`, `@sessions`, or `@enable_json_response`, and never issues or accepts
+        # an `Mcp-Session-Id`. GET (the legacy listening stream, replaced by `subscriptions/listen`)
+        # and DELETE (session termination) have no modern meaning.
+        def handle_modern(request, header_version, body_string: nil)
+          return method_not_allowed_response unless request.env["REQUEST_METHOD"] == "POST"
+
+          accept_error = validate_accept_header(request, REQUIRED_POST_ACCEPT_TYPES_SSE)
+          return accept_error if accept_error
+
+          content_type_error = validate_content_type(request)
+          return content_type_error if content_type_error
+
+          if body_string.nil?
+            body_string = read_bounded_body(request)
+            return payload_too_large_response if body_string.nil?
+          end
+
+          begin
+            body = parse_request_body(body_string)
+          rescue InvalidJsonError
+            return invalid_json_response
+          end
+
+          unless body.is_a?(Hash)
+            return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
+          end
+
+          # The version check precedes everything else that depends on request content,
+          # so a client probing with an unknown future version always receives the `-32022` signal
+          # (with the supported list to select from) rather than an incidental error.
+          unless MCP::Configuration.modern_protocol_version?(header_version)
+            return json_rpc_error_response(
+              status: 400,
+              code: ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION,
+              message: "Unsupported protocol version",
+              data: {
+                supported: MCP::Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
+                requested: header_version,
+              },
+              id: body[:id],
+            )
+          end
+
+          if extract_session_id(request)
+            return json_rpc_error_response(
+              status: 400,
+              code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+              message: "Bad Request: Mcp-Session-Id is not accepted in the modern lifecycle",
+              id: body[:id],
+            )
+          end
+
+          mismatch_error = validate_modern_headers(request, body, header_version)
+          return mismatch_error if mismatch_error
+
+          response = @server.handle(body, session: modern_session)
+
+          # `nil` covers notifications and cancellation-suppressed responses; ack with 202 like the legacy notification path.
+          return handle_accepted if response.nil?
+
+          [modern_http_status(response), { "content-type" => "application/json" }, [response.to_json]]
+        rescue StandardError => e
+          MCP.configuration.exception_reporter.call(e, { request: body_string })
+          json_rpc_error_response(
+            status: 500,
+            code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+            message: "Internal server error",
+          )
+        end
+
+        # Enforces the SEP-2575 header/body match rules (`-32020`, HTTP 400): the `MCP-Protocol-Version` header
+        # MUST match the `_meta`-carried version, and the `Mcp-Method` / `Mcp-Name` mirror headers MUST match
+        # the body when sent. Absent mirror headers are tolerated for interoperability while other SDK serving stacks
+        # converge on enforcement.
+        def validate_modern_headers(request, body, header_version)
+          params = body[:params]
+          meta_version = params.is_a?(Hash) ? params.dig(:_meta, :"io.modelcontextprotocol/protocolVersion") : nil
+          if meta_version && meta_version != header_version
+            return header_mismatch_response(
+              "MCP-Protocol-Version header value '#{header_version}' does not match body value '#{meta_version}'",
+              body[:id],
+            )
+          end
+
+          method_header = request.env["HTTP_MCP_METHOD"]
+          if method_header && method_header != body[:method]
+            return header_mismatch_response(
+              "Mcp-Method header value '#{method_header}' does not match body value '#{body[:method]}'",
+              body[:id],
+            )
+          end
+
+          name_header = request.env["HTTP_MCP_NAME"]
+          if name_header && NAME_BEARING_METHODS.include?(body[:method])
+            body_name = params.is_a?(Hash) ? params[:name] || params[:uri] : nil
+            decoded_name = decode_header_value(name_header)
+            if body_name && decoded_name != body_name
+              return header_mismatch_response(
+                "Mcp-Name header value '#{decoded_name}' does not match body value '#{body_name}'",
+                body[:id],
+              )
+            end
+          end
+
+          nil
+        end
+
+        def header_mismatch_response(message, id)
+          json_rpc_error_response(
+            status: 400,
+            code: ErrorCodes::HEADER_MISMATCH,
+            message: "Header mismatch: #{message}",
+            id: id,
+          )
+        end
+
+        # Mirrors `MCP::Client::HTTP#encode_header_value`: a value wrapped as `=?base64?<base64>?=` decodes to
+        # its original UTF-8 string; anything else is taken verbatim. Duplicated here because the client transport
+        # requires faraday, which servers do not depend on.
+        def decode_header_value(value)
+          match = value.match(/\A=\?base64\?(.*)\?=\z/m)
+          return value unless match
+
+          match[1].unpack1("m0").force_encoding(Encoding::UTF_8)
+        rescue ArgumentError
+          value
+        end
+
+        # Each modern request is self-contained: handlers run against an ephemeral per-request `ServerSession` locked to
+        # the modern era. The session carries a fresh unregistered `session_id` so notification and server-initiated-request plumbing
+        # keyed by session lookup degrades gracefully (delivery returns `false`) instead of broadcasting to unrelated legacy sessions
+        # via the `session_id.nil?` branch.
+        def modern_session
+          ServerSession.new(server: @server, transport: self, session_id: SecureRandom.uuid, era: :modern)
+        end
+
+        def modern_http_status(response)
+          error_code = response.is_a?(Hash) ? response.dig(:error, :code) : nil
+          if error_code.nil?
+            200
+          elsif error_code == JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND
+            404
+          elsif MODERN_BAD_REQUEST_CODES.include?(error_code)
+            400
+          else
+            200
+          end
+        end
+
+        def handle_post(request, body_string: nil)
           required_types = @enable_json_response ? REQUIRED_POST_ACCEPT_TYPES_JSON : REQUIRED_POST_ACCEPT_TYPES_SSE
           accept_error = validate_accept_header(request, required_types)
           return accept_error if accept_error
@@ -465,8 +666,10 @@ module MCP
           content_type_error = validate_content_type(request)
           return content_type_error if content_type_error
 
-          body_string = read_bounded_body(request)
-          return payload_too_large_response if body_string.nil?
+          if body_string.nil?
+            body_string = read_bounded_body(request)
+            return payload_too_large_response if body_string.nil?
+          end
 
           session_id = extract_session_id(request)
 
@@ -481,6 +684,28 @@ module MCP
           # a malformed Rack response.
           unless body.is_a?(Hash)
             return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
+          end
+
+          # Header-primary routing sends sessionless modern traffic to `handle_modern` before this method runs,
+          # so a body carrying the modern `_meta` triple (SEP-2575) arrives here in two shapes only.
+          # Bound to a session under a dual-era header (2026-07-28), it is a lifecycle violation: the session
+          # already negotiated the legacy lifecycle via `initialize`, and a connection can never change eras
+          # (mirroring the stdio era lock). Otherwise the header is missing or names a stable-only version,
+          # which violates the header/body match requirement and would fall through the legacy path via
+          # the header default; reject that as a header mismatch.
+          if RequestEnvelope.modern?(body[:params])
+            header_version = request.env["HTTP_MCP_PROTOCOL_VERSION"]
+            if header_version && MCP::Configuration.modern_protocol_version?(header_version)
+              return invalid_request_response(
+                "Invalid Request: the session already negotiated the legacy lifecycle via `initialize`",
+                request_id: body[:id],
+              )
+            end
+
+            return header_mismatch_response(
+              "MCP-Protocol-Version header is missing or legacy while the body carries the modern _meta envelope",
+              body[:id],
+            )
           end
 
           # The `MCP-Protocol-Version` header is only meaningful after negotiation, so on `initialize`
@@ -748,6 +973,21 @@ module MCP
           body.is_a?(Hash) && body[:method] == Methods::SERVER_DISCOVER
         end
 
+        # A version negotiable only through the legacy handshake, with no modern meaning.
+        # Dual-era versions (2026-07-28) appear in both lists and need further disambiguation.
+        def stable_only_version?(version)
+          MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(version) &&
+            !MCP::Configuration.modern_protocol_version?(version)
+        end
+
+        # Era sniff for a sessionless POST under a dual-era header version: only an `initialize` body is legacy-distinctive.
+        #  Unparsable or non-object bodies go to the modern path, whose error responses cover them.
+        def legacy_handshake_body?(body_string)
+          initialize_request?(parse_request_body(body_string))
+        rescue InvalidJsonError
+          false
+        end
+
         def validate_protocol_version_header(request)
           header_value = request.env["HTTP_MCP_PROTOCOL_VERSION"] || MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
           return if MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(header_value)
@@ -760,8 +1000,10 @@ module MCP
           )
         end
 
-        def json_rpc_error_response(status:, code:, message:)
-          body = { jsonrpc: "2.0", id: nil, error: { code: code, message: message } }
+        def json_rpc_error_response(status:, code:, message:, data: nil, id: nil)
+          error = { code: code, message: message }
+          error[:data] = data if data
+          body = { jsonrpc: "2.0", id: id, error: error }
           [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 

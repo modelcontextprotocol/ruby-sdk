@@ -369,7 +369,7 @@ module MCP
           response = @transport.handle_request(request)
 
           assert_equal 202, response[0]
-          refute response[1].key?("Mcp-Session-Id"), "no session id should leak from an id-less init"
+          refute response[1].key?("mcp-session-id"), "no session id should leak from an id-less init"
           assert_equal [], response[2]
           assert_equal({}, @transport.instance_variable_get(:@sessions))
         end
@@ -661,7 +661,7 @@ module MCP
           assert_equal 200, response[0]
           body = JSON.parse(response[2][0])
           assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
-          refute response[1].key?("Mcp-Session-Id")
+          refute response[1].key?("mcp-session-id")
         end
 
         test "allows server/discover POST without session ID in stateless mode" do
@@ -1840,7 +1840,26 @@ module MCP
           assert_equal "text/event-stream", response[1]["content-type"]
         end
 
-        test "POST initialize request ignores MCP-Protocol-Version header" do
+        test "POST initialize request ignores MCP-Protocol-Version header among legacy versions" do
+          # Per SEP-2575 header-primary routing, stable-only header values stay on the legacy path
+          # where `initialize` treats the body `params.protocolVersion` as authoritative.
+          # An unknown header value routes to the modern path (see the test below), and under
+          # the dual-era 2026-07-28 header a sessionless `initialize` stays legacy as well.
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_PROTOCOL_VERSION" => "2024-11-05",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
+        test "POST initialize request with a non-legacy MCP-Protocol-Version header is rejected as modern traffic" do
           request = create_rack_request(
             "POST",
             "/",
@@ -1852,7 +1871,10 @@ module MCP
           )
 
           response = @transport.handle_request(request)
-          assert_equal 200, response[0]
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32022, body.dig("error", "code"))
+          assert_equal "1900-01-01", body.dig("error", "data", "requested")
         end
 
         test "POST initialize request negotiates body protocolVersion when header is an older supported version" do
@@ -1932,12 +1954,13 @@ module MCP
           assert_equal 400, response[0]
           assert_equal({ "content-type" => "application/json" }, response[1])
 
+          # Per SEP-2575 header-primary routing, a non-legacy version is modern traffic and
+          # receives `-32022` with the supported list instead of the legacy `-32600` message.
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
-          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
-          assert_includes body["error"]["message"], "1999-01-01"
-          assert_includes body["error"]["message"], Configuration::LATEST_STABLE_PROTOCOL_VERSION
+          assert_equal(-32022, body["error"]["code"])
+          assert_equal "1999-01-01", body.dig("error", "data", "requested")
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("error", "data", "supported")
         end
 
         test "POST request with malformed MCP-Protocol-Version returns 400" do
@@ -1965,7 +1988,8 @@ module MCP
           assert_equal 400, response[0]
 
           body = JSON.parse(response[2][0])
-          assert_includes body["error"]["message"], "not-a-version"
+          assert_equal(-32022, body["error"]["code"])
+          assert_equal "not-a-version", body.dig("error", "data", "requested")
         end
 
         test "POST request with supported MCP-Protocol-Version succeeds" do
@@ -2056,10 +2080,10 @@ module MCP
           )
 
           response = @transport.send(:validate_protocol_version_header, request)
-          assert_equal 400, response[0]
+          assert_equal(400, response[0])
 
           body = JSON.parse(response[2][0])
-          assert_includes body["error"]["message"], MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
+          assert_includes(body["error"]["message"], MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION)
         ensure
           MCP::Configuration.send(:remove_const, :SUPPORTED_STABLE_PROTOCOL_VERSIONS)
           MCP::Configuration.const_set(:SUPPORTED_STABLE_PROTOCOL_VERSIONS, original_versions)
@@ -2121,7 +2145,9 @@ module MCP
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
         end
 
-        test "GET request with unsupported MCP-Protocol-Version returns 400" do
+        test "GET request with a non-legacy MCP-Protocol-Version returns 405" do
+          # Per SEP-2575 header-primary routing, a non-legacy version is modern traffic,
+          # and the modern lifecycle removed the GET listening stream.
           init_request = create_rack_request(
             "POST",
             "/",
@@ -2141,10 +2167,7 @@ module MCP
           )
 
           response = @transport.handle_request(request)
-          assert_equal 400, response[0]
-
-          body = JSON.parse(response[2][0])
-          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal 405, response[0]
         end
 
         test "GET request without MCP-Protocol-Version header succeeds" do
@@ -2167,7 +2190,9 @@ module MCP
           assert_equal 200, response[0]
         end
 
-        test "DELETE request with unsupported MCP-Protocol-Version returns 400" do
+        test "DELETE request with a non-legacy MCP-Protocol-Version returns 405" do
+          # Per SEP-2575 header-primary routing, a non-legacy version is modern traffic,
+          # and the modern lifecycle has no DELETE (there is no session to terminate).
           init_request = create_rack_request(
             "POST",
             "/",
@@ -2187,13 +2212,10 @@ module MCP
           )
 
           response = @transport.handle_request(request)
-          assert_equal 400, response[0]
-
-          body = JSON.parse(response[2][0])
-          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+          assert_equal 405, response[0]
         end
 
-        test "DELETE request with unsupported MCP-Protocol-Version returns 400 in stateless mode" do
+        test "DELETE request with a non-legacy MCP-Protocol-Version returns 405 in stateless mode" do
           stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
 
           request = create_rack_request(
@@ -2203,10 +2225,11 @@ module MCP
           )
 
           response = stateless_transport.handle_request(request)
-          assert_equal 400, response[0]
+          assert_equal 405, response[0]
         end
 
-        test "DELETE request validates session before MCP-Protocol-Version" do
+        test "DELETE request with an unknown session and a non-legacy MCP-Protocol-Version returns 405" do
+          # Header-primary routing (SEP-2575) decides the era before any session validation.
           request = create_rack_request(
             "DELETE",
             "/",
@@ -2217,7 +2240,7 @@ module MCP
           )
 
           response = @transport.handle_request(request)
-          assert_equal 404, response[0]
+          assert_equal 405, response[0]
         end
 
         test "stateless mode allows requests without session IDs, responding with no session ID" do
@@ -5268,6 +5291,245 @@ module MCP
           transport.close
         end
 
+        test "modern POST serves a single sessionless JSON exchange" do
+          @server.define_tool(name: "echo_tool") do
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("tools/call", { name: "echo_tool", arguments: {} }),
+            headers: { "HTTP_MCP_METHOD" => "tools/call", "HTTP_MCP_NAME" => "echo_tool" },
+          ))
+
+          assert_equal 200, response[0]
+          refute response[1].key?("mcp-session-id")
+          body = JSON.parse(response[2][0])
+          assert_equal "ok", body.dig("result", "content", 0, "text")
+        end
+
+        test "modern POST with an unsupported header version returns 400 with -32022 and the supported list" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}, version: "2027-01-01"),
+            version: "2027-01-01",
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32022, body.dig("error", "code"))
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("error", "data", "supported")
+          assert_equal "2027-01-01", body.dig("error", "data", "requested")
+        end
+
+        test "modern POST with a header/body version mismatch returns 400 with -32020" do
+          # Header names the supported modern version; the body envelope claims another.
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}, version: "2027-01-01"),
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST with an Mcp-Method header mismatch returns 400 with -32020" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}),
+            headers: { "HTTP_MCP_METHOD" => "tools/call" },
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST decodes the base64 Mcp-Name sentinel and enforces the match" do
+          # `Mcp-Name` mirrors `params.uri` for `resources/read`; a non-ASCII value arrives
+          # wrapped in the `=?base64?...?=` sentinel produced by `MCP::Client::HTTP`.
+          uri = "file:///日本語.txt"
+          encoded = "=?base64?#{[uri].pack("m0")}?="
+
+          matched = @transport.handle_request(modern_rack_request(
+            modern_body("resources/read", { uri: uri }),
+            headers: { "HTTP_MCP_NAME" => encoded },
+          ))
+          mismatched = @transport.handle_request(modern_rack_request(
+            modern_body("resources/read", { uri: "file:///other.txt" }),
+            headers: { "HTTP_MCP_NAME" => encoded },
+          ))
+
+          assert_equal 200, matched[0]
+          assert_equal 400, mismatched[0]
+          assert_equal(-32020, JSON.parse(mismatched[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST rejects an Mcp-Session-Id header" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}),
+            headers: { "HTTP_MCP_SESSION_ID" => "some-session" },
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32600, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern GET and DELETE are not allowed" do
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28" },
+          )
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28" },
+          )
+
+          assert_equal 405, @transport.handle_request(get_request)[0]
+          assert_equal 405, @transport.handle_request(delete_request)[0]
+        end
+
+        test "modern POST maps an unknown method to 404 with -32601" do
+          response = @transport.handle_request(modern_rack_request(modern_body("no/such_method", {})))
+
+          assert_equal 404, response[0]
+          assert_equal(-32601, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST requires the _meta envelope" do
+          response = @transport.handle_request(modern_rack_request(
+            { jsonrpc: "2.0", method: "ping", id: 1 }.to_json,
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32600, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST maps a missing client capability to 400 with -32021" do
+          @server.define_tool(name: "guarded_tool") do |server_context:|
+            server_context.require_client_capability!(:elicitation, :form)
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("tools/call", { name: "guarded_tool", arguments: {} }),
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32021, body.dig("error", "code"))
+          assert_equal({ "elicitation" => { "form" => {} } }, body.dig("error", "data", "requiredCapabilities"))
+        end
+
+        test "modern POST serves server/discover without an envelope" do
+          response = @transport.handle_request(modern_rack_request(
+            { jsonrpc: "2.0", method: "server/discover", id: 1 }.to_json,
+          ))
+
+          assert_equal 200, response[0]
+          refute response[1].key?("mcp-session-id")
+          body = JSON.parse(response[2][0])
+          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+        end
+
+        test "legacy POST rejects a modern envelope body without the modern header as -32020" do
+          # Without header-primary routing evidence, the body-level triple would silently fall through
+          # the legacy path via the header default.
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            modern_body("ping", {}),
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "sessionless POST initialize with the dual-era header stays legacy and negotiates 2026-07-28" do
+          # The 2026-07-28 header alone cannot route the era: a sessionless `initialize` body is
+          # the legacy-distinctive handshake, so a client sending both connects over the legacy lifecycle.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params(protocolVersion: "2026-07-28") }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          refute_nil response[1]["mcp-session-id"]
+          assert_equal "2026-07-28", JSON.parse(response[2][0]).dig("result", "protocolVersion")
+        end
+
+        test "session-bound POST with the dual-era header stays on the legacy path" do
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28",
+            },
+            { jsonrpc: "2.0", method: "tools/list", id: "list" }.to_json,
+          ))
+
+          assert_equal 200, response[0]
+        end
+
+        test "session-bound DELETE with the dual-era header terminates the legacy session" do
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "DELETE",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28",
+            },
+          ))
+
+          assert_equal 200, response[0]
+        end
+
+        test "session-bound POST with the dual-era header carrying the modern envelope is rejected as -32600" do
+          # The session already negotiated the legacy lifecycle, and a connection can never change eras
+          # (mirroring the stdio era lock).
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28",
+            },
+            modern_body("ping", {}),
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32600, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "legacy lifecycle"
+        end
+
+        test "modern POST larger than max_request_bytes returns 413" do
+          transport = StreamableHTTPTransport.new(@server, max_request_bytes: 64)
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28" },
+            modern_body("ping", { filler: "A" * 200 }),
+          )
+
+          response = transport.handle_request(request)
+          assert_equal(413, response[0])
+        ensure
+          transport.close
+        end
+
         private
 
         def initialize_test_session(id: "init")
@@ -5335,6 +5597,32 @@ module MCP
           }.merge(headers)
 
           Rack::Request.new(env)
+        end
+
+        # Builds a POST request routed to the modern path via the `MCP-Protocol-Version` header.
+        def modern_rack_request(body, version: "2026-07-28", headers: {})
+          create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => version }.merge(headers),
+            body,
+          )
+        end
+
+        # Builds a JSON-RPC body carrying the SEP-2575 modern `_meta` envelope.
+        def modern_body(method, params, version: "2026-07-28", capabilities: {})
+          {
+            jsonrpc: "2.0",
+            method: method,
+            id: 1,
+            params: params.merge(
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": version,
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": capabilities,
+              },
+            ),
+          }.to_json
         end
       end
     end
