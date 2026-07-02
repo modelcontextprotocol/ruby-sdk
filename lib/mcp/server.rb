@@ -102,8 +102,11 @@ module MCP
     include Instrumentation
     include Pagination
 
+    # Allowed values for the SEP-2549 `cacheScope` cache hint.
+    CACHE_SCOPES = ["public", "private"].freeze
+
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :page_size, :client_capabilities
+    attr_reader :page_size, :client_capabilities, :ttl_ms, :cache_scope
 
     def initialize(
       description: nil,
@@ -121,6 +124,8 @@ module MCP
       configuration: nil,
       capabilities: nil,
       page_size: nil,
+      ttl_ms: nil,
+      cache_scope: nil,
       transport: nil
     )
       @description = description
@@ -138,6 +143,8 @@ module MCP
       @resource_index = index_resources_by_uri(resources)
       @server_context = server_context
       self.page_size = page_size
+      self.ttl_ms = ttl_ms
+      self.cache_scope = cache_scope
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
 
@@ -230,6 +237,27 @@ module MCP
       end
 
       @page_size = page_size
+    end
+
+    # SEP-2549 cache hint: freshness lifetime in milliseconds for list and read results
+    # (max-age semantics; 0 means do not cache). Emission is opt-in: when both `ttl_ms`
+    # and `cache_scope` are nil, results are serialized exactly as before.
+    def ttl_ms=(ttl_ms)
+      unless ttl_ms.nil? || (ttl_ms.is_a?(Integer) && ttl_ms >= 0)
+        raise ArgumentError, "ttl_ms must be nil or a non-negative integer"
+      end
+
+      @ttl_ms = ttl_ms
+    end
+
+    # SEP-2549 cache hint: whether shared intermediaries may cache the result ("public")
+    # or only the requesting client ("private").
+    def cache_scope=(cache_scope)
+      unless cache_scope.nil? || CACHE_SCOPES.include?(cache_scope)
+        raise ArgumentError, "cache_scope must be nil, \"public\", or \"private\""
+      end
+
+      @cache_scope = cache_scope
     end
 
     def notify_tools_list_changed
@@ -472,7 +500,7 @@ module MCP
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
-            { contents: read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation) }
+            build_read_resource_result(read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation))
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
             dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation)
             {}
@@ -611,7 +639,7 @@ module MCP
     def list_tools(request)
       page = paginate(@tools.values, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
-      { tools: page[:items], nextCursor: page[:next_cursor] }.compact
+      apply_cache_metadata({ tools: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
     def call_tool(request, session: nil, related_request_id: nil, cancellation: nil)
@@ -667,7 +695,7 @@ module MCP
     def list_prompts(request)
       page = paginate(@prompts.values, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
-      { prompts: page[:items], nextCursor: page[:next_cursor] }.compact
+      apply_cache_metadata({ prompts: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
     def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil)
@@ -696,7 +724,7 @@ module MCP
     def list_resources(request)
       page = paginate(@resources, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
-      { resources: page[:items], nextCursor: page[:next_cursor] }.compact
+      apply_cache_metadata({ resources: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
     # Server implementation should set `resources_read_handler` to override no-op default
@@ -708,7 +736,32 @@ module MCP
     def list_resource_templates(request)
       page = paginate(@resource_templates, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
-      { resourceTemplates: page[:items], nextCursor: page[:next_cursor] }.compact
+      apply_cache_metadata({ resourceTemplates: page[:items], nextCursor: page[:next_cursor] }.compact)
+    end
+
+    # Builds the `resources/read` result. The documented handler contract is "return value becomes `contents`";
+    # a Hash with a `:contents` key is also accepted as a full result so a handler can override the server-level
+    # `ttlMs`/`cacheScope` cache hints per result (SEP-2549).
+    def build_read_resource_result(handler_result)
+      result = if handler_result.is_a?(Hash) && handler_result.key?(:contents)
+        handler_result
+      else
+        { contents: handler_result }
+      end
+
+      apply_cache_metadata(result)
+    end
+
+    # Adds the SEP-2549 cache hints (`ttlMs`, `cacheScope`) to a result. Emission is opt-in: nothing is added
+    # unless the server was configured with `ttl_ms`/`cache_scope` or the result already carries one of the fields, in
+    # which case the missing one is filled with the spec defaults (`ttlMs: 0` = do not cache, `cacheScope: "public"`).
+    # Values already in the result win, enabling per-result overrides.
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2549
+    def apply_cache_metadata(result)
+      explicit = result.key?(:ttlMs) || result.key?(:cacheScope)
+      return result if @ttl_ms.nil? && @cache_scope.nil? && !explicit
+
+      { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "public" }.merge(result)
     end
 
     def complete(params, session: nil, related_request_id: nil, cancellation: nil)
