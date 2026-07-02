@@ -55,9 +55,9 @@ $ ruby examples/http_server.rb
 The server will start on `http://localhost:9292` and provide:
 
 - **Tools**:
-  - `ExampleTool` - adds two numbers
+  - `example_tool` - adds two numbers
   - `echo` - echoes back messages
-- **Prompts**: `ExamplePrompt` - echoes back arguments as a prompt
+- **Prompts**: `example_prompt` - echoes back arguments as a prompt
 - **Resources**: `test_resource` - returns example content
 
 ### 4. HTTP Client Example (`http_client.rb`)
@@ -98,7 +98,7 @@ A specialized HTTP server designed to test and demonstrate Server-Sent Events (S
 
 **Available Tools:**
 
-- `NotificationTool` - Send custom SSE notifications with optional delays
+- `notification_tool` - Send custom SSE notifications with optional delays
 - `echo` - Simple echo tool for basic testing
 
 **Usage:**
@@ -237,5 +237,5 @@ Call a tool:
 ```console
 curl -i http://localhost:9292 \
   -H "Mcp-Session-Id: YOUR_SESSION_ID" \
-  --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"ExampleTool","arguments":{"a":5,"b":3}}}'
+  --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"example_tool","arguments":{"a":5,"b":3}}}'
 ```
