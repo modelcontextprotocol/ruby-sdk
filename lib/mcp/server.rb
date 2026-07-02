@@ -615,23 +615,32 @@ module MCP
     # Lifts the SEP-2575 per-request `_meta` envelope for modern requests. Only a request whose `_meta` carries
     # the full required triple is classified as modern; a partial triple keeps flowing through the legacy path untouched.
     # Notifications carry no envelope (their `_meta` is a `NotificationMetaObject`), and `server/discover` is
-    # pre-version discovery, so both are exempt. On a session already era-locked to modern, `initialize` is
-    # rejected with `-32022` (the modern lifecycle has no handshake) and the triple becomes required for
-    # every other request.
+    # pre-version discovery, so both are exempt. Era-locked sessions additionally enforce the dual-era rules:
+    # on a modern session, `initialize` is rejected with `-32022` (the modern lifecycle has no handshake)
+    # and the triple becomes required for every other request; on a legacy session, a modern envelope is rejected as
+    # an invalid request because a connection can never change eras.
     def lift_request_envelope(params, method:, session:)
       return if Methods.notification?(method)
       return if method == Methods::SERVER_DISCOVER
 
-      modern_session = session.respond_to?(:era) && session.era == :modern
+      era = session.respond_to?(:era) ? session.era : nil
 
-      if modern_session && method == Methods::INITIALIZE
+      if era == :modern && method == Methods::INITIALIZE
         requested = params.is_a?(Hash) ? params[:protocolVersion] || params["protocolVersion"] : nil
         raise UnsupportedProtocolVersionError.new(requested, params)
       end
 
       if RequestEnvelope.modern?(params)
+        if era == :legacy
+          raise RequestHandlerError.new(
+            "Invalid Request: the session already negotiated the legacy lifecycle via `initialize`",
+            params,
+            error_type: :invalid_request,
+          )
+        end
+
         RequestEnvelope.parse!(params, request: params)
-      elsif modern_session
+      elsif era == :modern
         raise RequestHandlerError.new(
           "Invalid Request: modern sessions require the SEP-2575 `_meta` envelope",
           params,
