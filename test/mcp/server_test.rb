@@ -197,6 +197,17 @@ module MCP
       assert_equal "unknown", error.error_data[:requested]
     end
 
+    test "UnsupportedProtocolVersionError accepts a symbol-keyed request Hash on every Ruby version" do
+      # On Ruby 2.7, a keyword parameter in `initialize` would make the trailing symbol-keyed Hash split
+      # into keywords and raise an ArgumentError.
+      request = { name: "echo", arguments: {}, _meta: {} }
+
+      error = Server::UnsupportedProtocolVersionError.new("1900-01-01", request)
+
+      assert_equal "1900-01-01", error.error_data[:requested]
+      assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, error.error_data[:supported]
+    end
+
     test "MissingRequiredClientCapabilityError surfaces as -32021 with the SEP-2575 data shape" do
       server = Server.new(name: "error_test", tools: [TestTool])
       server.define_tool(name: "missing_capability_tool") do
@@ -213,6 +224,152 @@ module MCP
       assert_equal ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY, response.dig(:error, :code)
       assert_equal "Missing required client capability", response.dig(:error, :message)
       assert_equal({ elicitation: {} }, response.dig(:error, :data, :requiredCapabilities))
+    end
+
+    test "#handle tools/call with a modern envelope exposes per-request client data without touching the session" do
+      server = Server.new(name: "modern_test", tools: [])
+      received = nil
+      server.define_tool(name: "modern_tool") do |server_context:|
+        received = {
+          modern: server_context.modern?,
+          client_info: server_context.client_info,
+          client_capabilities: server_context.client_capabilities,
+          protocol_version: server_context.protocol_version,
+        }
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      session = ServerSession.new(server: server, transport: mock)
+
+      response = server.handle(
+        modern_request("tools/call", { name: "modern_tool", arguments: {} }, capabilities: { elicitation: {} }),
+        session: session,
+      )
+
+      refute_nil response[:result]
+      assert received[:modern]
+      assert_equal({ name: "modern_client", version: "2.0" }, received[:client_info])
+      assert_equal({ elicitation: {} }, received[:client_capabilities])
+      assert_equal "2026-07-28", received[:protocol_version]
+      # Per SEP-2575, servers MUST NOT infer client state from prior requests, so nothing is stored.
+      assert_nil session.client
+      refute_predicate session, :initialized?
+    end
+
+    test "#handle tools/call with an unsupported envelope version returns -32022" do
+      server = Server.new(name: "modern_test", tools: [])
+      called = false
+      server.define_tool(name: "modern_tool") do
+        called = true
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      response = server.handle(modern_request("tools/call", { name: "modern_tool" }, version: "2027-01-01"))
+
+      refute called
+      assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, response.dig(:error, :code)
+      assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, response.dig(:error, :data, :supported)
+      assert_equal "2027-01-01", response.dig(:error, :data, :requested)
+    end
+
+    test "#handle treats a partial modern triple as a legacy request" do
+      server = Server.new(name: "modern_test", tools: [])
+      received_context = nil
+      server.define_tool(name: "modern_tool") do |server_context:|
+        received_context = server_context
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "modern_tool",
+          arguments: {},
+          _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+        },
+      })
+
+      refute_nil response[:result]
+      refute_predicate received_context, :modern?
+    end
+
+    test "#handle requires the envelope for requests on a modern-locked session" do
+      server = Server.new(name: "modern_test", tools: [])
+      server.define_tool(name: "modern_tool") { Tool::Response.new([{ type: "text", text: "ok" }]) }
+      session = ServerSession.new(server: server, transport: mock, era: :modern)
+
+      response = server.handle(
+        { jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "modern_tool" } },
+        session: session,
+      )
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, response.dig(:error, :code)
+    end
+
+    test "#handle rejects initialize on a modern-locked session with -32022" do
+      session = ServerSession.new(server: @server, transport: mock, era: :modern)
+
+      response = @server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { protocolVersion: "2025-11-25", clientInfo: { name: "c", version: "1" } },
+        },
+        session: session,
+      )
+
+      assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, response.dig(:error, :code)
+      assert_equal "2025-11-25", response.dig(:error, :data, :requested)
+    end
+
+    test "#handle server/discover succeeds without an envelope on a modern-locked session" do
+      session = ServerSession.new(server: @server, transport: mock, era: :modern)
+
+      response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 }, session: session)
+
+      refute_nil response[:result]
+    end
+
+    test "#handle tools/call enforces require_client_capability! from the envelope" do
+      server = Server.new(name: "modern_test", tools: [])
+      server.define_tool(name: "guarded_tool") do |server_context:|
+        server_context.require_client_capability!(:elicitation, :form)
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      declared = server.handle(
+        modern_request("tools/call", { name: "guarded_tool" }, capabilities: { elicitation: { form: {} } }),
+      )
+      undeclared = server.handle(modern_request("tools/call", { name: "guarded_tool" }))
+
+      refute_nil declared[:result]
+      assert_equal ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY, undeclared.dig(:error, :code)
+      assert_equal(
+        { elicitation: { form: {} } },
+        undeclared.dig(:error, :data, :requiredCapabilities),
+      )
+    end
+
+    test "ServerSession locks the legacy era on mark_initialized! and refuses to flip eras" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      assert_nil session.era
+      session.mark_initialized!
+      assert_equal :legacy, session.era
+
+      session.lock_era!(:legacy)
+      assert_equal :legacy, session.era
+      assert_raises(RuntimeError) { session.lock_era!(:modern) }
+    end
+
+    test "ServerSession accepts a preset era and validates era values" do
+      session = ServerSession.new(server: @server, transport: mock, era: :modern)
+
+      assert_equal :modern, session.era
+      assert_raises(ArgumentError) { ServerSession.new(server: @server, transport: mock, era: :future) }
+      assert_raises(ArgumentError) { session.lock_era!(:future) }
     end
 
     test "#handle initialize request returns protocol info, server info, and capabilities" do
@@ -3725,6 +3882,24 @@ module MCP
       })
 
       refute Apps.client_supports?(server.client_capabilities)
+    end
+
+    private
+
+    # Builds a request carrying the SEP-2575 modern `_meta` envelope.
+    def modern_request(method, params, version: "2026-07-28", capabilities: {})
+      {
+        jsonrpc: "2.0",
+        method: method,
+        id: 1,
+        params: params.merge(
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+            "io.modelcontextprotocol/clientCapabilities": capabilities,
+          },
+        ),
+      }
     end
   end
 end

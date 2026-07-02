@@ -311,6 +311,71 @@ module MCP
       assert_nothing_raised { server_context.notify_log_message(data: "test", level: "info") }
     end
 
+    test "ServerContext#notify_log_message drops messages on modern requests without a logLevel" do
+      # Per SEP-2575, without `io.modelcontextprotocol/logLevel` in `_meta`, the server MUST NOT send
+      # any `notifications/message` for the request.
+      notification_target = mock
+      notification_target.expects(:notify_log_message).never
+      server_context = build_modern_server_context(notification_target, log_level: nil)
+
+      server_context.notify_log_message(data: "test", level: "error")
+    end
+
+    test "ServerContext#notify_log_message drops messages below the modern request logLevel" do
+      notification_target = mock
+      notification_target.expects(:notify_log_message).never
+      server_context = build_modern_server_context(notification_target, log_level: "error")
+
+      server_context.notify_log_message(data: "test", level: "info")
+    end
+
+    test "ServerContext#notify_log_message delegates messages at or above the modern request logLevel" do
+      notification_target = mock
+      notification_target.expects(:notify_log_message).with(
+        data: "test", level: "error", logger: nil, related_request_id: nil,
+      ).once
+      server_context = build_modern_server_context(notification_target, log_level: "warning")
+
+      server_context.notify_log_message(data: "test", level: "error")
+    end
+
+    test "ServerContext exposes envelope data and falls back to the session on legacy requests" do
+      notification_target = mock
+      notification_target.stubs(:client).returns({ name: "legacy_client", version: "1.0" })
+      notification_target.stubs(:client_capabilities).returns({ roots: {} })
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+
+      legacy_context = ServerContext.new(nil, progress: progress, notification_target: notification_target)
+      modern_context = build_modern_server_context(notification_target)
+
+      refute_predicate legacy_context, :modern?
+      assert_equal({ name: "legacy_client", version: "1.0" }, legacy_context.client_info)
+      assert_equal({ roots: {} }, legacy_context.client_capabilities)
+      assert_nil legacy_context.protocol_version
+
+      assert_predicate modern_context, :modern?
+      assert_equal({ name: "modern_client", version: "2.0" }, modern_context.client_info)
+      assert_equal({ elicitation: { form: {} } }, modern_context.client_capabilities)
+      assert_equal "2026-07-28", modern_context.protocol_version
+    end
+
+    test "ServerContext#require_client_capability! matches string-keyed capabilities and requires a path" do
+      envelope = RequestEnvelope.new(
+        protocol_version: "2026-07-28",
+        client_info: { name: "c", version: "1" },
+        client_capabilities: { "elicitation" => { "form" => {} } },
+      )
+      progress = Progress.new(notification_target: nil, progress_token: nil)
+      server_context = ServerContext.new(nil, progress: progress, notification_target: nil, envelope: envelope)
+
+      assert_nothing_raised { server_context.require_client_capability!(:elicitation, :form) }
+      assert_raises(ArgumentError) { server_context.require_client_capability! }
+      error = assert_raises(Server::MissingRequiredClientCapabilityError) do
+        server_context.require_client_capability!(:sampling)
+      end
+      assert_equal({ requiredCapabilities: { sampling: {} } }, error.error_data)
+    end
+
     test "ServerContext#notify_resources_updated delegates to notification_target" do
       notification_target = mock
       notification_target.expects(:notify_resources_updated).with(uri: "test://resource-1").once
@@ -999,6 +1064,19 @@ module MCP
       assert response[:result]
       assert_equal "User: prompt_user, Trace: trace_xyz789, Message: World",
         response[:result][:messages][0][:content][:text]
+    end
+
+    private
+
+    def build_modern_server_context(notification_target, log_level: nil)
+      envelope = RequestEnvelope.new(
+        protocol_version: "2026-07-28",
+        client_info: { name: "modern_client", version: "2.0" },
+        client_capabilities: { elicitation: { form: {} } },
+        log_level: log_level,
+      )
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      ServerContext.new(nil, progress: progress, notification_target: notification_target, envelope: envelope)
     end
   end
 end
