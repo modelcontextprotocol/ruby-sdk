@@ -551,6 +551,41 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "allows server/discover POST without session ID in stateful mode" do
+          # Per SEP-2575, `server/discover` is sessionless capability discovery and is exempt
+          # from the session requirement, like `initialize`.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "server/discover", id: "1" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+          refute response[1].key?("Mcp-Session-Id")
+        end
+
+        test "allows server/discover POST without session ID in stateless mode" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "server/discover", id: "1" }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+        end
+
         test "rejects duplicate SSE connection with 409" do
           # Create a session
           init_request = create_rack_request(

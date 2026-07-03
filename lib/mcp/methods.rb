@@ -5,6 +5,8 @@ module MCP
     INITIALIZE = "initialize"
     PING = "ping"
     LOGGING_SET_LEVEL = "logging/setLevel"
+    # Sessionless capability discovery (MCP 2026-07-28 draft, SEP-2575).
+    SERVER_DISCOVER = "server/discover"
 
     PROMPTS_GET = "prompts/get"
     PROMPTS_LIST = "prompts/list"
@@ -81,7 +83,7 @@ module MCP
           require_capability!(method, capabilities, :sampling)
         when ELICITATION_CREATE
           require_capability!(method, capabilities, :elicitation)
-        when INITIALIZE, PING, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_ROOTS_LIST_CHANGED,
+        when INITIALIZE, PING, SERVER_DISCOVER, NOTIFICATIONS_INITIALIZED, NOTIFICATIONS_ROOTS_LIST_CHANGED,
              NOTIFICATIONS_PROGRESS, NOTIFICATIONS_CANCELLED, NOTIFICATIONS_ELICITATION_COMPLETE
           # No specific capability required.
         end

@@ -46,6 +46,8 @@ It implements the Model Context Protocol specification, handling model context r
 ### Supported Methods
 
 - `initialize` - Initializes the protocol and returns server capabilities
+- `server/discover` - Sessionless capability discovery (MCP 2026-07-28 draft, SEP-2575): returns `supportedVersions`, `capabilities`, `serverInfo`,
+  and `instructions`, and responds before `initialize` and without an `Mcp-Session-Id`
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas

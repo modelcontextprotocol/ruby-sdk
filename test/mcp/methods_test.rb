@@ -24,6 +24,8 @@ module MCP
 
     # Server methods and notifications
     ensure_capability_does_not_raise_for Methods::INITIALIZE
+    # `server/discover` (SEP-2575) must respond regardless of declared capabilities.
+    ensure_capability_does_not_raise_for Methods::SERVER_DISCOVER
 
     ensure_capability_raises_error_for Methods::PROMPTS_LIST, required_capability_name: "prompts"
     ensure_capability_raises_error_for Methods::PROMPTS_GET, required_capability_name: "prompts"

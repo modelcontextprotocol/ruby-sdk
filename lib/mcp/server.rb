@@ -163,6 +163,7 @@ module MCP
         Methods::PROMPTS_LIST => method(:list_prompts),
         Methods::PROMPTS_GET => method(:get_prompt),
         Methods::INITIALIZE => method(:init),
+        Methods::SERVER_DISCOVER => method(:discover),
         Methods::PING => ->(_) { {} },
         Methods::NOTIFICATIONS_INITIALIZED => ->(_) {},
         Methods::NOTIFICATIONS_PROGRESS => ->(_) {},
@@ -589,6 +590,22 @@ module MCP
         capabilities: capabilities,
         serverInfo: info,
         instructions: response_instructions,
+      }.compact
+    end
+
+    # Handles `server/discover` (MCP 2026-07-28 draft, SEP-2575): sessionless capability discovery.
+    # Unlike `init`, this is state-free and idempotent: it stores no client info, does not mark
+    # the session initialized, and responds regardless of capability declarations or initialization state,
+    # so clients can probe a server before (or instead of) `initialize`. `serverInfo` is returned unfiltered
+    # because discovery happens before version negotiation. The draft's `ttlMs`/`cacheScope` cache hints
+    # are not included here yet.
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+    def discover(_request)
+      {
+        supportedVersions: Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS,
+        capabilities: capabilities,
+        serverInfo: server_info,
+        instructions: instructions,
       }.compact
     end
 
