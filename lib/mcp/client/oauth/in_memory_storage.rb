@@ -12,7 +12,9 @@ module MCP
       # - `client_information`: the hash returned by Dynamic Client Registration
       #   or supplied as pre-registered credentials
       #   (`client_id`, optional `client_secret`, optional
-      #   `token_endpoint_auth_method`).
+      #   `token_endpoint_auth_method`). The SDK additionally stamps an `"issuer"` member
+      #   binding the credentials to the authorization server that issued them (SEP-2352);
+      #   custom storages should treat the hash as opaque and persist it as-is.
       #
       # This class keeps everything in process memory, so the credentials live
       # only for the lifetime of the Ruby process. Applications that need

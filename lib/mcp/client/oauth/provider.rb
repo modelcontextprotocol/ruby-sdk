@@ -29,7 +29,10 @@ module MCP
       #   `WWW-Authenticate` does not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
       #   `client_information`, and `save_client_information(info)`. Defaults to
-      #   an `InMemoryStorage`.
+      #   an `InMemoryStorage`. Persisted `client_information` is stamped with
+      #   an `"issuer"` member binding it to the authorization server that
+      #   issued it (SEP-2352); when the authorization server changes, the SDK discards
+      #   the stale registration and tokens and re-registers.
       # - `client_id_metadata_document_url` - URL where the client publishes its Client ID Metadata Document
       #   (`draft-ietf-oauth-client-id-metadata-document-00` and the MCP authorization specification).
       #   When the authorization server advertises `client_id_metadata_document_supported: true`,

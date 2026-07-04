@@ -155,6 +155,33 @@ module MCP
           assert_not_requested(:post, "#{@auth_base}/token")
         end
 
+        def test_run_client_credentials_succeeds_with_matching_stored_issuer
+          provider = client_credentials_provider
+          provider.storage.save_client_information(
+            provider.storage.client_information.merge("issuer" => @auth_base),
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+        end
+
+        def test_run_client_credentials_raises_for_mismatched_stored_issuer
+          # Per SEP-2352, static machine-to-machine credentials bound to another authorization server must surface
+          # an error instead of being replayed; re-registration is not an option for pre-registered credentials.
+          provider = client_credentials_provider
+          provider.storage.save_client_information(
+            provider.storage.client_information.merge("issuer" => "https://old-as.example.com"),
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
         def test_run_client_credentials_requests_scope_from_prm_scopes_supported
           stub_request(:get, @prm_url).to_return(
             status: 200,
@@ -1035,6 +1062,125 @@ module MCP
           assert_not_requested(:post, "#{@auth_base}/register")
         end
 
+        # Builds a provider that completes the non-interactive authorization
+        # flow against the stubs from `setup`, for the SEP-2352 issuer-binding
+        # tests.
+        def build_issuer_binding_provider
+          state_holder = {}
+          Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+        end
+
+        def test_run_skips_dcr_when_stored_issuer_matches
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          provider = build_issuer_binding_provider
+          provider.save_client_information("client_id" => "preregistered-client", "issuer" => @auth_base)
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_not_requested(:post, "#{@auth_base}/register")
+        end
+
+        def test_run_reregisters_when_authorization_server_changes
+          provider = build_issuer_binding_provider
+          provider.save_client_information("client_id" => "old-client", "issuer" => "https://other-as.example.com")
+          provider.save_tokens("access_token" => "old-as-token")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          info = provider.client_information
+          assert_equal("test-client", info["client_id"])
+          assert_equal(@auth_base, info["issuer"])
+        end
+
+        def test_run_clears_stale_tokens_when_authorization_server_changes
+          # Abort the flow right after the discard (DCR fails) to observe that tokens minted by
+          # the old authorization server were wiped before any re-registration attempt.
+          stub_request(:post, "#{@auth_base}/register").to_return(status: 500, body: "")
+
+          provider = build_issuer_binding_provider
+          provider.save_client_information("client_id" => "old-client", "issuer" => "https://other-as.example.com")
+          provider.save_tokens("access_token" => "old-as-token", "refresh_token" => "old-as-rt")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_nil(provider.tokens)
+          assert_nil(provider.client_information)
+        end
+
+        def test_run_binds_legacy_client_information_to_issuer_on_first_use
+          # Credentials persisted before issuer binding existed (or supplied as pre-registered credentials)
+          # are reused and stamped with the current issuer rather than discarded.
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          provider = build_issuer_binding_provider
+          provider.save_client_information("client_id" => "preregistered-client")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_equal(@auth_base, provider.client_information["issuer"])
+        end
+
+        def test_run_binds_symbol_keyed_client_information_to_issuer_on_first_use
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          provider = build_issuer_binding_provider
+          provider.save_client_information(client_id: "preregistered-symbol")
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_equal(@auth_base, provider.client_information["issuer"])
+        end
+
+        def test_run_reuses_portable_cimd_client_id_across_authorization_servers
+          # Per SEP-2352, a CIMD `client_id` (an HTTPS URL) is portable across authorization servers:
+          # reuse it and re-bind the issuer instead of discarding the registration.
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          provider = build_issuer_binding_provider
+          provider.save_client_information(
+            "client_id" => "https://app.example.com/client-metadata.json",
+            "issuer" => "https://other-as.example.com",
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_not_requested(:post, "#{@auth_base}/register")
+          info = provider.client_information
+          assert_equal("https://app.example.com/client-metadata.json", info["client_id"])
+          assert_equal(@auth_base, info["issuer"])
+        end
+
+        def test_run_persists_issuer_with_dcr_client_information
+          provider = build_issuer_binding_provider
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/register")
+          info = provider.client_information
+          assert_equal("test-client", info["client_id"])
+          assert_equal(@auth_base, info["issuer"])
+        end
+
         def test_run_skips_dcr_when_as_supports_cimd_and_provider_has_cimd_url
           # When the AS advertises Client ID Metadata Document support and the provider was configured with a CIMD URL,
           # the SDK uses the URL as the OAuth `client_id` and does not call /register.
@@ -1632,6 +1778,55 @@ module MCP
           assert_equal("fresh-at", provider.access_token)
           # New response did not include a refresh_token, so the old one is preserved (RFC 6749 Section 6).
           assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_succeeds_when_stored_issuer_matches
+          stub_request(:post, "#{@auth_base}/token").with(
+            body: hash_including("grant_type" => "refresh_token", "refresh_token" => "saved-rt"),
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "fresh-at", token_type: "Bearer", expires_in: 3600),
+          )
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client", "issuer" => @auth_base)
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          result = Flow.new(provider: provider).refresh!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+          )
+
+          assert_equal(:refreshed, result)
+          assert_equal("fresh-at", provider.access_token)
+        end
+
+        def test_refresh_raises_when_stored_issuer_differs
+          # Per SEP-2352, another authorization server's credentials must not be replayed at this token endpoint;
+          # the caller falls back to the full flow, which discards the stale registration and re-registers.
+          stub_request(:post, "#{@auth_base}/token").to_raise(StandardError.new("Token endpoint should not be called."))
+
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "old-client", "issuer" => "https://other-as.example.com")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/different authorization server/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
         end
 
         def test_refresh_uses_cimd_url_as_client_id_when_provider_has_cimd_and_as_supports_it
