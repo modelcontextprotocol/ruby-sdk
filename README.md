@@ -2851,6 +2851,10 @@ The Ruby client recognizes such results and raises `MCP::Client::InputRequiredEr
 and the raw `result`; automatic resumption is not implemented yet, so callers respond manually if they opt into the draft flow. `MCP::ResultType::COMPLETE` and `MCP::ResultType::INPUT_REQUIRED`
 are provided for forward compatibility. Servers on stable protocol versions never send `resultType`, so existing behavior is unchanged.
 
+SEP-2322 also makes `resultType` a required member of every result a 2026-07-28 server returns. The server stamps `resultType: "complete"` on all results of requests carrying
+the modern `_meta` envelope (and on `server/discover` results), while results that already carry a discriminator (`"input_required"`, the tasks extension's `"task"`) keep it.
+Legacy results stay unstamped, and clients treat an absent `resultType` as `"complete"` per the spec.
+
 ## Conformance Testing
 
 The `conformance/` directory contains a test server and runner that validate the SDK against the MCP specification using [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
