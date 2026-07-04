@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 require_relative "../json_rpc_handler"
 require_relative "cancellation"
 require_relative "cancelled_error"
@@ -201,6 +203,7 @@ module MCP
       ttl_ms: nil,
       cache_scope: nil,
       request_state_security: nil,
+      input_required_legacy_shim: true,
       transport: nil
     )
       @description = description
@@ -221,6 +224,12 @@ module MCP
       self.ttl_ms = ttl_ms
       self.cache_scope = cache_scope
       @request_state_security = request_state_security
+
+      # Dual-era authoring (SEP-2322): on the legacy wire, an `input_required` result is fulfilled
+      # through real server-to-client requests and the handler re-runs, so handlers written
+      # in the 2026 style serve both eras. `false` restores the strict rejection of `input_required`
+      # on legacy requests. Matches the TypeScript SDK's default-on legacy shim.
+      @input_required_legacy_shim = input_required_legacy_shim
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
       @client_protocol_version = nil
@@ -679,7 +688,18 @@ module MCP
           # Runs after the cancellation check so a cancelled request stays suppressed
           # instead of turning into a gate error response.
           if result.is_a?(InputRequiredResult)
-            result = serialize_input_required_result(result, envelope: envelope, request: params, method: method)
+            result = if envelope.nil? && @input_required_legacy_shim && session
+              run_legacy_input_required_shim(
+                result,
+                method: method,
+                params: params,
+                session: session,
+                related_request_id: related_request_id,
+                cancellation: cancellation,
+              )
+            else
+              serialize_input_required_result(result, envelope: envelope, request: params, method: method)
+            end
           end
 
           # SEP-2322 makes `resultType` REQUIRED on every result a 2026-07-28 server returns;
@@ -816,6 +836,99 @@ module MCP
     # Methods whose results may be `input_required` and whose retried requests carry
     # `inputResponses`/`requestState` (SEP-2322).
     MRTR_METHODS = [Methods::TOOLS_CALL, Methods::PROMPTS_GET, Methods::RESOURCES_READ].freeze
+
+    # Fulfilment rounds the legacy shim runs before giving up, matching the TypeScript SDK's legacy shim default (`maxRounds: 8`).
+    LEGACY_INPUT_REQUIRED_MAX_ROUNDS = 8
+
+    # Dual-era authoring shim (SEP-2322): a handler on the legacy wire returned an `input_required` result,
+    # which pre-2026 clients cannot understand, so the server fulfills it in place of the client's driver.
+    # Every entry of `inputRequests` is sent as the equivalent real server-to-client request (associated with
+    # the originating request per SEP-2260), the answers are collected under the same keys, and the handler
+    # re-runs with `inputResponses`/`requestState` merged into the original params - the same deterministic replay
+    # contract the modern client driver follows. The `requestState` round-trips in-process as the raw value
+    # the handler wrote; `RequestStateSecurity` sealing is wire hardening and does not apply.
+    def run_legacy_input_required_shim(result, method:, params:, session:, related_request_id:, cancellation:)
+      rounds = 0
+
+      loop do
+        missing = result.missing_client_capabilities(session.client_capabilities)
+        unless missing.empty?
+          # The explicit `error_code` keeps the descriptive message in the JSON-RPC error response
+          # (the `ResourceNotFoundError` pattern). `-32021` is a 2026-07-28 code, so the legacy wire
+          # gets a plain internal error.
+          raise RequestHandlerError.new(
+            "input_required requires client capabilities the client did not declare: #{missing.to_json}",
+            params,
+            error_type: :internal_error,
+            error_code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+          )
+        end
+
+        responses = (result.input_requests || {}).each_with_object({}) do |(key, entry), collected|
+          collected[key] = session.fulfill_input_request(
+            entry[:method],
+            legacy_leg_params(entry),
+            related_request_id: related_request_id,
+          )
+        end
+
+        retry_params = params.reject { |key, _| [:inputResponses, :requestState].include?(key.to_sym) }
+        retry_params[:inputResponses] = responses unless responses.empty?
+        retry_params[:requestState] = result.request_state if result.request_state
+
+        result = redispatch_mrtr_method(
+          method,
+          retry_params,
+          session: session,
+          related_request_id: related_request_id,
+          cancellation: cancellation,
+        )
+        return result unless result.is_a?(InputRequiredResult)
+
+        rounds += 1
+        next if rounds < LEGACY_INPUT_REQUIRED_MAX_ROUNDS
+
+        raise RequestHandlerError.new(
+          "Handler still returned `input_required` after #{LEGACY_INPUT_REQUIRED_MAX_ROUNDS} legacy shim rounds (SEP-2322)",
+          params,
+          error_type: :internal_error,
+          error_code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+        )
+      end
+    end
+
+    # The params an embedded entry sends on its legacy leg. Entries are forwarded verbatim with
+    # one exception: the 2025-11-25 wire requires `elicitationId` on URL-mode elicitation requests,
+    # a field the 2026-07-28 in-band shape dropped (correlation rides `requestState` there),
+    # so a missing one is synthesized for the leg, matching the TypeScript SDK's shim.
+    def legacy_leg_params(entry)
+      params = entry[:params]
+      return params unless entry[:method] == Methods::ELICITATION_CREATE
+      return params if params.nil? || (params[:mode] || params["mode"]) != "url"
+      return params if params.key?(:elicitationId) || params.key?("elicitationId")
+
+      params.merge(elicitationId: SecureRandom.uuid)
+    end
+
+    # Re-runs the handler of one of the three MRTR-capable methods for
+    # the legacy shim. Legacy wire, so no envelope is threaded.
+    def redispatch_mrtr_method(method, params, session:, related_request_id:, cancellation:)
+      case method
+      when Methods::TOOLS_CALL
+        call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+      when Methods::PROMPTS_GET
+        get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+      when Methods::RESOURCES_READ
+        contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
+      else
+        raise RequestHandlerError.new(
+          "input_required results are only supported for #{MRTR_METHODS.join(", ")}",
+          params,
+          error_type: :internal_error,
+        )
+      end
+    end
 
     # Replaces a sealed client-echoed `requestState` with its verified plaintext before dispatch,
     # so handlers always read the state they wrote. A tampered, expired, or cross-request token is

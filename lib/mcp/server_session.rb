@@ -215,6 +215,15 @@ module MCP
       )
     end
 
+    # Sends an embedded SEP-2322 `inputRequests` entry as a real server-to-client request on the legacy wire,
+    # for the server's dual-era fulfilment shim.
+    # The entry is forwarded verbatim - per the spec, clients treat each entry exactly like the equivalent
+    # standalone request - and stays associated with the originating client request per SEP-2260.
+    # Returns the client's result.
+    def fulfill_input_request(method, params, related_request_id:)
+      send_to_transport_request(method, params, related_request_id: related_request_id)
+    end
+
     # Sends `notifications/cancelled` to the peer for a nested server-to-client request
     # that was started inside a now-cancelled parent request. `related_request_id`
     # is the parent request id so the notification is routed to the same stream
