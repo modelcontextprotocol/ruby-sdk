@@ -3096,5 +3096,80 @@ module MCP
       assert_equal "b", second_result[:resourceTemplates][0][:name]
       assert_nil second_result[:nextCursor]
     end
+
+    test "an MCP Apps server advertises the extension and serves ui:// templates" do
+      # SEP-1865: the extension rides the SEP-2133 `capabilities.extensions` machinery,
+      # UI templates are ordinary resources, and tools link to them via `_meta.ui.resourceUri`.
+      dashboard = Apps.ui_resource(uri: "ui://weather/dashboard", name: "weather_dashboard")
+      capabilities = Server::Capabilities.new
+      capabilities.support_tools
+      capabilities.support_resources
+      capabilities.support_extensions(Apps.capability)
+      server = Server.new(name: "apps_test", capabilities: capabilities, resources: [dashboard])
+      server.define_tool(
+        name: "get_weather",
+        meta: Apps.tool_meta(resource_uri: "ui://weather/dashboard"),
+      ) do
+        Tool::Response.new([{ type: "text", text: "Sunny" }])
+      end
+
+      server.resources_read_handler do |params|
+        [{ uri: params[:uri], mimeType: Apps::RESOURCE_MIME_TYPE, text: "<html>dashboard</html>" }]
+      end
+
+      init_response = server.handle({
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-11-25",
+          clientInfo: { name: "host", version: "1.0" },
+          capabilities: { extensions: Apps.capability },
+        },
+      })
+
+      tools_response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/list",
+        id: 2,
+      })
+
+      read_response = server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 3,
+        params: { uri: "ui://weather/dashboard" },
+      })
+
+      assert_equal(
+        { mimeTypes: [Apps::RESOURCE_MIME_TYPE] },
+        init_response.dig(:result, :capabilities, :extensions, Apps::EXTENSION_ID),
+      )
+      tool_entry = tools_response.dig(:result, :tools, 0)
+
+      assert_equal "ui://weather/dashboard", tool_entry.dig(:_meta, :ui, :resourceUri)
+      assert_equal "<html>dashboard</html>", read_response.dig(:result, :contents, 0, :text)
+      # The server can gate the text-only fallback on the client's declaration.
+      assert Apps.client_supports?(server.client_capabilities)
+    end
+
+    test "an MCP Apps tool falls back to text for clients without the extension" do
+      capabilities = Server::Capabilities.new
+      capabilities.support_extensions(Apps.capability)
+      server = Server.new(name: "apps_test", capabilities: capabilities)
+
+      server.handle({
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          protocolVersion: "2025-11-25",
+          clientInfo: { name: "plain_client", version: "1.0" },
+          capabilities: {},
+        },
+      })
+
+      refute Apps.client_supports?(server.client_capabilities)
+    end
   end
 end
