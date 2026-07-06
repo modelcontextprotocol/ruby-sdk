@@ -291,19 +291,27 @@ class MyResource < MCP::Resource
   resource_name "config"
   description "Application configuration"
   mime_type "application/json"
+
+  class << self
+    def contents
+      [MCP::Resource::TextContents.new(
+        uri: uri,
+        mime_type: mime_type,
+        text: File.read("config.json")
+      )]
+    end
+  end
 end
 
 server = MCP::Server.new(
   name: "my_server",
-  resources: [MyResource],
-  resources_read_handler: ->(uri, _server_context) {
-    case uri
-    when "file:///data/config.json"
-      { uri: uri, text: File.read("config.json"), mimeType: "application/json" }
-    end
-  }
+  resources: [MyResource]
 )
 ```
+
+The server automatically routes `resources/read` requests to the matching class-based resource's `contents` method.
+Requests for unregistered URIs respond with the JSON-RPC Invalid Params error (`-32602`). To handle reads manually instead,
+register a block with `server.resources_read_handler`, which fully replaces the automatic routing.
 
 ## Configuration
 

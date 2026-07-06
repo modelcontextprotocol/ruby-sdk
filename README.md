@@ -974,7 +974,71 @@ MCP spec includes [Resources](https://modelcontextprotocol.io/specification/late
 
 ### Reading Resources
 
-The `MCP::Resource` class provides a way to register resources with the server.
+Like tools and prompts, resources can be defined in three ways.
+
+1. As a class that inherits from `MCP::Resource`, implementing `contents` to serve the resource body:
+
+```ruby
+class MyResource < MCP::Resource
+  uri "https://example.com/my_resource"
+  resource_name "my-resource"
+  title "My Resource"
+  description "Lorem ipsum dolor sit amet"
+  mime_type "text/html"
+
+  class << self
+    def contents
+      [MCP::Resource::TextContents.new(
+        uri: uri,
+        mime_type: mime_type,
+        text: "Hello from example resource!"
+      )]
+    end
+  end
+end
+
+server = MCP::Server.new(
+  name: "my_server",
+  resources: [MyResource],
+)
+```
+
+`resources/read` requests are routed automatically: when the requested URI matches a registered
+class-based resource, its `contents` method is called. `contents` may return an array of
+`MCP::Resource::TextContents` / `MCP::Resource::BlobContents` objects (or plain hashes), or a single one.
+Like tools, `contents` can opt in to a `server_context:` keyword argument to receive per-request context.
+
+When class-based resources or resource templates are registered and a `resources/read` request
+does not match any of them, the server responds with the standard JSON-RPC Invalid Params error
+(`-32602`) carrying the requested URI in the error `data` member, per SEP-2164.
+
+2. With the `MCP::Resource.define` method, whose block implements `contents`:
+
+```ruby
+resource = MCP::Resource.define(
+  uri: "https://example.com/my_resource",
+  name: "my-resource",
+  mime_type: "text/html",
+) do
+  [MCP::Resource::TextContents.new(uri: uri, mime_type: mime_type, text: "Hello!")]
+end
+```
+
+3. Using the `MCP::Server#define_resource` method:
+
+```ruby
+server = MCP::Server.new(name: "my_server")
+server.define_resource(
+  uri: "https://example.com/my_resource",
+  name: "my-resource",
+  mime_type: "text/html",
+) do
+  [MCP::Resource::TextContents.new(uri: "https://example.com/my_resource", mime_type: "text/html", text: "Hello!")]
+end
+```
+
+Alternatively, resources can be registered as plain data objects with `MCP::Resource.new`,
+in which case the server only lists them:
 
 ```ruby
 resource = MCP::Resource.new(
@@ -991,7 +1055,8 @@ server = MCP::Server.new(
 )
 ```
 
-The server must register a handler for the `resources/read` method to retrieve a resource dynamically.
+With plain data resources, the server must register a handler for the `resources/read` method to
+retrieve a resource dynamically.
 
 ```ruby
 server.resources_read_handler do |params|
@@ -1003,7 +1068,8 @@ server.resources_read_handler do |params|
 end
 ```
 
-otherwise `resources/read` requests will be a no-op.
+otherwise `resources/read` requests will be a no-op. Note that a `resources_read_handler` fully replaces
+the default `resources/read` handling, including the automatic routing to class-based resources described above.
 
 For unknown URIs, raise `MCP::Server::ResourceNotFoundError` from the handler.
 Per SEP-2164, the server then responds with the standard JSON-RPC Invalid Params error (`-32602`)
@@ -1020,7 +1086,63 @@ end
 
 ### Resource Templates
 
-The `MCP::ResourceTemplate` class provides a way to register resource templates with the server.
+Resource templates follow the same pattern. Class-based templates declare a `uri_template` and
+receive the variables extracted from the requested URI as keyword arguments to `contents`:
+
+```ruby
+class UserProfileTemplate < MCP::ResourceTemplate
+  uri_template "users://{user_id}/profile"
+  resource_template_name "user-profile"
+  title "User Profile"
+  description "Profile data for a user"
+  mime_type "application/json"
+
+  class << self
+    def contents(user_id:)
+      [MCP::Resource::TextContents.new(
+        uri: "users://#{user_id}/profile",
+        mime_type: mime_type,
+        text: { id: user_id }.to_json
+      )]
+    end
+  end
+end
+
+server = MCP::Server.new(
+  name: "my_server",
+  resource_templates: [UserProfileTemplate],
+)
+```
+
+A `resources/read` request for `users://42/profile` calls `UserProfileTemplate.contents(user_id: "42")`.
+An exact match against a registered resource takes precedence over template matching.
+`contents` can also opt in to a `server_context:` keyword argument.
+
+URI template matching supports simple [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) level 1 `{variable}` expressions only:
+
+- Operator expressions such as `{+path}`, `{#fragment}`, or `{?query}` are treated as literal text and never match an expanded URI.
+- A variable matches one or more characters excluding `/`.
+- Extracted values are not percent-decoded.
+
+The `MCP::ResourceTemplate.define` and `MCP::Server#define_resource_template` methods are also available,
+mirroring the resource variants:
+
+```ruby
+server.define_resource_template(
+  uri_template: "users://{user_id}/profile",
+  name: "user-profile",
+  mime_type: "application/json",
+) do |user_id:|
+  [MCP::Resource::TextContents.new(
+    uri: "users://#{user_id}/profile",
+    mime_type: "application/json",
+    text: { id: user_id }.to_json
+  )]
+end
+```
+
+Resource templates can also be registered as plain data objects with `MCP::ResourceTemplate.new`,
+in which case reads must be served by a `resources_read_handler`:
 
 ```ruby
 resource_template = MCP::ResourceTemplate.new(

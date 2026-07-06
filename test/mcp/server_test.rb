@@ -925,6 +925,196 @@ module MCP
       assert_instrumentation_data({ method: "resources/templates/list" })
     end
 
+    class GreetingResource < Resource
+      uri "greeting://hello"
+      resource_name "greeting"
+      mime_type "text/plain"
+
+      class << self
+        def contents
+          [Resource::TextContents.new(uri: uri, mime_type: mime_type, text: "hello")]
+        end
+      end
+    end
+
+    class UserProfileTemplate < ResourceTemplate
+      uri_template "users://{user_id}/profile"
+      resource_template_name "user_profile"
+      mime_type "text/plain"
+
+      class << self
+        def contents(user_id:)
+          [Resource::TextContents.new(uri: "users://#{user_id}/profile", mime_type: mime_type, text: "profile of #{user_id}")]
+        end
+      end
+    end
+
+    def read_resource_request(uri)
+      {
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 1,
+        params: { uri: uri },
+      }
+    end
+
+    test "#handle resources/read auto-routes to a class-based resource by exact URI" do
+      configuration = MCP::Configuration.new
+      configuration.instrumentation_callback = instrumentation_helper.callback
+      server = Server.new(name: "test_server", resources: [GreetingResource], configuration: configuration)
+
+      response = server.handle(read_resource_request("greeting://hello"))
+
+      expected = [{ uri: "greeting://hello", mimeType: "text/plain", text: "hello" }]
+      assert_equal({ contents: expected }, response[:result])
+      assert_instrumentation_data({ method: "resources/read", resource_uri: "greeting://hello" })
+    end
+
+    test "#handle resources/read wraps a single contents object returned by a class-based resource" do
+      resource = Resource.define(uri: "single://one", name: "single") do
+        Resource::TextContents.new(uri: "single://one", mime_type: "text/plain", text: "only one")
+      end
+      server = Server.new(name: "test_server", resources: [resource])
+
+      response = server.handle(read_resource_request("single://one"))
+
+      expected = [{ uri: "single://one", mimeType: "text/plain", text: "only one" }]
+      assert_equal({ contents: expected }, response[:result])
+    end
+
+    test "#handle resources/read passes server_context to contents that opt in" do
+      received = nil
+      resource = Resource.define(uri: "ctx://resource", name: "ctx") do |server_context:|
+        received = server_context
+        [Resource::TextContents.new(uri: "ctx://resource", mime_type: "text/plain", text: "ctx")]
+      end
+      server = Server.new(name: "test_server", resources: [resource])
+
+      server.handle(read_resource_request("ctx://resource"))
+
+      assert_instance_of ServerContext, received
+    end
+
+    test "#handle resources/read auto-routes to a class-based resource template with extracted params" do
+      configuration = MCP::Configuration.new
+      configuration.instrumentation_callback = instrumentation_helper.callback
+      server = Server.new(name: "test_server", resource_templates: [UserProfileTemplate], configuration: configuration)
+
+      response = server.handle(read_resource_request("users://42/profile"))
+
+      expected = [{ uri: "users://42/profile", mimeType: "text/plain", text: "profile of 42" }]
+      assert_equal({ contents: expected }, response[:result])
+      assert_instrumentation_data({
+        method: "resources/read",
+        resource_uri: "users://42/profile",
+        resource_template: "users://{user_id}/profile",
+      })
+    end
+
+    test "#handle resources/read prefers an exact resource match over a template match" do
+      resource = Resource.define(uri: "users://42/profile", name: "pinned_profile") do
+        [Resource::TextContents.new(uri: "users://42/profile", mime_type: "text/plain", text: "pinned")]
+      end
+      server = Server.new(name: "test_server", resources: [resource], resource_templates: [UserProfileTemplate])
+
+      response = server.handle(read_resource_request("users://42/profile"))
+
+      assert_equal "pinned", response[:result][:contents].first[:text]
+    end
+
+    test "#handle resources/read returns -32602 for an unknown URI when class-based resources are registered" do
+      server = Server.new(name: "test_server", resources: [GreetingResource])
+
+      response = server.handle(read_resource_request("greeting://unknown"))
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal("Resource not found: greeting://unknown", response[:error][:message])
+      assert_equal({ uri: "greeting://unknown" }, response[:error][:data])
+    end
+
+    test "#handle resources/read returns -32602 for a non-matching URI when class-based templates are registered" do
+      server = Server.new(name: "test_server", resource_templates: [UserProfileTemplate])
+
+      response = server.handle(read_resource_request("users://42/settings"))
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal({ uri: "users://42/settings" }, response[:error][:data])
+    end
+
+    test "#handle resources/read keeps returning [] for unknown URIs when only instance-based resources are registered" do
+      server = Server.new(name: "test_server", resources: [@resource], resource_templates: [@resource_template])
+
+      response = server.handle(read_resource_request("unknown://resource"))
+
+      assert_equal({ contents: [] }, response[:result])
+    end
+
+    test "#resources_read_handler overrides auto-routing for class-based resources" do
+      server = Server.new(name: "test_server", resources: [GreetingResource])
+      server.resources_read_handler do |request|
+        [{ uri: request[:uri], mimeType: "text/plain", text: "handler wins" }]
+      end
+
+      response = server.handle(read_resource_request("greeting://hello"))
+
+      assert_equal "handler wins", response[:result][:contents].first[:text]
+    end
+
+    test "#handle resources/list and resources/templates/list render class-based and instance-based entries together" do
+      server = Server.new(
+        name: "test_server",
+        resources: [@resource, GreetingResource],
+        resource_templates: [@resource_template, UserProfileTemplate],
+      )
+
+      list_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      assert_equal [@resource.to_h, GreetingResource.to_h], list_response[:result][:resources]
+
+      templates_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 1 })
+      assert_equal [@resource_template.to_h, UserProfileTemplate.to_h], templates_response[:result][:resourceTemplates]
+    end
+
+    test "#resources= rebuilds the resource index used for auto-routing" do
+      server = Server.new(name: "test_server", resources: [GreetingResource])
+
+      replacement = Resource.define(uri: "replacement://res", name: "replacement") do
+        [Resource::TextContents.new(uri: "replacement://res", mime_type: "text/plain", text: "replaced")]
+      end
+      server.resources = [replacement]
+
+      response = server.handle(read_resource_request("replacement://res"))
+      assert_equal "replaced", response[:result][:contents].first[:text]
+
+      stale_response = server.handle(read_resource_request("greeting://hello"))
+      assert_equal(-32602, stale_response[:error][:code])
+    end
+
+    test "#define_resource registers a resource served by auto-routing" do
+      server = Server.new(name: "test_server")
+      server.define_resource(uri: "defined://res", name: "defined", mime_type: "text/plain") do
+        [Resource::TextContents.new(uri: "defined://res", mime_type: "text/plain", text: "defined body")]
+      end
+
+      list_response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      assert_equal ["defined"], list_response[:result][:resources].map { |resource| resource[:name] }
+
+      response = server.handle(read_resource_request("defined://res"))
+      assert_equal "defined body", response[:result][:contents].first[:text]
+    end
+
+    test "#define_resource_template registers a template served by auto-routing" do
+      server = Server.new(name: "test_server")
+      server.define_resource_template(uri_template: "items://{item_id}", name: "item_template") do |item_id:|
+        [Resource::TextContents.new(uri: "items://#{item_id}", mime_type: "text/plain", text: "item #{item_id}")]
+      end
+
+      templates_response = server.handle({ jsonrpc: "2.0", method: "resources/templates/list", id: 1 })
+      assert_equal ["item_template"], templates_response[:result][:resourceTemplates].map { |template| template[:name] }
+
+      response = server.handle(read_resource_request("items://7"))
+      assert_equal "item 7", response[:result][:contents].first[:text]
+    end
+
     test "#configure_logging_level returns empty hash on success" do
       response = @server.handle(
         {
@@ -1546,6 +1736,20 @@ module MCP
       configuration = Configuration.new(protocol_version: "2025-03-26")
 
       resource = Resource.new(
+        uri: "https://test_resource.invalid",
+        name: "test-resource",
+        title: "Test resource",
+      )
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", resources: [resource], configuration: configuration)
+      end
+      assert_equal("Error occurred in Test resource. `title` is not supported in protocol version 2025-03-26 or earlier", exception.message)
+    end
+
+    test "raises error if `title` of class-based resource is used with protocol version 2025-03-26" do
+      configuration = Configuration.new(protocol_version: "2025-03-26")
+
+      resource = Resource.define(
         uri: "https://test_resource.invalid",
         name: "test-resource",
         title: "Test resource",
