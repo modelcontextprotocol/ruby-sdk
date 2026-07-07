@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-07
+
+### Added
+
+- Add a session-ownership hook to `StreamableHTTPTransport`
+
+### Changed
+
+- Require calling `MCP::Client#connect` before sending requests on stdio transport (#427)
+
 ### Deprecated
 
 - Annotate Roots, Sampling, and Logging APIs as deprecated per SEP-2577 (#429)
+
+### Fixed
+
+- Fix an incorrect `result: null` response to an id-bearing notification message (#435)
+- Validate `Host` and `Origin` headers to prevent DNS rebinding per MCP 2025-11-25
+- Bound stateful session retention to prevent an initialize-flood DoS
+- Bound stdio frame reads with `max_line_bytes`
+- Bound request body and frame reads to prevent memory-exhaustion DoS
 
 ## [0.22.0] - 2026-06-27
 
