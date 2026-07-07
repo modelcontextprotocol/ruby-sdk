@@ -1781,13 +1781,22 @@ Session-scoped standalone notifications (`resources/updated`, `elicitation/compl
 broadcast notifications (`tools/list_changed`, etc.) still flow to clients connected to the GET SSE stream.
 This mode is suitable for simple tool servers that do not need server-initiated requests.
 
-By default, sessions do not expire. To mitigate session hijacking risks, you can set a `session_idle_timeout` (in seconds).
-When configured, sessions that receive no HTTP requests for this duration are automatically expired and cleaned up:
+By default, stateful sessions are bounded so an `initialize` flood cannot retain sessions until memory is exhausted:
+they expire after `session_idle_timeout` seconds of inactivity (default 1800, i.e. 30 minutes) and the concurrent
+session count is capped at `max_sessions` (default 10000). A session's idle timer is reset by activity that touches it
+(a GET, or a regular-request POST), and expired sessions are collected by a background reaper roughly once a minute,
+so cleanup lags inactivity by up to that interval. At the cap, the transport first reclaims any already-expired slots
+and then, if still full, rejects a new `initialize` with HTTP 503 (it does not evict an existing session).
 
 ```ruby
-# Session timeout of 30 minutes
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 1800)
+# Tune the limits
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 900, max_sessions: 5000)
+
+# Opt out of expiry and/or the cap (not recommended on internet-facing deployments)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: nil, max_sessions: nil)
 ```
+
+Stateless mode (`stateless: true`) retains no sessions, so neither limit applies to it.
 
 ### Pagination
 

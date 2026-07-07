@@ -3808,9 +3808,14 @@ module MCP
           transport.close
         end
 
-        test "default session_idle_timeout is nil and sessions do not expire" do
+        test "applies a finite session_idle_timeout by default and starts the reaper" do
+          # Secure default: stateful mode expires idle sessions out of the box.
           transport = StreamableHTTPTransport.new(@server)
-          assert_nil(transport.instance_variable_get(:@reaper_thread))
+          assert_equal(
+            StreamableHTTPTransport::DEFAULT_SESSION_IDLE_TIMEOUT,
+            transport.instance_variable_get(:@session_idle_timeout),
+          )
+          assert(transport.instance_variable_get(:@reaper_thread).alive?)
 
           init_request = create_rack_request(
             "POST",
@@ -3818,23 +3823,99 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
           )
-          init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
-
+          # A freshly created session is well within the timeout, so normal use is unaffected.
+          session_id = transport.handle_request(init_request)[1]["Mcp-Session-Id"]
           request = create_rack_request(
             "POST",
             "/",
-            {
-              "CONTENT_TYPE" => "application/json",
-              "HTTP_MCP_SESSION_ID" => session_id,
-            },
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
             { jsonrpc: "2.0", method: "ping", id: "456" }.to_json,
           )
 
-          response = transport.handle_request(request)
-          assert_equal(200, response[0])
+          assert_equal(200, transport.handle_request(request)[0])
         ensure
           transport.close
+        end
+
+        test "session_idle_timeout: nil opts out of expiry" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: nil)
+          assert_nil(transport.instance_variable_get(:@session_idle_timeout))
+          assert_nil(transport.instance_variable_get(:@reaper_thread))
+        ensure
+          transport.close
+        end
+
+        test "stateless mode keeps no idle timeout despite the secure default" do
+          transport = StreamableHTTPTransport.new(@server, stateless: true)
+          assert_nil(transport.instance_variable_get(:@session_idle_timeout))
+          assert_nil(transport.instance_variable_get(:@reaper_thread))
+        ensure
+          transport.close
+        end
+
+        test "rejects new initialize with 503 once max_sessions is reached" do
+          transport = StreamableHTTPTransport.new(@server, max_sessions: 2)
+
+          2.times do
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            )
+            assert_equal(200, transport.handle_request(request)[0])
+          end
+
+          overflow = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          response = transport.handle_request(overflow)
+
+          assert_equal(503, response[0])
+          assert_equal(2, transport.instance_variable_get(:@sessions).size)
+        ensure
+          transport.close
+        end
+
+        test "at the cap, reclaims an already-expired session before rejecting" do
+          # A very short idle timeout so the first session is expired by the time the cap would otherwise reject
+          # a new initialize; the expired slot is reclaimed.
+          transport = StreamableHTTPTransport.new(@server, max_sessions: 1, session_idle_timeout: 0.01)
+          init = lambda do
+            transport.handle_request(create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            ))
+          end
+
+          assert_equal(200, init.call[0])
+          sleep(0.05) # let the first session's idle timer expire
+          second = init.call
+
+          # The expired session was reclaimed in-line, so the second initialize succeeds (200) rather than
+          # being rejected with 503, and the store stays at the cap.
+          assert_equal(200, second[0])
+          assert_equal(1, transport.instance_variable_get(:@sessions).size)
+        ensure
+          transport.close
+        end
+
+        test "max_sessions: nil opts out of the session cap" do
+          transport = StreamableHTTPTransport.new(@server, max_sessions: nil)
+          assert_nil(transport.instance_variable_get(:@max_sessions))
+        ensure
+          transport.close
+        end
+
+        test "raises ArgumentError for an invalid max_sessions" do
+          [0, -1, 1.5, "10"].each do |invalid|
+            assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, max_sessions: invalid) }
+          end
         end
 
         test "raises ArgumentError when session_idle_timeout is zero" do
