@@ -441,6 +441,91 @@ module MCP
             end
           end
         end
+
+        test "raises ArgumentError when max_line_bytes is not a positive Integer" do
+          [nil, 0, -1, 1.5, "1024"].each do |invalid|
+            error = assert_raises(ArgumentError) do
+              StdioTransport.new(@server, max_line_bytes: invalid)
+            end
+            assert_equal("max_line_bytes must be a positive Integer", error.message)
+          end
+        end
+
+        test "open stops and reports when a stdin frame exceeds max_line_bytes without a newline" do
+          transport = StdioTransport.new(@server, max_line_bytes: 64)
+          input = StringIO.new("A" * 200) # No newline: an unbounded frame.
+          output = StringIO.new
+
+          reported = []
+          original_stdin = $stdin
+          original_stdout = $stdout
+          original_reporter = MCP.configuration.exception_reporter
+
+          begin
+            $stdin = input
+            $stdout = output
+            MCP.configuration.exception_reporter = ->(e, ctx) { reported << [e, ctx] }
+
+            transport.open
+
+            refute(transport.instance_variable_get(:@open))
+            assert_equal(1, reported.size)
+            error, _ctx = reported.first
+            assert_instance_of(RequestHandlerError, error)
+            assert_match(/exceeds 64 bytes without a newline/, error.message)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+            MCP.configuration.exception_reporter = original_reporter
+          end
+        end
+
+        test "open processes a valid final frame that ends at EOF without a trailing newline" do
+          request = { jsonrpc: "2.0", method: "ping", id: "eof" }
+          input = StringIO.new(JSON.generate(request)) # No trailing newline.
+          output = StringIO.new
+
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+
+            @transport.open
+
+            response = JSON.parse(output.string, symbolize_names: true)
+            assert_equal("eof", response[:id])
+            assert_equal({}, response[:result])
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
+        test "send_request raises when a response frame exceeds max_line_bytes without a newline" do
+          transport = StdioTransport.new(@server, max_line_bytes: 64)
+          input = StringIO.new("A" * 200) # No newline: an unbounded frame.
+          output = StringIO.new
+
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            transport.instance_variable_set(:@open, true)
+
+            error = assert_raises(RequestHandlerError) do
+              transport.send_request("sampling/createMessage", { messages: [] })
+            end
+
+            assert_match(/exceeds 64 bytes without a newline/, error.message)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
       end
     end
   end

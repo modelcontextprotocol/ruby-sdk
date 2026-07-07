@@ -19,13 +19,28 @@ module MCP
       CLOSE_TIMEOUT = 2
       STDERR_READ_SIZE = 4096
 
+      # Default upper bound on a single newline-delimited frame read from the
+      # server's stdout. CRuby's `IO#gets` without a limit accumulates bytes until a
+      # newline arrives, so a spawned server that never emits one can grow a single
+      # String until the host process is OOM-killed. 4 MiB is large enough for any
+      # realistic JSON-RPC frame, including base64-embedded images.
+      MAX_LINE_BYTES = 4 * 1024 * 1024
+
       attr_reader :command, :args, :env, :server_info
 
-      def initialize(command:, args: [], env: nil, read_timeout: nil)
+      def initialize(command:, args: [], env: nil, read_timeout: nil, max_line_bytes: MAX_LINE_BYTES)
+        # Reject `nil` or non-positive values: `IO#gets("\n", nil)` and a negative
+        # limit read without an upper bound, which would silently disable the
+        # protection this option exists to provide.
+        unless max_line_bytes.is_a?(Integer) && max_line_bytes > 0
+          raise ArgumentError, "max_line_bytes must be a positive Integer"
+        end
+
         @command = command
         @args = args
         @env = env
         @read_timeout = read_timeout
+        @max_line_bytes = max_line_bytes
         @stdin = nil
         @stdout = nil
         @stderr = nil
@@ -239,7 +254,7 @@ module MCP
         loop do
           ensure_running!
           wait_for_readable!(method, params) if @read_timeout
-          line = @stdout.gets
+          line = read_line(method, params)
           raise_connection_error!(method, params) if line.nil?
 
           parsed = JSON.parse(line.strip)
@@ -273,6 +288,22 @@ module MCP
 
         raise RequestHandlerError.new(
           "Timed out waiting for server response",
+          { method: method, params: params },
+          error_type: :internal_error,
+        )
+      end
+
+      # Reads one newline-delimited frame from the server's stdout, bounded by `@max_line_bytes`.
+      # Returns the line (including its trailing newline) or `nil` at EOF. Raises when the limit
+      # is reached before a newline arrives, which signals a server streaming an unbounded frame.
+      # A short final frame without a trailing newline (EOF) is still returned, since its length
+      # stays under the limit.
+      def read_line(method, params)
+        line = @stdout.gets("\n", @max_line_bytes)
+        return line unless line && !line.end_with?("\n") && line.bytesize >= @max_line_bytes
+
+        raise RequestHandlerError.new(
+          "Server response frame exceeds #{@max_line_bytes} bytes without a newline",
           { method: method, params: params },
           error_type: :internal_error,
         )
