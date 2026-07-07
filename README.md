@@ -1823,6 +1823,18 @@ it also records the `Origin` header at `initialize` and rejects a later request 
 when both are present - a non-browser client that omits `Origin` (e.g. `curl` or a script) is not stopped by this check.
 Enforcing ownership against a determined attacker requires supplying the validator with an authenticated principal.
 
+#### Request Size Limits
+
+`StreamableHTTPTransport` bounds how many bytes a single POST body may allocate, so a peer cannot exhaust memory
+with one oversized message. A body larger than `max_request_bytes` (default 4 MiB) is rejected with HTTP 413,
+and JSON nesting depth is capped. The 4 MiB default comfortably fits a typical JSON-RPC message (a 4 MiB JSON
+string decodes to roughly 3 MiB of base64 payload) and matches the TypeScript SDK's 4 MB default; raise it only
+if you exchange unusually large payloads:
+
+```ruby
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, max_request_bytes: 8 * 1024 * 1024)
+```
+
 ### Pagination
 
 The MCP Ruby SDK supports [pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)

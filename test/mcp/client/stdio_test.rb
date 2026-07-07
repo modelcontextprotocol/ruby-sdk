@@ -1111,6 +1111,9 @@ module MCP
 
         assert_match(/exceeds 1024 bytes without a newline/, error.message)
         assert_equal(:internal_error, error.error_type)
+        # The stream is desynced (leftover bytes in the pipe), so the transport is closed
+        # rather than left resumable on a corrupt stream.
+        refute_predicate(transport, :connected?)
       ensure
         server_thread.join
         stdin_read.close

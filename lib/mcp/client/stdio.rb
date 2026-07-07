@@ -302,6 +302,15 @@ module MCP
         line = @stdout.gets("\n", @max_line_bytes)
         return line unless line && !line.end_with?("\n") && line.bytesize >= @max_line_bytes
 
+        # The over-limit frame leaves leftover bytes in the pipe, so the stream is desynced and
+        # cannot be resumed. Close before raising so a later `send_request` fails cleanly instead
+        # of parsing a truncated frame.
+        begin
+          close
+        rescue StandardError
+          nil
+        end
+
         raise RequestHandlerError.new(
           "Server response frame exceeds #{@max_line_bytes} bytes without a newline",
           { method: method, params: params },
