@@ -65,6 +65,7 @@ stdio_transport.close
 | `args:` | No | An array of arguments passed to the command. Defaults to `[]`. |
 | `env:` | No | A hash of environment variables for the server process. Defaults to `nil`. |
 | `read_timeout:` | No | Timeout in seconds for waiting for a server response. Defaults to `nil`. |
+| `max_line_bytes:` | No | Maximum byte length of a single newline-delimited response frame. A frame that reaches this limit without a newline is rejected as a transport error, preventing unbounded memory growth from a server that never emits a newline. Defaults to `4 * 1024 * 1024` (4 MiB). |
 
 ## HTTP Transport
 

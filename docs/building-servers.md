@@ -59,6 +59,8 @@ transport = MCP::Server::Transports::StdioTransport.new(server)
 transport.open
 ```
 
+`StdioTransport.new` accepts an optional `max_line_bytes:` keyword that caps the byte length of a single newline-delimited request frame. A frame that reaches this limit without a newline is rejected and the connection is closed, preventing unbounded memory growth from a peer that never emits a newline. It defaults to `4 * 1024 * 1024` (4 MiB).
+
 ## Streamable HTTP Transport
 
 `MCP::Server::Transports::StreamableHTTPTransport` is a standard Rack app, so it can be mounted in any Rack-compatible framework.

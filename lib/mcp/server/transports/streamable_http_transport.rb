@@ -39,8 +39,35 @@ module MCP
         UNSET_IDLE_TIMEOUT = Object.new.freeze
         private_constant :UNSET_IDLE_TIMEOUT
 
-        def initialize(server, stateless: false, enable_json_response: false,
-          session_idle_timeout: UNSET_IDLE_TIMEOUT, max_sessions: DEFAULT_MAX_SESSIONS)
+        # Creates a Streamable HTTP transport that can be mounted as a Rack app.
+        #
+        # @param server [MCP::Server] the server whose requests this transport dispatches.
+        # @param stateless [Boolean] when `true`, no session is issued and each POST is self-contained.
+        # @param enable_json_response [Boolean] when `true`, a request is answered with a single JSON
+        #   object instead of an SSE stream.
+        # @param session_idle_timeout [Numeric, nil] seconds before an idle session is reaped; defaults
+        #   to `DEFAULT_SESSION_IDLE_TIMEOUT` (1800) in stateful mode, and an explicit `nil` disables
+        #   expiry. Not supported in stateless mode.
+        # @param max_sessions [Integer, nil] cap on the concurrent session count in stateful mode; a new
+        #   `initialize` past the cap is rejected with HTTP 503, and `nil` disables the cap.
+        # @param allowed_origins [Array<String>, nil] extra `Origin` values accepted in addition to
+        #   same-origin requests, for DNS rebinding protection.
+        # @param allowed_hosts [Array<String>, nil] extra `Host` values accepted beyond the loopback
+        #   defaults (`127.0.0.1`, `::1`, `localhost`); each entry matches a bare host name (any port)
+        #   or a full `host:port`.
+        # @param dns_rebinding_protection [Boolean] when `true` (default), validates the `Host` and
+        #   `Origin` headers to prevent DNS rebinding; pass `false` when an upstream proxy already
+        #   validates them.
+        def initialize(
+          server,
+          stateless: false,
+          enable_json_response: false,
+          session_idle_timeout: UNSET_IDLE_TIMEOUT,
+          max_sessions: DEFAULT_MAX_SESSIONS,
+          allowed_origins: nil,
+          allowed_hosts: nil,
+          dns_rebinding_protection: true
+        )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
           @sessions = {}
@@ -48,6 +75,11 @@ module MCP
 
           @stateless = stateless
           @enable_json_response = enable_json_response
+          @dns_rebinding_protection = dns_rebinding_protection
+
+          # Host names are case-insensitive, so the allow lists are compared down-cased.
+          @allowed_hosts = (DEFAULT_LOOPBACK_HOSTS + Array(allowed_hosts)).map(&:downcase).freeze
+          @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
 
           # Resolve the idle timeout: an explicit value (including `nil` to opt out) wins; otherwise apply the secure default,
@@ -82,12 +114,19 @@ module MCP
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
         SESSION_REAP_INTERVAL = 60
 
+        # Loopback hosts always accepted by DNS rebinding protection. A locally bound MCP server (the canonical pattern) is
+        # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
+        DEFAULT_LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"].freeze
+
         # Rack app interface. This transport can be mounted as a Rack app.
         def call(env)
           handle_request(Rack::Request.new(env))
         end
 
         def handle_request(request)
+          rebinding_error = validate_dns_rebinding(request)
+          return rebinding_error if rebinding_error
+
           case request.env["REQUEST_METHOD"]
           when "POST"
             handle_post(request)
@@ -861,6 +900,74 @@ module MCP
           end
 
           active
+        end
+
+        # Per MCP 2025-11-25, servers MUST validate the `Origin` header and SHOULD bind only to localhost
+        # to prevent DNS rebinding attacks against locally bound MCP servers. Protection is on by default;
+        # pass `dns_rebinding_protection: false` to disable it (e.g. when an upstream proxy or middleware already
+        # performs the check). The `Host` header is validated against the loopback defaults plus `allowed_hosts:`,
+        # and the `Origin` header, when present, must be same-origin or in `allowed_origins:`.
+        def validate_dns_rebinding(request)
+          return unless @dns_rebinding_protection
+
+          validate_host(request) || validate_origin(request)
+        end
+
+        # Rejects a rebound `Host` (e.g. `evil.example.com` re-pointed at 127.0.0.1).
+        # A request without a `Host` header (e.g. HTTP/1.0) is allowed; the rebinding vector this guards against always carries one.
+        def validate_host(request)
+          host = request.env["HTTP_HOST"]
+          return if host.nil?
+
+          # An `allowed_hosts:` entry matches either the bare host name (any port)
+          # or the full `host:port` value, so both `"app.example.com"` and
+          # `"app.example.com:8443"` can be configured.
+          normalized = host.downcase
+          return if @allowed_hosts.include?(request_hostname(normalized)) || @allowed_hosts.include?(normalized)
+
+          forbidden_response("Forbidden: Invalid Host header")
+        end
+
+        # A request without an `Origin` header (typical for non-browser MCP clients) is allowed. A browser cross-origin request is
+        # rejected unless the origin is same-origin or explicitly allow-listed via `allowed_origins:`.
+        def validate_origin(request)
+          origin = request.env["HTTP_ORIGIN"]
+          return if origin.nil?
+          return if same_origin?(origin, request)
+          return if @allowed_origins.include?(origin.downcase)
+
+          forbidden_response("Forbidden: Invalid Origin header")
+        end
+
+        # Extracts the host name from a `Host` header value, stripping any port and IPv6 brackets
+        # (`[::1]:8080` becomes `::1`, `127.0.0.1:8080` becomes `127.0.0.1`).
+        def request_hostname(host)
+          return host[/\A\[([^\]]+)\]/, 1] if host.start_with?("[")
+
+          host.split(":").first
+        end
+
+        # Compares the `Origin` authority (host:port) against the request's own `Host`.
+        # Scheme is not compared (the `Host` header carries none, and `request.scheme` is unreliable behind proxies),
+        # but the `Origin`'s scheme is used to drop a redundant default port (`:80` for http, `:443` for https) from
+        # both sides so `http://example.com` matches `Host: example.com:80`. Comparison is case-insensitive.
+        def same_origin?(origin, request)
+          host = request.env["HTTP_HOST"]
+          return false if host.nil?
+
+          normalized = origin.downcase
+          default_port = normalized.start_with?("https://") ? ":443" : ":80"
+          authority = normalized.sub(%r{\Ahttps?://}, "")
+
+          authority.delete_suffix(default_port) == host.downcase.delete_suffix(default_port)
+        end
+
+        def forbidden_response(message)
+          json_rpc_error_response(
+            status: 403,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: message,
+          )
         end
 
         def method_not_allowed_response
