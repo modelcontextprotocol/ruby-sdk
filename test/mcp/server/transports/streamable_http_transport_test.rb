@@ -4441,6 +4441,73 @@ module MCP
           refute headers.frozen?, "SSE response headers should not be frozen"
         end
 
+        test "rejects a request body over max_request_bytes with 413 without reading it all" do
+          transport = StreamableHTTPTransport.new(@server, max_request_bytes: 1024)
+          oversized = { jsonrpc: "2.0", method: "initialize", id: "1", params: { x: "A" * 4096 } }.to_json
+
+          # Content-Length present: rejected before reading.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "CONTENT_LENGTH" => oversized.bytesize.to_s },
+            oversized,
+          )
+          response = transport.handle_request(request)
+
+          assert_equal 413, response[0]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, JSON.parse(response[2][0]).dig("error", "code")
+        end
+
+        test "rejects an oversized body even when Content-Length is absent" do
+          transport = StreamableHTTPTransport.new(@server, max_request_bytes: 1024)
+          oversized = { jsonrpc: "2.0", method: "initialize", id: "1", params: { x: "A" * 4096 } }.to_json
+
+          # No CONTENT_LENGTH: the bounded read must still catch it.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            oversized,
+          )
+          response = transport.handle_request(request)
+
+          assert_equal 413, response[0]
+        end
+
+        test "accepts a request body at the max_request_bytes boundary" do
+          transport = StreamableHTTPTransport.new(@server, max_request_bytes: 4096)
+          body = { jsonrpc: "2.0", method: "initialize", id: "1" }.to_json
+          assert_operator body.bytesize, :<=, 4096
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            body,
+          )
+          response = transport.handle_request(request)
+
+          assert_equal 200, response[0]
+        end
+
+        test "rejects deeply nested JSON beyond the nesting cap as a parse error" do
+          depth = StreamableHTTPTransport::MAX_JSON_NESTING + 5
+          nested = ("[" * depth) + ("]" * depth)
+          body = %({"jsonrpc":"2.0","method":"initialize","id":"1","params":{"deep":#{nested}}})
+
+          request = create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body)
+          response = @transport.handle_request(request)
+
+          assert_equal 400, response[0]
+          assert_equal JsonRpcHandler::ErrorCode::PARSE_ERROR, JSON.parse(response[2][0]).dig("error", "code")
+        end
+
+        test "raises ArgumentError for an invalid max_request_bytes" do
+          [nil, 0, -1, 1.5, "1024"].each do |invalid|
+            assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, max_request_bytes: invalid) }
+          end
+        end
+
         test "handle_request returns 403 for POST when Origin is not in allowed_origins" do
           transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
 

@@ -39,6 +39,18 @@ module MCP
         UNSET_IDLE_TIMEOUT = Object.new.freeze
         private_constant :UNSET_IDLE_TIMEOUT
 
+        # Default upper bound on the JSON-RPC request body. `handle_post` reads the whole
+        # body into memory and parses it, so without a cap a single unauthenticated POST
+        # can allocate gigabytes and OOM the worker. 4 MiB comfortably
+        # fits a typical JSON-RPC request (a 4 MiB JSON string decodes to ~3 MiB of base64
+        # payload); raise `max_request_bytes:` for unusually large payloads. Matches the
+        # TypeScript SDK's 4 MB default.
+        DEFAULT_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+
+        # Conservative bound on JSON nesting depth, so a deeply nested body cannot exhaust
+        # the stack or amplify parse cost (complements the byte cap).
+        MAX_JSON_NESTING = 64
+
         # Creates a Streamable HTTP transport that can be mounted as a Rack app.
         #
         # @param server [MCP::Server] the server whose requests this transport dispatches.
@@ -66,6 +78,8 @@ module MCP
         #   the deploying application's responsibility (the transport never receives the authenticated identity
         #   on its own); this is the seam to enforce ownership and mitigate session poisoning. Without a validator,
         #   ownership is not enforced.
+        # @param max_request_bytes [Integer] upper bound in bytes on a POST request body; larger
+        #   requests are rejected with HTTP 413. Defaults to 4 MiB.
         def initialize(
           server,
           stateless: false,
@@ -75,7 +89,8 @@ module MCP
           allowed_origins: nil,
           allowed_hosts: nil,
           dns_rebinding_protection: true,
-          session_request_validator: nil
+          session_request_validator: nil,
+          max_request_bytes: DEFAULT_MAX_REQUEST_BYTES
         )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
@@ -114,6 +129,12 @@ module MCP
 
           # The cap guards the stateful session store; stateless mode keeps none.
           @max_sessions = stateless ? nil : max_sessions
+
+          unless max_request_bytes.is_a?(Integer) && max_request_bytes > 0
+            raise ArgumentError, "max_request_bytes must be a positive Integer"
+          end
+
+          @max_request_bytes = max_request_bytes
 
           start_reaper_thread if @session_idle_timeout
         end
@@ -419,7 +440,9 @@ module MCP
           content_type_error = validate_content_type(request)
           return content_type_error if content_type_error
 
-          body_string = request.body.read
+          body_string = read_bounded_body(request)
+          return payload_too_large_response if body_string.nil?
+
           session_id = extract_session_id(request)
 
           begin
@@ -645,8 +668,34 @@ module MCP
           )
         end
 
+        # Reads the request body with a hard byte cap so an unbounded POST cannot exhaust
+        # memory. A declared `Content-Length` over the cap is rejected
+        # without reading; the actual read is also bounded to one byte past the cap, so
+        # a missing or spoofed `Content-Length` (e.g. chunked transfer) is still caught.
+        # Returns `nil` when the body exceeds the cap.
+        def read_bounded_body(request)
+          content_length = request.content_length
+          return if content_length && content_length.to_i > @max_request_bytes
+
+          body = request.body.read(@max_request_bytes + 1)
+          return "" if body.nil?
+          return if body.bytesize > @max_request_bytes
+
+          body
+        end
+
+        def payload_too_large_response
+          json_rpc_error_response(
+            status: 413,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Payload too large: request body exceeds #{@max_request_bytes} bytes",
+          )
+        end
+
         def parse_request_body(body_string)
-          JSON.parse(body_string, symbolize_names: true)
+          # `max_nesting` bounds parse depth; a too-deep body raises `JSON::NestingError`,
+          # a subclass of `JSON::ParserError`, so it is caught below as a parse error.
+          JSON.parse(body_string, symbolize_names: true, max_nesting: MAX_JSON_NESTING)
         rescue JSON::ParserError, TypeError
           raise InvalidJsonError
         end
