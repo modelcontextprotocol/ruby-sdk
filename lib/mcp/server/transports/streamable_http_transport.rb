@@ -58,6 +58,14 @@ module MCP
         # @param dns_rebinding_protection [Boolean] when `true` (default), validates the `Host` and
         #   `Origin` headers to prevent DNS rebinding; pass `false` when an upstream proxy already
         #   validates them.
+        # @param session_request_validator [#call, nil] An optional
+        #   `->(request, session_id) { true | false }` invoked on every non-`initialize` POST, GET, and DELETE
+        #   against an existing session (regular requests, notifications, and client responses alike).
+        #   Returning a falsy value rejects the request with HTTP 403. The SDK issues a random `SecureRandom.uuid`
+        #   session ID and otherwise only checks existence/idle-timeout, so binding a session to a user is
+        #   the deploying application's responsibility (the transport never receives the authenticated identity
+        #   on its own); this is the seam to enforce ownership and mitigate session poisoning. Without a validator,
+        #   ownership is not enforced.
         def initialize(
           server,
           stateless: false,
@@ -66,15 +74,17 @@ module MCP
           max_sessions: DEFAULT_MAX_SESSIONS,
           allowed_origins: nil,
           allowed_hosts: nil,
-          dns_rebinding_protection: true
+          dns_rebinding_protection: true,
+          session_request_validator: nil
         )
           super(server)
-          # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock }`.
+          # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
           @sessions = {}
           @mutex = Mutex.new
 
           @stateless = stateless
           @enable_json_response = enable_json_response
+          @session_request_validator = session_request_validator
           @dns_rebinding_protection = dns_rebinding_protection
 
           # Host names are case-insensitive, so the allow lists are compared down-cased.
@@ -447,16 +457,25 @@ module MCP
               return session_not_found_response
             end
 
-            handle_initialization(body_string, body)
-          elsif notification?(body)
-            dispatch_notification(body_string, session_id)
-            handle_accepted
-          elsif response?(body)
-            return session_not_found_response if !@stateless && !session_exists?(session_id)
-
-            handle_response(body, session_id: session_id)
+            handle_initialization(request, body_string, body)
           else
-            handle_regular_request(body_string, session_id, related_request_id: body[:id])
+            # Ownership gate for every request against an existing session, applied uniformly to notifications, client responses,
+            # and regular requests. This covers write paths beyond tool calls - notably `notifications/cancelled`, which would
+            # otherwise let a stolen session ID cancel a victim's in-flight request. `initialize` is exempt (it establishes the session).
+            if !@stateless && session_id && !validate_session_request(request, session_id)
+              return forbidden_response
+            end
+
+            if notification?(body)
+              dispatch_notification(body_string, session_id)
+              handle_accepted
+            elsif response?(body)
+              return session_not_found_response if !@stateless && !session_exists?(session_id)
+
+              handle_response(body, session_id: session_id)
+            else
+              handle_regular_request(body_string, session_id, related_request_id: body[:id])
+            end
           end
         rescue StandardError => e
           MCP.configuration.exception_reporter.call(e, { request: body_string })
@@ -481,6 +500,7 @@ module MCP
 
           error_response = validate_and_touch_session(session_id)
           return error_response if error_response
+          return forbidden_response unless validate_session_request(request, session_id)
 
           protocol_version_error = validate_protocol_version_header(request)
           return protocol_version_error if protocol_version_error
@@ -503,6 +523,7 @@ module MCP
 
           return missing_session_id_response unless (session_id = extract_session_id(request))
           return session_not_found_response unless session_exists?(session_id)
+          return forbidden_response unless validate_session_request(request, session_id)
 
           protocol_version_error = validate_protocol_version_header(request)
           return protocol_version_error if protocol_version_error
@@ -562,6 +583,27 @@ module MCP
 
         def extract_session_id(request)
           request.env["HTTP_MCP_SESSION_ID"]
+        end
+
+        # Session-ownership gate for requests against an existing session (the spec's session-binding guidance).
+        # The session ID alone is unguessable but not proof of ownership, so a stolen ID must not silently grant access.
+        # Two layers, both returning `false` to trigger a 403:
+        #
+        # - Built-in Origin consistency (defense in depth, not authentication): if the session recorded an `Origin`
+        #   at `initialize` and this request carries a different one, reject. Both must be present to compare,
+        #   so non-browser clients that send no `Origin` are unaffected.
+        # - The application-supplied `session_request_validator`, which can enforce true ownership when it has
+        #   an authenticated principal.
+        def validate_session_request(request, session_id)
+          session = @mutex.synchronize { @sessions[session_id] }
+          return true unless session
+
+          session_origin = session[:origin]
+          request_origin = request.env["HTTP_ORIGIN"]
+          return false if session_origin && request_origin && session_origin != request_origin
+          return @session_request_validator.call(request, session_id) if @session_request_validator
+
+          true
         end
 
         def validate_accept_header(request, required_types)
@@ -682,7 +724,7 @@ module MCP
           handle_accepted
         end
 
-        def handle_initialization(body_string, body)
+        def handle_initialization(request, body_string, body)
           session_id = nil
 
           if @stateless
@@ -709,6 +751,9 @@ module MCP
                 get_sse_stream: nil,
                 server_session: server_session,
                 last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
+                # Captured for the built-in Origin-consistency defense in `validate_session_request`.
+                # Not authentication.
+                origin: request.env["HTTP_ORIGIN"],
               }
               true
             end
@@ -962,7 +1007,7 @@ module MCP
           authority.delete_suffix(default_port) == host.downcase.delete_suffix(default_port)
         end
 
-        def forbidden_response(message)
+        def forbidden_response(message = "Forbidden: session request validation failed")
           json_rpc_error_response(
             status: 403,
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,

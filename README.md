@@ -1798,6 +1798,31 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session
 
 Stateless mode (`stateless: true`) retains no sessions, so neither limit applies to it.
 
+#### Session Ownership
+
+`StreamableHTTPTransport` issues a random `SecureRandom.uuid` session ID and validates incoming requests by session
+existence and idle timeout only. It does not bind a session to a user, because the transport never receives
+an authenticated identity on its own. A caller that obtains a valid session ID could therefore act on that session,
+so binding a session to a user is the deploying application's responsibility (the MCP spec frames this as a SHOULD).
+
+The primary control is the `session_request_validator`. It is called as `->(request, session_id) { true | false }`
+on every non-`initialize` POST, GET, and DELETE against an existing session (including notification and response POSTs,
+so a stolen session ID cannot, for example, POST `notifications/cancelled` against a victim's request). A falsy return
+rejects the request with HTTP 403. Use it to compare the request's authenticated principal against the one recorded
+when the session was created:
+
+```ruby
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+  server,
+  session_request_validator: ->(request, session_id) { owns_session?(request, session_id) },
+)
+```
+
+Without a validator the transport does not enforce ownership. As a limited defense in depth (not authentication),
+it also records the `Origin` header at `initialize` and rejects a later request whose `Origin` differs, but only
+when both are present - a non-browser client that omits `Origin` (e.g. `curl` or a script) is not stopped by this check.
+Enforcing ownership against a determined attacker requires supplying the validator with an authenticated principal.
+
 ### Pagination
 
 The MCP Ruby SDK supports [pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
