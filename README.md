@@ -872,6 +872,53 @@ class WeatherTool < MCP::Tool
 end
 ```
 
+### Tool Responses with Image, Audio, and Embedded Resources
+
+Tool responses are not limited to text. The `MCP::Content` module provides `Image`, `Audio`, and `EmbeddedResource` content types,
+which serialize to the `image`, `audio`, and `resource` content blocks defined by the MCP spec. Image and audio data is passed as
+a base64-encoded string together with its MIME type:
+
+```ruby
+class ChartTool < MCP::Tool
+  description "Render a chart as a PNG image"
+
+  def self.call(server_context:)
+    MCP::Tool::Response.new([
+      MCP::Content::Text.new("Here is the rendered chart:").to_h,
+      MCP::Content::Image.new(Base64.strict_encode64(render_chart_png), "image/png").to_h,
+    ])
+  end
+end
+
+class SpeechTool < MCP::Tool
+  description "Synthesize speech audio"
+
+  def self.call(server_context:)
+    MCP::Tool::Response.new([
+      MCP::Content::Audio.new(Base64.strict_encode64(synthesize_wav), "audio/wav").to_h,
+    ])
+  end
+end
+```
+
+An embedded resource wraps `MCP::Resource::TextContents` or `MCP::Resource::BlobContents`, allowing a tool to return resource contents inline:
+
+```ruby
+class ReportTool < MCP::Tool
+  description "Return a report as an embedded resource"
+
+  def self.call(server_context:)
+    contents = MCP::Resource::TextContents.new(
+      uri: "report://monthly",
+      mime_type: "application/json",
+      text: { total: 42 }.to_json,
+    )
+
+    MCP::Tool::Response.new([MCP::Content::EmbeddedResource.new(contents).to_h])
+  end
+end
+```
+
 ### Prompts
 
 MCP spec includes [Prompts](https://modelcontextprotocol.io/specification/latest/server/prompts), which enable servers to define reusable prompt templates and workflows that clients can easily surface to users and LLMs.
@@ -1010,6 +1057,49 @@ The server will handle prompt listing and execution through the MCP protocol met
 - `prompts/list` - Lists all registered prompts and their schemas
 - `prompts/get` - Retrieves and executes a specific prompt with arguments
 
+### Prompts with Image and Embedded Resource Content
+
+Prompt messages are not limited to text. The same `MCP::Content` types used in tool responses can be used as message content,
+letting a prompt template include images or inline resource contents. Unlike tool responses, the content object is passed directly rather than as a hash;
+`MCP::Prompt::Message` serializes it when the prompt result is returned:
+
+```ruby
+class CodeReviewPrompt < MCP::Prompt
+  prompt_name "code_review"
+  description "Review a source file with an accompanying diagram"
+  arguments [
+    MCP::Prompt::Argument.new(name: "file_uri", description: "URI of the file to review", required: true),
+  ]
+
+  class << self
+    def template(args, server_context:)
+      MCP::Prompt::Result.new(
+        messages: [
+          MCP::Prompt::Message.new(
+            role: "user",
+            content: MCP::Content::EmbeddedResource.new(
+              MCP::Resource::TextContents.new(
+                uri: args["file_uri"],
+                mime_type: "text/x-ruby",
+                text: read_source(args["file_uri"]),
+              ),
+            ),
+          ),
+          MCP::Prompt::Message.new(
+            role: "user",
+            content: MCP::Content::Image.new(architecture_diagram_base64, "image/png"),
+          ),
+          MCP::Prompt::Message.new(
+            role: "user",
+            content: MCP::Content::Text.new("Please review the code above, using the diagram for context."),
+          ),
+        ],
+      )
+    end
+  end
+end
+```
+
 ### Resources
 
 MCP spec includes [Resources](https://modelcontextprotocol.io/specification/latest/server/resources).
@@ -1126,6 +1216,34 @@ server.resources_read_handler do |params|
 end
 ```
 
+### Reading Binary Resources
+
+For binary resources, respond with a base64-encoded `blob` field instead of `text`.
+The `MCP::Resource::TextContents` and `MCP::Resource::BlobContents` classes build the two contents shapes defined by the spec:
+
+```ruby
+server.resources_read_handler do |params|
+  case params[:uri]
+  when "file:///logo.png"
+    [
+      MCP::Resource::BlobContents.new(
+        uri: params[:uri],
+        mime_type: "image/png",
+        data: Base64.strict_encode64(File.binread("logo.png")),
+      ).to_h,
+    ]
+  else
+    [
+      MCP::Resource::TextContents.new(
+        uri: params[:uri],
+        mime_type: "text/plain",
+        text: "Hello from example resource!",
+      ).to_h,
+    ]
+  end
+end
+```
+
 ### Resource Templates
 
 Resource templates follow the same pattern. Class-based templates declare a `uri_template` and
@@ -1199,6 +1317,31 @@ server = MCP::Server.new(
   name: "my_server",
   resource_templates: [resource_template],
 )
+```
+
+Registered templates are listed through the `resources/templates/list` protocol method.
+To serve reads for URIs that match a template, extract the variable parts of the URI in your `resources_read_handler`:
+
+```ruby
+resource_template = MCP::ResourceTemplate.new(
+  uri_template: "file:///items/{item_id}",
+  name: "item",
+  mime_type: "application/json",
+)
+
+server = MCP::Server.new(name: "my_server", resource_templates: [resource_template])
+
+server.resources_read_handler do |params|
+  if (match = params[:uri].match(%r{\Afile:///items/(?<item_id>[^/]+)\z}))
+    [{
+      uri: params[:uri],
+      mimeType: "application/json",
+      text: { id: match[:item_id] }.to_json,
+    }]
+  else
+    raise MCP::Server::ResourceNotFoundError.new(params[:uri], params)
+  end
+end
 ```
 
 ### Roots
@@ -1790,6 +1933,40 @@ server.define_tool(name: "collect_contact", description: "Collect contact info")
   end
 
   MCP::Tool::Response.new([{ type: "text", text: text }])
+end
+```
+
+The `requested_schema` must be a flat object schema: a top-level `type: "object"` whose `properties` are limited to
+primitive types (`string`, `number`, `integer`, `boolean`). Nested objects and arrays are not allowed, which keeps
+the schema simple enough for clients to render as a form. Per the MCP specification, the client validates
+the user's input against this schema before returning it, so the `content` of an `accept` response matches the requested shape.
+
+#### Default Values and Enums
+
+Properties may declare a `default` value (SEP-1034), which clients use to pre-fill the form.
+String properties may declare `enum` values, optionally with human-readable `enumNames` (SEP-1330), which clients render as a choice list:
+
+```ruby
+server.define_tool(name: "configure_deploy", description: "Configure a deployment") do |server_context:|
+  result = server_context.create_form_elicitation(
+    message: "Configure the deployment",
+    requested_schema: {
+      type: "object",
+      properties: {
+        replicas: { type: "integer", default: 3 },
+        verbose: { type: "boolean", default: false },
+        environment: {
+          type: "string",
+          enum: ["dev", "staging", "prod"],
+          enumNames: ["Development", "Staging", "Production"],
+          default: "dev",
+        },
+      },
+      required: ["environment"],
+    },
+  )
+
+  MCP::Tool::Response.new([{ type: "text", text: "Deploying to #{result[:content][:environment]}" }])
 end
 ```
 
