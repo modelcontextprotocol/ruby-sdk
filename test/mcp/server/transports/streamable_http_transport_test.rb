@@ -4741,6 +4741,196 @@ module MCP
           transport.close
         end
 
+        test "rejects a POST to a session whose Origin differs from initialize with 403" do
+          # Both origins are allow-listed so they pass DNS rebinding protection; the rejection
+          # below comes from the per-session Origin-consistency gate, not from the rebinding check.
+          transport = StreamableHTTPTransport.new(
+            @server,
+            enable_json_response: true,
+            allowed_origins: ["https://app.example.com", "https://evil.example.com"],
+          )
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+
+          attacker = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ORIGIN" => "https://evil.example.com",
+            },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+          response = transport.handle_request(attacker)
+
+          assert_equal(403, response[0])
+        ensure
+          transport.close
+        end
+
+        test "allows a POST with a matching Origin and one with no Origin" do
+          transport = StreamableHTTPTransport.new(
+            @server,
+            enable_json_response: true,
+            allowed_origins: ["https://app.example.com"],
+          )
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+
+          same_origin = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ORIGIN" => "https://app.example.com",
+            },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+
+          # A non-browser client that sends no Origin is not rejected by the built-in check.
+          no_origin = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "ping", id: "2" }.to_json,
+          )
+
+          assert_equal(200, transport.handle_request(same_origin)[0])
+          assert_equal(200, transport.handle_request(no_origin)[0])
+        ensure
+          transport.close
+        end
+
+        test "a custom session_request_validator rejects and allows requests" do
+          allowed = { value: true }
+          validator = ->(_request, _session_id) { allowed[:value] }
+          transport = StreamableHTTPTransport.new(@server, enable_json_response: true, session_request_validator: validator)
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+
+          ping = lambda do
+            create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+              { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+            )
+          end
+
+          assert_equal(200, transport.handle_request(ping.call)[0])
+          allowed[:value] = false
+          assert_equal(403, transport.handle_request(ping.call)[0])
+        ensure
+          transport.close
+        end
+
+        test "the validator also gates notification and response POSTs, not just regular requests" do
+          # A stolen session ID must not be able to POST `notifications/cancelled` (which would cancel a victim's in-flight request)
+          # or a client response by bypassing the ownership gate. `initialize` establishes the session and is exempt,
+          # so a single transport whose validator always rejects still initializes.
+          transport = StreamableHTTPTransport.new(
+            @server,
+            enable_json_response: true,
+            session_request_validator: ->(_request, _session_id) { false },
+          )
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          refute_nil(session_id)
+
+          headers = { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }
+          cancelled = create_rack_request(
+            "POST",
+            "/",
+            headers,
+            { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "1" } }.to_json,
+          )
+          client_response = create_rack_request(
+            "POST",
+            "/",
+            headers,
+            { jsonrpc: "2.0", id: "1", result: {} }.to_json,
+          )
+
+          assert_equal(403, transport.handle_request(cancelled)[0])
+          assert_equal(403, transport.handle_request(client_response)[0])
+        ensure
+          transport.close
+        end
+
+        test "session_request_validator receives the request and session id" do
+          seen = {}
+          validator = ->(request, session_id) {
+            seen[:origin] = request.env["HTTP_ORIGIN"]
+            seen[:session_id] = session_id
+            true
+          }
+          transport = StreamableHTTPTransport.new(
+            @server,
+            enable_json_response: true,
+            allowed_origins: ["https://app.example.com"],
+            session_request_validator: validator,
+          )
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+
+          transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id, "HTTP_ORIGIN" => "https://app.example.com" },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          ))
+
+          assert_equal(session_id, seen[:session_id])
+          assert_equal("https://app.example.com", seen[:origin])
+        ensure
+          transport.close
+        end
+
+        test "session validation does not apply in stateless mode" do
+          rejecting = ->(_request, _session_id) { false }
+          transport = StreamableHTTPTransport.new(@server, stateless: true, enable_json_response: true, session_request_validator: rejecting)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+          )
+          response = transport.handle_request(request)
+
+          # Stateless mode keeps no sessions, so the validator is never consulted.
+          assert_equal(200, response[0])
+        ensure
+          transport.close
+        end
+
         private
 
         def create_rack_request(method, path, headers, body = nil)
