@@ -155,6 +155,8 @@ end
 the [MCP Streamable HTTP transport spec](https://modelcontextprotocol.io/specification/latest/basic/transports#streamable-http),
 so no additional route configuration is needed.
 
+A complete runnable application using this approach is available in [`examples/rails`](examples/rails).
+
 ##### Rails (controller)
 
 While the mount approach creates a single server at boot time, the controller approach creates a new server per request.
