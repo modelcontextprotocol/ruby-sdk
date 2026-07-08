@@ -63,12 +63,29 @@ module JsonRpcHandler
         message: "Parse error",
         data: "Invalid JSON",
       })
+    rescue StandardError
+      # Last-resort guard so an unexpected handling error returns a JSON-RPC error
+      # instead of escaping to the transport loop.
+      response = error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+        code: ErrorCode::INTERNAL_ERROR,
+        message: "Internal error",
+      })
     end
 
     response&.to_json
   end
 
   def process_request(request, id_validation_pattern:, &method_finder)
+    # A batch element can be any JSON value; a non-object element cannot carry an id or a method,
+    # so reject it before the `request[:id]` access below.
+    unless request.is_a?(Hash)
+      return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+        code: ErrorCode::INVALID_REQUEST,
+        message: "Invalid Request",
+        data: "Request must be an object",
+      })
+    end
+
     id = request[:id]
 
     error = if !valid_version?(request[:jsonrpc])

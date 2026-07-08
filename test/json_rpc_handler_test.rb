@@ -682,6 +682,37 @@ describe JsonRpcHandler do
         assert_equal 3, @response.first[:result]
         assert_equal(-32600, @response.last.dig(:error, :code))
       end
+
+      it "returns an invalid request error for a non-object batch element instead of raising" do
+        [[], [1], ["x"], [nil], [true]].each do |batch|
+          handle batch
+
+          assert_equal(-32600, @response.dig(:error, :code))
+          assert_equal "Invalid Request", @response.dig(:error, :message)
+          assert_nil @response[:id]
+        end
+      end
+
+      it "handles a valid request followed by a non-object element without raising" do
+        register("add") { |params| params[:a] + params[:b] }
+
+        handle [
+          { jsonrpc: "2.0", id: 100, method: "add", params: { a: 1, b: 2 } },
+          [],
+        ]
+
+        assert @response.is_a?(Array)
+        assert_equal 3, @response.first[:result]
+        assert_equal(-32600, @response.last.dig(:error, :code))
+        assert_nil @response.last[:id]
+      end
+
+      it "does not raise from handle_json when a batch element is not an object" do
+        result = handle_json("[[]]")
+
+        assert_equal(-32600, @response.dig(:error, :code))
+        refute_nil result
+      end
     end
 
     # 7 Examples
