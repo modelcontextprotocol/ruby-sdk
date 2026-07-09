@@ -883,6 +883,40 @@ module MCP
       assert_equal("cursor1", result.next_cursor)
     end
 
+    def test_list_results_expose_ttl_ms_and_cache_scope
+      # SEP-2549 cache hints are surfaced on every paginated result struct.
+      [
+        ["tools/list", "tools", :list_tools],
+        ["prompts/list", "prompts", :list_prompts],
+        ["resources/list", "resources", :list_resources],
+        ["resources/templates/list", "resourceTemplates", :list_resource_templates],
+      ].each do |method, items_key, client_method|
+        transport = mock
+        mock_response = {
+          "result" => { items_key => [], "ttlMs" => 5000, "cacheScope" => "private" },
+        }
+        transport.expects(:send_request).with do |args|
+          args.dig(:request, :method) == method
+        end.returns(mock_response).once
+
+        result = Client.new(transport: transport).public_send(client_method)
+
+        assert_equal(5000, result.ttl_ms, "#{method} missing ttl_ms")
+        assert_equal("private", result.cache_scope, "#{method} missing cache_scope")
+      end
+    end
+
+    def test_list_results_have_nil_cache_hints_when_server_omits_them
+      transport = mock
+      mock_response = { "result" => { "tools" => [] } }
+      transport.expects(:send_request).returns(mock_response).once
+
+      result = Client.new(transport: transport).list_tools
+
+      assert_nil(result.ttl_ms)
+      assert_nil(result.cache_scope)
+    end
+
     def test_list_tools_with_cursor_param
       transport = mock
 

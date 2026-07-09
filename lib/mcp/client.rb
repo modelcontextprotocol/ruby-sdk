@@ -134,7 +134,13 @@ module MCP
         )
       end
 
-      ListToolsResult.new(tools: tools, next_cursor: result["nextCursor"], meta: result["_meta"])
+      ListToolsResult.new(
+        tools: tools,
+        next_cursor: result["nextCursor"],
+        meta: result["_meta"],
+        ttl_ms: result["ttlMs"],
+        cache_scope: result["cacheScope"],
+      )
     end
 
     # Returns every tool available on the server. Iterates through all pages automatically
@@ -175,6 +181,8 @@ module MCP
         resources: result["resources"] || [],
         next_cursor: result["nextCursor"],
         meta: result["_meta"],
+        ttl_ms: result["ttlMs"],
+        cache_scope: result["cacheScope"],
       )
     end
 
@@ -208,6 +216,8 @@ module MCP
         resource_templates: result["resourceTemplates"] || [],
         next_cursor: result["nextCursor"],
         meta: result["_meta"],
+        ttl_ms: result["ttlMs"],
+        cache_scope: result["cacheScope"],
       )
     end
 
@@ -241,6 +251,8 @@ module MCP
         prompts: result["prompts"] || [],
         next_cursor: result["nextCursor"],
         meta: result["_meta"],
+        ttl_ms: result["ttlMs"],
+        cache_scope: result["cacheScope"],
       )
     end
 

@@ -2936,6 +2936,86 @@ module MCP
       assert_empty response.dig(:result, :content)
     end
 
+    test "list results carry ttlMs and cacheScope when ttl_ms is configured" do
+      # SEP-2549 cache hints. The cacheScope default is "public", matching
+      # the spec default and the Python SDK.
+      server = Server.new(name: "ttl_test", ttl_ms: 5000)
+
+      ["tools/list", "prompts/list", "resources/list", "resources/templates/list"].each_with_index do |method, index|
+        result = server.handle({ jsonrpc: "2.0", method: method, id: index + 1 })[:result]
+
+        assert_equal 5000, result[:ttlMs], "#{method} missing ttlMs"
+        assert_equal "public", result[:cacheScope], "#{method} missing cacheScope"
+      end
+    end
+
+    test "resources/read carries cache hints when cache_scope is configured" do
+      # The ttlMs default is 0 (do not cache), the only universally safe value.
+      server = Server.new(name: "ttl_test", cache_scope: "private")
+
+      result = server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 1,
+        params: { uri: "file:///x" },
+      })[:result]
+
+      assert_equal 0, result[:ttlMs]
+      assert_equal "private", result[:cacheScope]
+    end
+
+    test "results omit cache hints when ttl_ms and cache_scope are not configured" do
+      # Wire-format regression: opt-in emission keeps default output unchanged.
+      list_result = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })[:result]
+      read_result = @server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 2,
+        params: { uri: "file:///x" },
+      })[:result]
+
+      refute list_result.key?(:ttlMs)
+      refute list_result.key?(:cacheScope)
+      refute read_result.key?(:ttlMs)
+      refute read_result.key?(:cacheScope)
+    end
+
+    test "cache hints appear alongside nextCursor when paginating" do
+      tool_a = Tool.define(name: "tool_a", description: "Tool A")
+      tool_b = Tool.define(name: "tool_b", description: "Tool B")
+      server = Server.new(name: "ttl_test", tools: [tool_a, tool_b], page_size: 1, ttl_ms: 1000, cache_scope: "private")
+
+      result = server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })[:result]
+
+      assert_not_nil result[:nextCursor]
+      assert_equal 1000, result[:ttlMs]
+      assert_equal "private", result[:cacheScope]
+    end
+
+    test "a resources_read_handler can override the server-level cache hints per result" do
+      server = Server.new(name: "ttl_test", ttl_ms: 5000)
+      server.resources_read_handler do |params|
+        { contents: [{ uri: params[:uri], mimeType: "text/plain", text: "hi" }], ttlMs: 60_000 }
+      end
+
+      result = server.handle({
+        jsonrpc: "2.0",
+        method: "resources/read",
+        id: 1,
+        params: { uri: "file:///x" },
+      })[:result]
+
+      assert_equal 60_000, result[:ttlMs]
+      assert_equal "public", result[:cacheScope]
+      assert_equal [{ uri: "file:///x", mimeType: "text/plain", text: "hi" }], result[:contents]
+    end
+
+    test "ttl_ms and cache_scope writers reject invalid values" do
+      assert_raises(ArgumentError) { Server.new(name: "ttl_test", ttl_ms: -1) }
+      assert_raises(ArgumentError) { Server.new(name: "ttl_test", ttl_ms: 1.5) }
+      assert_raises(ArgumentError) { Server.new(name: "ttl_test", cache_scope: "internal") }
+    end
+
     test "#handle tools/list returns paginated results when page_size is set" do
       tool_a = Tool.define(name: "tool_a", title: "Tool A", description: "Tool A")
       tool_b = Tool.define(name: "tool_b", title: "Tool B", description: "Tool B")
