@@ -525,6 +525,40 @@ module MCP
           assert_equal "Missing session ID", body["error"]["message"]
         end
 
+        test "rejects notification with an unknown session ID in stateful mode" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => "does-not-exist" },
+            { jsonrpc: "2.0", method: "notifications/initialized" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 404, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "Session not found", body["error"]["message"]
+        end
+
+        test "accepts a notification carrying a live session ID in stateful mode" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = @transport.handle_request(init_request)[1]["Mcp-Session-Id"]
+
+          notification = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "notifications/initialized" }.to_json,
+          )
+
+          response = @transport.handle_request(notification)
+          assert_equal 202, response[0]
+        end
+
         test "rejects response without session ID in stateful mode" do
           request = create_rack_request(
             "POST",

@@ -517,6 +517,11 @@ module MCP
             end
 
             if notification?(body)
+              # Reject a notification carrying an unknown or expired session ID instead of
+              # dispatching it against the shared `Server`. Mirrors the response and regular-request
+              # branches; without it a custom notification handler could run without a live session.
+              return session_not_found_response if !@stateless && !session_active?(session_id)
+
               dispatch_notification(body_string, session_id)
               handle_accepted
             elsif response?(body)
