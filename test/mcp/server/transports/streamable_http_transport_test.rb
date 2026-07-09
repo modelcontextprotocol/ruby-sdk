@@ -315,6 +315,24 @@ module MCP
           assert_equal({}, @transport.instance_variable_get(:@sessions))
         end
 
+        test "acks an initialize sent without an id and retains no session" do
+          # `initialize` framed as a notification (no id) produces no JSON-RPC response.
+          # The transport must not put nil in the Rack body or retain the orphaned session.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+
+          assert_equal 202, response[0]
+          refute response[1].key?("Mcp-Session-Id"), "no session id should leak from an id-less init"
+          assert_equal [], response[2]
+          assert_equal({}, @transport.instance_variable_get(:@sessions))
+        end
+
         test "rejects non-Hash JSON-RPC body with HTTP 400 and -32600" do
           request = create_rack_request(
             "POST",

@@ -844,6 +844,17 @@ module MCP
 
           response = server_session.handle_json(body_string)
 
+          # `initialize_request?` matches on the method alone, so an `initialize` sent without
+          # an id (framed as a notification) reaches here. `Server#init` marks the session initialized,
+          # but JSON-RPC emits no response for an id-less request, so `response` is nil.
+          # Returning `[200, ..., [nil]]` would place nil in the Rack body (which the web server cannot serialize),
+          # and the session would be retained since it is marked initialized. Discard the orphaned session
+          # and ack with 202, mirroring the nil-response handling in a regular request.
+          if response.nil?
+            cleanup_session(session_id) if session_id
+            return handle_accepted
+          end
+
           # If `Server#init` produced an error response (e.g., malformed JSON-RPC envelope),
           # `mark_initialized!` was never called. Discard the orphaned session and omit
           # the `Mcp-Session-Id` header so the client retries from a clean state instead of
