@@ -461,7 +461,9 @@ module MCP
           # The `MCP-Protocol-Version` header is only meaningful after negotiation, so on `initialize`
           # the JSON-RPC body `params.protocolVersion` is authoritative and the header (if any) is ignored.
           # This matches the TypeScript and Python SDKs.
-          unless initialize_request?(body)
+          # `server/discover` (SEP-2575) is likewise exempt: it is sessionless capability discovery that
+          # happens before (or instead of) negotiation.
+          unless initialize_request?(body) || discover_request?(body)
             return missing_session_id_response if !@stateless && !session_id
 
             protocol_version_error = validate_protocol_version_header(request)
@@ -710,6 +712,10 @@ module MCP
 
         def initialize_request?(body)
           body.is_a?(Hash) && body[:method] == Methods::INITIALIZE
+        end
+
+        def discover_request?(body)
+          body.is_a?(Hash) && body[:method] == Methods::SERVER_DISCOVER
         end
 
         def validate_protocol_version_header(request)

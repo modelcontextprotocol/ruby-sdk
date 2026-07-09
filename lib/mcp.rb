@@ -12,6 +12,7 @@ module MCP
   autoload :CancelledError, "mcp/cancelled_error"
   autoload :Client, "mcp/client"
   autoload :Content, "mcp/content"
+  autoload :ErrorCodes, "mcp/error_codes"
   autoload :Icon, "mcp/icon"
   autoload :Prompt, "mcp/prompt"
   autoload :Resource, "mcp/resource"

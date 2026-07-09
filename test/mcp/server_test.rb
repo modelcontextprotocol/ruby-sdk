@@ -123,6 +123,54 @@ module MCP
       assert_instrumentation_data({ method: "ping" })
     end
 
+    test "#handle server/discover returns supported versions, capabilities, server info, and instructions" do
+      response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
+      result = response[:result]
+
+      assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, result[:supportedVersions]
+      assert_equal @server.capabilities, result[:capabilities]
+      assert_equal @server_name, result.dig(:serverInfo, :name)
+      assert_equal "1.2.3", result.dig(:serverInfo, :version)
+      assert_equal "Optional instructions for the client", result[:instructions]
+    end
+
+    test "#handle server/discover responds before initialize and regardless of capabilities" do
+      # Per SEP-2575, discovery is sessionless: no prior `initialize`, no capability gate.
+      server = Server.new(name: "discover_test", capabilities: {})
+
+      response = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
+
+      assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, response.dig(:result, :supportedVersions)
+    end
+
+    test "#handle server/discover does not mark the session initialized" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 }, session: session)
+
+      refute_predicate session, :initialized?
+      # `initialize` must still succeed afterwards.
+      response = @server.handle(
+        { jsonrpc: "2.0", method: "initialize", id: 2, params: { clientInfo: { name: "c", version: "1" } } },
+        session: session,
+      )
+      refute_nil response[:result]
+    end
+
+    test "#handle server/discover omits instructions when the server has none" do
+      server = Server.new(name: "discover_test")
+
+      response = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
+
+      refute response[:result].key?(:instructions)
+    end
+
+    test "#define_custom_method raises for server/discover" do
+      assert_raises(Server::MethodAlreadyDefinedError) do
+        @server.define_custom_method(method_name: "server/discover") { {} }
+      end
+    end
+
     test "#handle initialize request returns protocol info, server info, and capabilities" do
       request = {
         jsonrpc: "2.0",
