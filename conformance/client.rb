@@ -95,7 +95,9 @@ def build_oauth_provider(context, scenario:)
 
   callback_handler = -> do
     query = URI.decode_www_form(callback_holder.fetch(:url).query).to_h
-    [query["code"], query["state"]]
+    # The 3-element form opts into SEP-2468 / RFC 9207 `iss` validation;
+    # `query["iss"]` is nil when the authorization response carried no `iss`.
+    [query["code"], query["state"], query["iss"]]
   end
 
   MCP::Client::OAuth::Provider.new(

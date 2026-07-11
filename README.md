@@ -2348,7 +2348,9 @@ Required keyword arguments to `Provider.new`:
   an explicit value always wins.
 - `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
 - `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
-- `callback_handler`: Callable that returns `[code, state]` after the user is redirected back to `redirect_uri`.
+- `callback_handler`: Callable that returns `[code, state]` or `[code, state, iss]` after the user is redirected back to `redirect_uri`. Returning the 3-element form
+  (with `iss` set to the RFC 9207 `iss` parameter from the redirect, or `nil` when absent) opts into SEP-2468 issuer validation: a present `iss` must match
+  the authorization server's issuer, and a missing one is rejected when the server advertises `authorization_response_iss_parameter_supported`.
 
 Optional keyword arguments:
 

@@ -74,12 +74,19 @@ module MCP
           )
 
           @provider.redirect_handler.call(authorization_url)
-          code, returned_state = Array(@provider.callback_handler.call)
+          callback_result = Array(@provider.callback_handler.call)
+          code, returned_state, returned_iss = callback_result
           raise AuthorizationError, "Authorization callback did not return an authorization code." unless code
 
           unless states_match?(returned_state, state)
             raise AuthorizationError, "OAuth state mismatch (CSRF protection)."
           end
+
+          validate_authorization_response_issuer!(
+            as_metadata: as_metadata,
+            iss: returned_iss,
+            iss_provided: callback_result.length >= 3,
+          )
 
           tokens = exchange_authorization_code(
             as_metadata: as_metadata,
@@ -532,6 +539,43 @@ module MCP
           Discovery.canonicalize_url(url)
         rescue URI::InvalidURIError, ArgumentError => e
           raise AuthorizationError, "#{label} #{url.inspect} is not a valid URI: #{e.message}."
+        end
+
+        # Validates the RFC 9207 `iss` authorization response parameter against the issuer of the authorization server
+        # the flow is talking to, per SEP-2468 (mix-up attack mitigation in multi-IdP setups):
+        #
+        # - When the callback supplied a non-empty `iss`, it MUST equal the AS metadata `issuer` exactly (simple string comparison,
+        #   no normalization, per RFC 9207 Section 2.4); on mismatch the flow aborts before the authorization code is ever sent to
+        #   a token endpoint.
+        # - When the callback returned a 3-element `[code, state, iss]` whose `iss` is nil (asserting it inspected the authorization response
+        #   and found no `iss`) and the AS metadata advertises `authorization_response_iss_parameter_supported: true`, the missing parameter
+        #   is treated as an attack per RFC 9207 Section 2.4 and the flow aborts.
+        # - A legacy 2-element `[code, state]` callback skips the check: the caller never looked for `iss`, so its absence carries no signal.
+        #
+        # `as_metadata["issuer"]` has already been byte-compared against the discovery URL by `ensure_issuer_matches!`,
+        #  so it is the RFC 9207 anchor value. `iss` is not a secret; a plain `==` suffices.
+        #
+        # - https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2468
+        # - https://www.rfc-editor.org/rfc/rfc9207
+        def validate_authorization_response_issuer!(as_metadata:, iss:, iss_provided:)
+          expected = as_metadata["issuer"]
+
+          if iss && !iss.to_s.empty?
+            return if iss.to_s == expected.to_s
+
+            raise AuthorizationError,
+              "Authorization response `iss` does not match the authorization server issuer " \
+                "(expected #{expected.inspect}, got #{iss.inspect}) (RFC 9207); " \
+                "refusing to exchange the authorization code."
+          end
+
+          return unless iss_provided
+          return unless as_metadata["authorization_response_iss_parameter_supported"] == true
+
+          raise AuthorizationError,
+            "Authorization server advertises `authorization_response_iss_parameter_supported` but " \
+              "the authorization response carried no `iss` parameter (RFC 9207 Section 2.4); " \
+              "refusing to exchange the authorization code."
         end
 
         # Constant-time comparison for the OAuth `state` parameter to prevent timing-based discovery
