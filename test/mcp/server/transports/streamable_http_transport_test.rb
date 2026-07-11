@@ -2891,6 +2891,67 @@ module MCP
           assert_equal "Hi there", result[:content][:text]
         end
 
+        test "send_request with related_request_id rides the originating POST stream, not the GET stream" do
+          # Per SEP-2260, server-to-client requests associated with a client request are delivered on
+          # that request's POST SSE response stream rather than the standalone GET stream.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["Mcp-Session-Id"]
+
+          # Connect GET SSE.
+          get_io = StringIO.new
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          response = @transport.handle_request(get_request)
+          response[2].call(get_io) if response[2].is_a?(Proc)
+          sleep(0.1)
+
+          # Register an in-flight POST request stream for "req-1".
+          post_io = StringIO.new
+          @transport.instance_variable_get(:@sessions)[session_id][:post_request_streams] = { "req-1" => post_io }
+
+          result_queue = Queue.new
+          Thread.new do
+            result = @transport.send_request(
+              "roots/list",
+              nil,
+              session_id: session_id,
+              related_request_id: "req-1",
+            )
+            result_queue.push(result)
+          end
+
+          sleep(0.1)
+
+          post_io.rewind
+          post_output = post_io.read
+          assert_includes post_output, "roots/list"
+
+          get_io.rewind
+          refute_includes get_io.read, "roots/list"
+
+          # Respond so the background send_request completes.
+          data_lines = post_output.lines.select { |line| line.start_with?("data: ") }
+          request_id = JSON.parse(data_lines.first.sub("data: ", ""))["id"]
+          client_response = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: request_id, result: { roots: [] } }.to_json,
+          )
+          @transport.handle_request(client_response)
+
+          assert_equal({ roots: [] }, result_queue.pop)
+        end
+
         test "send_request ignores response from wrong session" do
           # Create two sessions.
           init_a = create_rack_request(

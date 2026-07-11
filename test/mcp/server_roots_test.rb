@@ -111,7 +111,7 @@ module MCP
       transport.instance_variable_get(:@sessions)["s1"] = { stream: nil, server_session: session_with_roots }
 
       error_with_roots = assert_raises(RuntimeError) do
-        session_with_roots.list_roots
+        capture_io { session_with_roots.list_roots }
       end
       assert_equal("No active stream for roots/list request.", error_with_roots.message)
 
@@ -119,9 +119,29 @@ module MCP
       session_without_roots.store_client_info(client: { name: "incapable" }, capabilities: {})
 
       error = assert_raises(RuntimeError) do
-        session_without_roots.list_roots
+        capture_io { session_without_roots.list_roots }
       end
       assert_equal("Client does not support roots.", error.message)
+    end
+
+    test "ServerSession#list_roots warns when called without related_request_id" do
+      # Per SEP-2260, server-to-client requests must be associated with an originating client request.
+      # `$VERBOSE = false` because the rake test task runs with `-W0`, under which `Kernel#warn` emits nothing.
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+      session.store_client_info(client: { name: "capable" }, capabilities: { roots: {} })
+
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+      assert_output(nil, /SEP-2260/) { session.list_roots }
+    ensure
+      $VERBOSE = original_verbose
+    end
+
+    test "ServerSession#list_roots does not warn when related_request_id is given" do
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+      session.store_client_info(client: { name: "capable" }, capabilities: { roots: {} })
+
+      assert_silent { session.list_roots(related_request_id: "req-1") }
     end
 
     test "ServerSession#client_capabilities falls back to server global capabilities" do
@@ -131,7 +151,7 @@ module MCP
       transport.instance_variable_get(:@sessions)["s3"] = { stream: nil, server_session: session }
 
       error = assert_raises(RuntimeError) do
-        session.list_roots
+        capture_io { session.list_roots }
       end
       assert_equal("No active stream for roots/list request.", error.message)
     end
@@ -195,7 +215,7 @@ module MCP
 
       transport.instance_variable_get(:@sessions)["s1"] = { stream: nil, server_session: session }
       error = assert_raises(RuntimeError) do
-        session.list_roots
+        capture_io { session.list_roots }
       end
       assert_equal("No active stream for roots/list request.", error.message)
     end

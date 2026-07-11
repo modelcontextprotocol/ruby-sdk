@@ -57,6 +57,87 @@ module MCP
       assert_equal [{ uri: "file:///project", name: "Project" }], result[:roots]
     end
 
+    test "ServerContext#list_roots stamps the originating request id" do
+      # Per SEP-2260, server-to-client requests are associated with the originating client request automatically.
+      notification_target = mock
+      notification_target.expects(:list_roots).with(related_request_id: "req-1").returns({ roots: [] })
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(
+        mock,
+        progress: progress,
+        notification_target: notification_target,
+        related_request_id: "req-1",
+      )
+
+      server_context.list_roots
+    end
+
+    test "ServerContext#create_sampling_message stamps related_request_id non-overridably" do
+      # A caller-supplied `related_request_id:` must not detach the request from its originating client request (SEP-2260):
+      # the literal keyword after `**kwargs` wins.
+      notification_target = mock
+      notification_target.expects(:create_sampling_message).with(
+        messages: [],
+        max_tokens: 5,
+        related_request_id: "req-1",
+      ).returns({})
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(
+        mock,
+        progress: progress,
+        notification_target: notification_target,
+        related_request_id: "req-1",
+      )
+
+      server_context.create_sampling_message(messages: [], max_tokens: 5, related_request_id: "attacker")
+    end
+
+    test "ServerContext#create_form_elicitation stamps related_request_id non-overridably" do
+      notification_target = mock
+      notification_target.expects(:create_form_elicitation).with(
+        message: "hi",
+        requested_schema: {},
+        related_request_id: "req-1",
+      ).returns({})
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(
+        mock,
+        progress: progress,
+        notification_target: notification_target,
+        related_request_id: "req-1",
+      )
+
+      server_context.create_form_elicitation(message: "hi", requested_schema: {}, related_request_id: "attacker")
+    end
+
+    test "ServerContext#create_url_elicitation stamps related_request_id non-overridably" do
+      notification_target = mock
+      notification_target.expects(:create_url_elicitation).with(
+        message: "hi",
+        url: "https://example.com",
+        elicitation_id: "el-1",
+        related_request_id: "req-1",
+      ).returns({})
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(
+        mock,
+        progress: progress,
+        notification_target: notification_target,
+        related_request_id: "req-1",
+      )
+
+      server_context.create_url_elicitation(
+        message: "hi",
+        url: "https://example.com",
+        elicitation_id: "el-1",
+        related_request_id: "attacker",
+      )
+    end
+
     test "ServerContext#list_roots raises NoMethodError when notification_target does not respond" do
       notification_target = mock
       context = mock

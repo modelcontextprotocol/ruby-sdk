@@ -48,8 +48,52 @@ module MCP
       @session.instance_variable_set(:@client_capabilities, { elicitation: {} })
     end
 
+    test "#create_form_elicitation warns when called without related_request_id" do
+      # Per SEP-2260, server-to-client requests must be associated with an originating client request.
+      # `$VERBOSE = false` because the rake test task runs with `-W0`, under which `Kernel#warn` emits nothing.
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+
+      assert_output(nil, /SEP-2260/) do
+        @session.create_form_elicitation(
+          message: "Please provide your name",
+          requested_schema: { type: "object", properties: { name: { type: "string" } } },
+        )
+      end
+    ensure
+      $VERBOSE = original_verbose
+    end
+
+    test "#create_url_elicitation warns when called without related_request_id" do
+      @session.instance_variable_set(:@client_capabilities, { elicitation: { url: true } })
+
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+
+      assert_output(nil, /SEP-2260/) do
+        @session.create_url_elicitation(
+          message: "Please sign in",
+          url: "https://example.com/signin",
+          elicitation_id: "el-1",
+        )
+      end
+    ensure
+      $VERBOSE = original_verbose
+    end
+
+    test "#create_form_elicitation does not warn when related_request_id is given" do
+      assert_silent do
+        @session.create_form_elicitation(
+          related_request_id: "req-1",
+          message: "Please provide your name",
+          requested_schema: { type: "object", properties: { name: { type: "string" } } },
+        )
+      end
+    end
+
     test "#create_form_elicitation sends request through transport" do
       result = @session.create_form_elicitation(
+        related_request_id: "req-1",
         message: "Please provide your name",
         requested_schema: {
           type: "object",
@@ -76,6 +120,7 @@ module MCP
 
       error = assert_raises(RuntimeError) do
         @session.create_form_elicitation(
+          related_request_id: "req-1",
           message: "Please provide your name",
           requested_schema: { type: "object", properties: { name: { type: "string" } } },
         )
@@ -93,6 +138,7 @@ module MCP
 
       error = assert_raises(RuntimeError) do
         @session.create_form_elicitation(
+          related_request_id: "req-1",
           message: "Please provide your name",
           requested_schema: { type: "object", properties: { name: { type: "string" } } },
         )
@@ -108,6 +154,7 @@ module MCP
       @session.instance_variable_set(:@client_capabilities, { elicitation: { url: {} } })
 
       result = @session.create_url_elicitation(
+        related_request_id: "req-1",
         message: "Please authorize access",
         url: "https://example.com/oauth",
         elicitation_id: "abc-123",
@@ -128,6 +175,7 @@ module MCP
     test "#create_url_elicitation raises error when client does not support url mode" do
       error = assert_raises(RuntimeError) do
         @session.create_url_elicitation(
+          related_request_id: "req-1",
           message: "Please authorize access",
           url: "https://example.com/oauth",
           elicitation_id: "abc-123",
@@ -146,6 +194,7 @@ module MCP
 
       error = assert_raises(RuntimeError) do
         @session.create_url_elicitation(
+          related_request_id: "req-1",
           message: "Please authorize access",
           url: "https://example.com/oauth",
           elicitation_id: "abc-123",
