@@ -105,8 +105,8 @@ module MCP
     # Allowed values for the SEP-2549 `cacheScope` cache hint.
     CACHE_SCOPES = ["public", "private"].freeze
 
-    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resources, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :page_size, :client_capabilities, :ttl_ms, :cache_scope
+    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
+    attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope
 
     def initialize(
       description: nil,
@@ -161,7 +161,7 @@ module MCP
 
       @handlers = {
         Methods::RESOURCES_LIST => method(:list_resources),
-        Methods::RESOURCES_READ => method(:read_resource_no_content),
+        Methods::RESOURCES_READ => method(:read_resource),
         Methods::RESOURCES_TEMPLATES_LIST => method(:list_resource_templates),
         Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
@@ -222,6 +222,34 @@ module MCP
       @prompts[prompt.name_value] = prompt
 
       validate!
+    end
+
+    def define_resource(uri: nil, name: nil, title: nil, description: nil, icons: [], mime_type: nil, annotations: nil, size: nil, meta: nil, &block)
+      resource = Resource.define(
+        uri: uri, name: name, title: title, description: description, icons: icons,
+        mime_type: mime_type, annotations: annotations, size: size, meta: meta,
+        &block
+      )
+      @resources << resource
+      @resource_index[resource.uri] = resource
+
+      validate!
+    end
+
+    def define_resource_template(uri_template: nil, name: nil, title: nil, description: nil, icons: [], mime_type: nil, annotations: nil, meta: nil, &block)
+      resource_template = ResourceTemplate.define(
+        uri_template: uri_template, name: name, title: title, description: description, icons: icons,
+        mime_type: mime_type, annotations: annotations, meta: meta,
+        &block
+      )
+      @resource_templates << resource_template
+
+      validate!
+    end
+
+    def resources=(resources)
+      @resources = resources
+      @resource_index = index_resources_by_uri(resources)
     end
 
     def define_custom_method(method_name:, &block)
@@ -744,10 +772,57 @@ module MCP
       apply_cache_metadata({ resources: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    # Server implementation should set `resources_read_handler` to override no-op default
-    def read_resource_no_content(request)
-      add_instrumentation_data(resource_uri: request[:uri])
-      []
+    # Default `resources/read` handler: routes to class-based resources and resource templates.
+    # Fully replaced when `resources_read_handler` is set. When no class-based resource or template is registered,
+    # unknown URIs keep the historical no-op `[]` response instead of raising.
+    def read_resource(request, server_context: nil)
+      uri = request[:uri]
+      add_instrumentation_data(resource_uri: uri)
+
+      resource = @resource_index[uri]
+      if resource.is_a?(Class)
+        return normalize_resource_contents(call_resource_contents(resource, server_context))
+      end
+
+      @resource_templates.each do |template|
+        next unless template.is_a?(Class)
+
+        params = template.match_uri(uri)
+        next unless params
+
+        add_instrumentation_data(resource_template: template.uri_template)
+        return normalize_resource_contents(call_template_contents(template, params, server_context))
+      end
+
+      return [] unless class_based_resources_registered?
+
+      raise ResourceNotFoundError.new(uri, request)
+    end
+
+    def call_resource_contents(resource, server_context)
+      if accepts_server_context?(resource.method(:contents))
+        resource.contents(server_context: server_context)
+      else
+        resource.contents
+      end
+    end
+
+    def call_template_contents(template, params, server_context)
+      if accepts_server_context?(template.method(:contents))
+        template.contents(**params, server_context: server_context)
+      else
+        template.contents(**params)
+      end
+    end
+
+    def normalize_resource_contents(result)
+      contents = result.is_a?(Array) ? result : [result]
+      contents.map(&:to_h)
+    end
+
+    def class_based_resources_registered?
+      @resources.any? { |resource| resource.is_a?(Class) } ||
+        @resource_templates.any? { |template| template.is_a?(Class) }
     end
 
     def list_resource_templates(request)
