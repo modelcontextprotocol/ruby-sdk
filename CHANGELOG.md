@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-12
+
+### Added
+
+- Support SSE reconnection per SEP-1699 in the HTTP client transport (#426)
+- Validate the RFC 9207 `iss` authorization response parameter per SEP-2468 (#431)
+- Support `private_key_jwt` client authentication for the `client_credentials` grant (#432)
+- Recognize multi round-trip `input_required` results per SEP-2322 (#433)
+- Add opt-in `ttlMs` / `cacheScope` cache hints to List and Read results per SEP-2549 (#436)
+- Add `server/discover` and stateless lifecycle error codes per SEP-2575 (#438)
+- Associate server-to-client requests with the originating client request per SEP-2260 (#440)
+- Add server-side MCP Apps helpers per SEP-1865 (#441)
+- Support client-side elicitation with SEP-1034 schema defaults (#443)
+- Support class-based Resource and ResourceTemplate definitions (#447)
+
+### Changed
+
+- Bind stored client credentials to the authorization server issuer per SEP-2352 (#439)
+
+### Fixed
+
+- Handle non-object JSON-RPC messages without raising (#448)
+- Perform SSE stream writes outside the session mutex (#449)
+- Validate required params for `initialize` and `resources/subscribe` (#451)
+
 ## [0.23.0] - 2026-07-07
 
 ### Added
