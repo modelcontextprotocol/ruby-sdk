@@ -2356,7 +2356,9 @@ Optional keyword arguments:
 
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
 - `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
-  which keeps credentials in process memory only.
+  which keeps credentials in process memory only. Persisted `client_information` is stamped with an `"issuer"` member binding it to the authorization server that
+  issued it (SEP-2352): when the server's authorization server changes, the SDK discards the stale registration and its tokens and re-registers automatically
+  (portable CIMD `client_id`s are kept). Treat the hash as opaque and persist it as-is.
 - `client_id_metadata_document_url`: URL where you publish a Client ID Metadata Document
   (`draft-ietf-oauth-client-id-metadata-document` and the MCP authorization specification).
   When the authorization server advertises `client_id_metadata_document_supported: true`,

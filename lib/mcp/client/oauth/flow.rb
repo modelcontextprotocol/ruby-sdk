@@ -108,6 +108,7 @@ module MCP
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
         def run_client_credentials!(as_metadata:, prm:, resource:, scope:)
           client_info = client_credentials_client_info
+          ensure_client_credentials_issuer!(client_info, as_metadata: as_metadata)
 
           form = { "grant_type" => "client_credentials" }
           effective_scope = resolve_scope(scope: scope, prm: prm)
@@ -132,6 +133,25 @@ module MCP
           end
 
           info
+        end
+
+        # Per SEP-2352, static machine-to-machine credentials are bound to their authorization
+        # server the same way registered ones are: when the stored `client_information` records
+        # an `issuer` that differs from the current authorization server, surface an error
+        # instead of silently sending another server's credentials (the spec's "SHOULD surface
+        # an error"; the TypeScript SDK raises `AuthorizationServerMismatchError` here).
+        # Re-registration is not an option for the `client_credentials` grant - the credentials
+        # are pre-registered, not DCR results - so the operator must update the stored credentials.
+        # Credentials without a recorded issuer keep working unchanged.
+        def ensure_client_credentials_issuer!(client_info, as_metadata:)
+          stored_issuer = client_info_required_value(client_info, "issuer")
+          return if stored_issuer.nil?
+          return if stored_issuer == as_metadata["issuer"]
+
+          raise AuthorizationError,
+            "Stored client credentials are bound to a different authorization server " \
+              "(stored issuer #{stored_issuer.inspect}, current #{as_metadata["issuer"].inspect}); " \
+              "refusing to send them to the current authorization server (SEP-2352)."
         end
 
         # Exchanges the saved `refresh_token` for a fresh access token (RFC 6749 Section 6).
@@ -173,6 +193,7 @@ module MCP
           client_info = if have_stored_client_info
             # Pre-registered / DCR-issued `client_information` always wins: if the user picked an explicit identity,
             # do not silently swap it for the CIMD URL even when the AS also advertises CIMD support.
+            ensure_refreshable_client_information!(stored_client_info, as_metadata: as_metadata)
             stored_client_info
           elsif as_metadata["client_id_metadata_document_supported"] == true
             { "client_id" => @provider.client_id_metadata_document_url }
@@ -419,8 +440,8 @@ module MCP
         end
 
         def ensure_client_registered(as_metadata:)
-          existing = @provider.client_information
-          return existing if existing.is_a?(Hash) && client_info_required_value(existing, "client_id")
+          existing = stored_client_information_for(issuer: as_metadata["issuer"])
+          return existing if existing
 
           # Per the MCP authorization specification and `draft-ietf-oauth-client-id-metadata-document`,
           # if the authorization server advertises Client ID Metadata Document support and the provider has
@@ -469,7 +490,12 @@ module MCP
               "Dynamic client registration response is missing `client_id`."
           end
 
-          @provider.save_client_information(info)
+          # Per SEP-2352, persisted client credentials are keyed by the issuer identifier of
+          # the authorization server that minted them, so a later flow can detect an AS change and
+          # re-register instead of replaying another server's credentials. `issuer` is not an RFC 7591 response field;
+          # the SDK adds it to the opaque persisted hash.
+          @provider.save_client_information(info.merge("issuer" => as_metadata["issuer"]))
+
           info
         end
 
@@ -485,6 +511,60 @@ module MCP
 
           redirect_uris = metadata[:redirect_uris] || metadata["redirect_uris"]
           metadata.merge("application_type" => Discovery.infer_application_type(redirect_uris))
+        end
+
+        # Returns the stored `client_information` when it may be used against the authorization server
+        # identified by `issuer`, applying SEP-2352's authorization server binding rules:
+        #
+        # - Credentials persisted with an `"issuer"` binding MUST NOT be reused against
+        #   a different authorization server. When the AS changed, the stale registration and its tokens
+        #   are discarded (tokens minted by the old AS are dead at the new one) and nil is returned so
+        #   the flow re-registers.
+        # - Stored credentials without an `"issuer"` binding (data persisted by an older SDK version,
+        #   or user-supplied pre-registered credentials) are bound to the current issuer on first use.
+        # - A CIMD `client_id` (an HTTPS URL) is portable across authorization servers, so it is reused
+        #   and re-bound instead of discarded.
+        #
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2352
+        def stored_client_information_for(issuer:)
+          existing = @provider.client_information
+          return unless existing.is_a?(Hash) && client_info_required_value(existing, "client_id")
+
+          stored_issuer = client_info_required_value(existing, "issuer")
+          return existing if stored_issuer == issuer
+          return rebind_client_information(existing, issuer: issuer) if stored_issuer.nil?
+
+          client_id = client_info_required_value(existing, "client_id")
+          return rebind_client_information(existing, issuer: issuer) if Discovery.client_id_metadata_document_url?(client_id)
+
+          @provider.save_client_information(nil)
+          @provider.clear_tokens!
+          nil
+        end
+
+        def rebind_client_information(info, issuer:)
+          rebound = info.merge("issuer" => issuer)
+          @provider.save_client_information(rebound)
+          rebound
+        end
+
+        # Per SEP-2352, stored client credentials are bound to the authorization server that issued them;
+        # refuse to replay another AS's credentials at this token endpoint. `HTTP#attempt_refresh` rescues
+        # the error and falls back to the full flow, which discards the stale registration and re-registers.
+        # Credentials without an `"issuer"` binding predate this check and are allowed through;
+        # CIMD `client_id`s are portable.
+        def ensure_refreshable_client_information!(client_info, as_metadata:)
+          stored_issuer = client_info_required_value(client_info, "issuer")
+          return if stored_issuer.nil?
+          return if stored_issuer == as_metadata["issuer"]
+
+          client_id = client_info_required_value(client_info, "client_id")
+          return if Discovery.client_id_metadata_document_url?(client_id)
+
+          raise AuthorizationError,
+            "Cannot refresh: stored client credentials were issued by a different authorization server " \
+              "(stored issuer #{stored_issuer.inspect}, current #{as_metadata["issuer"].inspect}); " \
+              "re-registration is required (SEP-2352)."
         end
 
         # Reads `key` from a `client_information` hash that may use either string or
