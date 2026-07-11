@@ -1335,6 +1335,62 @@ module MCP
           assert @transport.instance_variable_get(:@sessions).key?(session_id2)
         end
 
+        test "send_notification to a session writes outside the mutex" do
+          session_id = initialize_test_session
+          writes = install_mutex_probe_stream(session_id)
+
+          result = @transport.send_notification("test", { message: "hi" }, session_id: session_id)
+
+          assert result
+          assert_equal 1, writes[:total]
+          assert_equal 0, writes[:under_mutex], "notification write must not hold @mutex"
+        end
+
+        test "send_notification broadcast writes outside the mutex" do
+          session_id1 = initialize_test_session(id: "1")
+          session_id2 = initialize_test_session(id: "2")
+          writes1 = install_mutex_probe_stream(session_id1)
+          writes2 = install_mutex_probe_stream(session_id2)
+
+          sent_count = @transport.send_notification("broadcast", { message: "hi" }, **{})
+
+          assert_equal 2, sent_count
+          assert_equal 0, writes1[:under_mutex], "broadcast write must not hold @mutex"
+          assert_equal 0, writes2[:under_mutex], "broadcast write must not hold @mutex"
+        end
+
+        test "send_keepalive_ping writes outside the mutex" do
+          session_id = initialize_test_session
+          writes = install_mutex_probe_stream(session_id)
+
+          @transport.send(:send_keepalive_ping, session_id)
+
+          assert_equal 1, writes[:total]
+          assert_equal 0, writes[:under_mutex], "keepalive write must not hold @mutex"
+        end
+
+        test "send_request writes outside the mutex" do
+          session_id = initialize_test_session
+          writes = install_mutex_probe_stream(session_id)
+
+          result_queue = Queue.new
+          thread = Thread.new do
+            result_queue.push(@transport.send_request("ping", nil, session_id: session_id))
+          end
+
+          # Wait until the request has been written to the probe stream.
+          Thread.pass until writes[:total].positive?
+
+          request_id = @transport.instance_variable_get(:@pending_responses).keys.first
+          @transport.send(:handle_response, { jsonrpc: "2.0", id: request_id, result: {} }, session_id: session_id)
+
+          result_queue.pop
+          thread.join
+
+          assert_equal 1, writes[:total]
+          assert_equal 0, writes[:under_mutex], "server-to-client request write must not hold @mutex"
+        end
+
         test "send_keepalive_ping handles Errno::ECONNRESET gracefully" do
           # Create and initialize a session.
           init_request = create_rack_request(
@@ -5034,6 +5090,44 @@ module MCP
         end
 
         private
+
+        def initialize_test_session(id: "init")
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: id }.to_json,
+          )
+          @transport.handle_request(init_request)[1]["Mcp-Session-Id"]
+        end
+
+        # Installs a stream that records, on every write, whether `@mutex` was held at that moment.
+        # `mutex.try_lock` fails while the transport still holds the lock, so a nonzero `writes[:under_mutex]`
+        # means a blocking write is being performed under the lock.
+        def install_mutex_probe_stream(session_id, related_request_id: nil)
+          mutex = @transport.instance_variable_get(:@mutex)
+          writes = { total: 0, under_mutex: 0 }
+          stream = Object.new
+          stream.define_singleton_method(:write) do |_data|
+            writes[:total] += 1
+            if mutex.try_lock
+              mutex.unlock
+            else
+              writes[:under_mutex] += 1
+            end
+          end
+          stream.define_singleton_method(:flush) {}
+          stream.define_singleton_method(:close) {}
+
+          session = @transport.instance_variable_get(:@sessions)[session_id]
+          if related_request_id
+            (session[:post_request_streams] ||= {})[related_request_id] = stream
+          else
+            session[:get_sse_stream] = stream
+          end
+
+          writes
+        end
 
         def create_rack_request(method, path, headers, body = nil)
           default_accept = case method
