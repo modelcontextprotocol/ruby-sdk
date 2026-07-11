@@ -531,6 +531,7 @@ module MCP
           when Methods::RESOURCES_READ
             build_read_resource_result(read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation))
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
+            validate_resource_subscription_params!(params)
             dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation)
             {}
           when Methods::TOOLS_CALL
@@ -605,6 +606,8 @@ module MCP
     end
 
     def init(params, session: nil)
+      validate_initialize_params!(params)
+
       # MCP spec: the initialization phase MUST be the first interaction between client and server.
       # Reject duplicate `initialize` on an already-initialized session so the negotiated
       # client identity and capabilities cannot be silently overwritten.
@@ -612,15 +615,13 @@ module MCP
         raise RequestHandlerError.new("Invalid Request: Server already initialized", params, error_type: :invalid_request)
       end
 
-      if params
-        if session
-          session.store_client_info(client: params[:clientInfo], capabilities: params[:capabilities])
-        else
-          @client = params[:clientInfo]
-          @client_capabilities = params[:capabilities]
-        end
-        protocol_version = params[:protocolVersion]
+      if session
+        session.store_client_info(client: params[:clientInfo], capabilities: params[:capabilities])
+      else
+        @client = params[:clientInfo]
+        @client_capabilities = params[:capabilities]
       end
+      protocol_version = params[:protocolVersion]
 
       negotiated_version = if Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
         protocol_version
@@ -647,6 +648,31 @@ module MCP
         serverInfo: info,
         instructions: response_instructions,
       }.compact
+    end
+
+    def validate_resource_subscription_params!(params)
+      unless params.is_a?(Hash) && params[:uri].is_a?(String)
+        raise RequestHandlerError.new("Missing or invalid uri", params, error_type: :invalid_params)
+      end
+    end
+
+    def validate_initialize_params!(params)
+      unless params.is_a?(Hash)
+        raise RequestHandlerError.new("Invalid params", params, error_type: :invalid_params)
+      end
+
+      unless params[:protocolVersion].is_a?(String)
+        raise RequestHandlerError.new("Missing or invalid protocolVersion", params, error_type: :invalid_params)
+      end
+
+      unless params[:capabilities].is_a?(Hash)
+        raise RequestHandlerError.new("Missing or invalid capabilities", params, error_type: :invalid_params)
+      end
+
+      client_info = params[:clientInfo]
+      if !client_info.is_a?(Hash) || client_info[:name].nil? || client_info[:version].nil?
+        raise RequestHandlerError.new("Missing or invalid clientInfo", params, error_type: :invalid_params)
+      end
     end
 
     # Handles `server/discover` (MCP 2026-07-28 draft, SEP-2575): sessionless capability discovery.
