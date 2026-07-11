@@ -134,6 +134,27 @@ module MCP
           end
         end
 
+        test "open handles a malformed JSON-RPC batch element and emits an error response" do
+          input = StringIO.new("[[]]\n")
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            response = JSON.parse(output.string, symbolize_names: true)
+            assert_nil(response[:id])
+            assert_equal(-32600, response[:error][:code])
+            assert_equal("Invalid Request", response[:error][:message])
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
         test "rejects duplicate initialize on the same stdio session with -32600" do
           first = {
             jsonrpc: "2.0",

@@ -259,7 +259,9 @@ module MCP
 
           parsed = JSON.parse(line.strip)
 
-          next unless parsed.key?("id")
+          # A JSON-RPC message is an object; skip a non-object frame (array or scalar)
+          # the same way as a frame without an id.
+          next unless parsed.is_a?(Hash) && parsed.key?("id")
 
           return parsed if parsed["id"] == request_id
         end

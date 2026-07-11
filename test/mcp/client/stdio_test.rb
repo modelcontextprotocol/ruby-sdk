@@ -146,6 +146,68 @@ module MCP
         stdout_write.close
       end
 
+      def test_send_request_skips_non_object_frames
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test-id",
+          method: "tools/list",
+        }
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification
+          stdin_read.gets
+
+          # Read tools/list request
+          stdin_read.gets
+
+          # Non-object frames are skipped like any other non-matching frame.
+          stdout_write.puts("[[]]")
+          stdout_write.puts("null")
+          stdout_write.flush
+
+          # Then send the actual response
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: "test-id",
+            result: { tools: [] },
+          }))
+          stdout_write.flush
+        end
+
+        transport.connect
+        response = transport.send_request(request: request)
+
+        assert_equal("test-id", response["id"])
+        assert_empty(response.dig("result", "tools"))
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
       def test_send_request_raises_error_when_process_exits
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe
