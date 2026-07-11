@@ -7,6 +7,8 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPNotificationIntegrationTest < ActiveSupport::TestCase
+        include InitializeParamsTestHelper
+
         setup do
           @server = Server.new(
             name: "test_server",
@@ -23,7 +25,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -72,7 +74,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
           session_id1 = init_response1[1]["Mcp-Session-Id"]
@@ -81,7 +83,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "456" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
           session_id2 = init_response2[1]["Mcp-Session-Id"]
@@ -127,7 +129,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -163,7 +165,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -207,7 +209,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]

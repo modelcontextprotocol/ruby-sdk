@@ -22,3 +22,4 @@ require "active_support/test_case"
 require "sorbet-runtime" if RUBY_VERSION >= "3.0"
 
 require_relative "instrumentation_test_helper"
+require_relative "initialize_params_test_helper"

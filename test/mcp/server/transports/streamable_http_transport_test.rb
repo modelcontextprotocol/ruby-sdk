@@ -7,6 +7,8 @@ module MCP
   class Server
     module Transports
       class StreamableHTTPTransportTest < ActiveSupport::TestCase
+        include InitializeParamsTestHelper
+
         # A stream that buffers writes and remains readable after close.
         class TestStream
           def initialize
@@ -52,7 +54,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -85,7 +87,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -136,7 +138,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -164,7 +166,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -192,7 +194,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -211,7 +213,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "first" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -221,7 +223,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
-            { jsonrpc: "2.0", method: "initialize", id: "second" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "second", params: initialize_params }.to_json,
           )
           duplicate_response = @transport.handle_request(duplicate_request)
 
@@ -248,7 +250,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => "unknown-session" },
-            { jsonrpc: "2.0", method: "initialize", id: "1" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -267,7 +269,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json" },
-              { jsonrpc: "2.0", method: "initialize", id: "first" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
             )
             init_response = transport.handle_request(init_request)
             session_id = init_response[1]["Mcp-Session-Id"]
@@ -279,7 +281,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
-              { jsonrpc: "2.0", method: "initialize", id: "second" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "second", params: initialize_params }.to_json,
             )
             duplicate_response = transport.handle_request(duplicate_request)
 
@@ -318,7 +320,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            [{ jsonrpc: "2.0", method: "initialize", id: "batched" }].to_json,
+            [{ jsonrpc: "2.0", method: "initialize", id: "batched", params: initialize_params }].to_json,
           )
 
           response = @transport.handle_request(request)
@@ -336,7 +338,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -361,7 +363,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -399,7 +401,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -443,7 +445,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -592,7 +594,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -625,7 +627,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -686,7 +688,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -726,7 +728,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -759,7 +761,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -805,7 +807,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -841,7 +843,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -873,7 +875,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           @transport.handle_request(init_request)
 
@@ -890,7 +892,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
           session_id1 = init_response1[1]["Mcp-Session-Id"]
@@ -900,7 +902,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "456" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
           session_id2 = init_response2[1]["Mcp-Session-Id"]
@@ -993,7 +995,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1029,7 +1031,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
           session_id1 = init_response1[1]["Mcp-Session-Id"]
@@ -1038,7 +1040,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "456" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
           session_id2 = init_response2[1]["Mcp-Session-Id"]
@@ -1093,7 +1095,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1130,7 +1132,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1167,7 +1169,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1198,7 +1200,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1237,7 +1239,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1278,7 +1280,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "1" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
           session_id1 = init_response1[1]["Mcp-Session-Id"]
@@ -1287,7 +1289,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "2" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "2", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
           session_id2 = init_response2[1]["Mcp-Session-Id"]
@@ -1341,7 +1343,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1407,7 +1409,7 @@ module MCP
             "POST",
             "/",
             { "HTTP_ACCEPT" => "application/json, text/event-stream" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1428,7 +1430,7 @@ module MCP
               "CONTENT_TYPE" => "text/plain",
               "HTTP_ACCEPT" => "application/json, text/event-stream",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1443,7 +1445,7 @@ module MCP
               "CONTENT_TYPE" => "application/json; charset=utf-8",
               "HTTP_ACCEPT" => "application/json, text/event-stream",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1455,7 +1457,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1475,7 +1477,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "application/json",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1494,7 +1496,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "text/event-stream",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1513,7 +1515,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "application/json, text/event-stream",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1528,7 +1530,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "application/json;q=0.9, text/event-stream;q=0.8",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1543,7 +1545,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "*/*",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1558,7 +1560,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "Application/JSON, Text/Event-Stream",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1570,7 +1572,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1594,7 +1596,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1620,7 +1622,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1646,7 +1648,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1670,7 +1672,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1697,7 +1699,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_MCP_PROTOCOL_VERSION" => "1900-01-01",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           response = @transport.handle_request(request)
@@ -1720,7 +1722,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: Configuration::LATEST_STABLE_PROTOCOL_VERSION },
+              params: initialize_params,
             }.to_json,
           )
 
@@ -1746,7 +1748,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: older_version },
+              params: initialize_params(protocolVersion: older_version),
             }.to_json,
           )
 
@@ -1761,7 +1763,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1794,7 +1796,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1822,7 +1824,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1847,7 +1849,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1887,7 +1889,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1915,7 +1917,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1943,7 +1945,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1969,7 +1971,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -1989,7 +1991,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2044,7 +2046,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = stateless_transport.handle_request(init_request)
           assert_nil init_response[1]["Mcp-Session-Id"]
@@ -2180,10 +2182,7 @@ module MCP
                 jsonrpc: "2.0",
                 method: "initialize",
                 id: i + 1,
-                params: {
-                  protocolVersion: "2025-11-25",
-                  clientInfo: { name: "client-#{i}", version: "1.0" },
-                },
+                params: initialize_params(clientInfo: { name: "client-#{i}", version: "1.0" }),
               }.to_json,
             )
             response = stateless_transport.handle_request(request)
@@ -2249,7 +2248,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2295,7 +2294,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2332,7 +2331,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "application/json",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           response = transport.handle_request(request)
@@ -2350,7 +2349,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           response = transport.handle_request(request)
@@ -2371,7 +2370,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ACCEPT" => "*/*",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           response = transport.handle_request(request)
@@ -2400,7 +2399,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+              params: initialize_params,
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
@@ -2452,7 +2451,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+              params: initialize_params,
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
@@ -2561,7 +2560,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+              params: initialize_params,
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
@@ -2660,7 +2659,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+              params: initialize_params,
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
@@ -2706,7 +2705,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "4567" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "4567", params: initialize_params }.to_json,
           )
 
           @transport.define_singleton_method(:extract_session_id) do |_request|
@@ -2756,7 +2755,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2774,7 +2773,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2842,7 +2841,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init-a" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init-a", params: initialize_params }.to_json,
           )
           resp_a = @transport.handle_request(init_a)
           session_a = resp_a[1]["Mcp-Session-Id"]
@@ -2851,7 +2850,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init-b" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init-b", params: initialize_params }.to_json,
           )
           resp_b = @transport.handle_request(init_b)
           session_b = resp_b[1]["Mcp-Session-Id"]
@@ -2913,7 +2912,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -2953,7 +2952,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3021,7 +3020,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3089,7 +3088,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "init",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "test" } },
+              params: initialize_params,
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
@@ -3147,7 +3146,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3206,7 +3205,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3250,7 +3249,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3349,7 +3348,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3435,7 +3434,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3492,7 +3491,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3545,7 +3544,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3574,7 +3573,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "123" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3605,7 +3604,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3639,7 +3638,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3668,7 +3667,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3696,7 +3695,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3729,7 +3728,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3760,7 +3759,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3795,7 +3794,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -3856,7 +3855,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           # A freshly created session is well within the timeout, so normal use is unaffected.
           session_id = transport.handle_request(init_request)[1]["Mcp-Session-Id"]
@@ -3896,7 +3895,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json" },
-              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
             )
             assert_equal(200, transport.handle_request(request)[0])
           end
@@ -3905,7 +3904,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           response = transport.handle_request(overflow)
 
@@ -3924,7 +3923,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json" },
-              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
             ))
           end
 
@@ -3981,7 +3980,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -4002,7 +4001,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -4025,7 +4024,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -4065,7 +4064,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           @transport.handle_request(init_request)
 
@@ -4121,7 +4120,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "1",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+              params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
           session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
@@ -4134,7 +4133,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "2",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+              params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
           session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
@@ -4197,7 +4196,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "1",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+              params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
           session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
@@ -4210,7 +4209,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "2",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+              params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
           session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
@@ -4271,10 +4270,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "1",
-              params: {
-                protocolVersion: "2025-11-25",
-                clientInfo: { name: "alpha", version: "1.0" },
-              },
+              params: initialize_params(clientInfo: { name: "alpha", version: "1.0" }),
             }.to_json,
           )
           session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
@@ -4288,10 +4284,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "2",
-              params: {
-                protocolVersion: "2025-11-25",
-                clientInfo: { name: "beta", version: "2.0" },
-              },
+              params: initialize_params(clientInfo: { name: "beta", version: "2.0" }),
             }.to_json,
           )
           session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
@@ -4315,7 +4308,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "1",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "a" } },
+              params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
           session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
@@ -4328,7 +4321,7 @@ module MCP
               jsonrpc: "2.0",
               method: "initialize",
               id: "2",
-              params: { protocolVersion: "2025-11-25", clientInfo: { name: "b" } },
+              params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
           session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
@@ -4378,7 +4371,7 @@ module MCP
           env = {
             "REQUEST_METHOD" => "POST",
             "PATH_INFO" => "/",
-            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init-1" }.to_json),
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init-1", params: initialize_params }.to_json),
             "CONTENT_TYPE" => "application/json",
             "HTTP_ACCEPT" => "application/json, text/event-stream",
           }
@@ -4407,7 +4400,7 @@ module MCP
           init_env = {
             "REQUEST_METHOD" => "POST",
             "PATH_INFO" => "/",
-            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init" }.to_json),
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json),
             "CONTENT_TYPE" => "application/json",
             "HTTP_ACCEPT" => "application/json, text/event-stream",
           }
@@ -4432,7 +4425,7 @@ module MCP
           init_env = {
             "REQUEST_METHOD" => "POST",
             "PATH_INFO" => "/",
-            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init" }.to_json),
+            "rack.input" => StringIO.new({ jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json),
             "CONTENT_TYPE" => "application/json",
             "HTTP_ACCEPT" => "application/json, text/event-stream",
           }
@@ -4458,7 +4451,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init-frozen" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init-frozen", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
           session_id = init_response[1]["Mcp-Session-Id"]
@@ -4511,7 +4504,7 @@ module MCP
 
         test "accepts a request body at the max_request_bytes boundary" do
           transport = StreamableHTTPTransport.new(@server, max_request_bytes: 4096)
-          body = { jsonrpc: "2.0", method: "initialize", id: "1" }.to_json
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json
           assert_operator body.bytesize, :<=, 4096
 
           request = create_rack_request(
@@ -4609,7 +4602,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ORIGIN" => "https://app.example.com",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = transport.handle_request(request)
@@ -4625,7 +4618,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = transport.handle_request(request)
@@ -4643,7 +4636,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_ORIGIN" => "https://anywhere.example.com",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = @transport.handle_request(request)
@@ -4659,7 +4652,7 @@ module MCP
               "HTTP_HOST" => "localhost:3000",
               "HTTP_ORIGIN" => "http://localhost:3000",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = @transport.handle_request(request)
@@ -4675,7 +4668,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_HOST" => "evil.example.com",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, headers, body = @transport.handle_request(request)
@@ -4696,7 +4689,7 @@ module MCP
                 "CONTENT_TYPE" => "application/json",
                 "HTTP_HOST" => host,
               },
-              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
             )
 
             status, = transport.handle_request(request)
@@ -4715,7 +4708,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_HOST" => "LOCALHOST:3000",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = @transport.handle_request(request)
@@ -4732,7 +4725,7 @@ module MCP
               "CONTENT_TYPE" => "application/json",
               "HTTP_HOST" => "app.example.com",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = transport.handle_request(request)
@@ -4748,13 +4741,13 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "app.example.com:8443" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           rejected = create_rack_request(
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "app.example.com:9000" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           assert_equal(200, transport.handle_request(allowed).first)
@@ -4774,7 +4767,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => host, "HTTP_ORIGIN" => origin },
-              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
             )
 
             assert_equal(200, transport.handle_request(request).first, "expected #{origin} / #{host} to match")
@@ -4790,7 +4783,7 @@ module MCP
               "POST",
               "/",
               { "CONTENT_TYPE" => "application/json", "HTTP_HOST" => "localhost:3000", "HTTP_ORIGIN" => origin },
-              { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
             )
 
             assert_equal(403, transport.handle_request(request).first, "expected #{origin} to be rejected")
@@ -4816,7 +4809,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = @transport.handle_request(request)
@@ -4834,7 +4827,7 @@ module MCP
               "HTTP_HOST" => "evil.example.com",
               "HTTP_ORIGIN" => "https://evil.example.com",
             },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
 
           status, = transport.handle_request(request)
@@ -4855,7 +4848,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
 
@@ -4886,7 +4879,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
 
@@ -4923,7 +4916,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
 
@@ -4956,7 +4949,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
           refute_nil(session_id)
@@ -4998,7 +4991,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
 

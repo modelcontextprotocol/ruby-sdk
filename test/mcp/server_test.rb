@@ -5,6 +5,7 @@ require "test_helper"
 module MCP
   class ServerTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
+    include InitializeParamsTestHelper
     setup do
       @tool = Tool.define(
         name: "test_tool",
@@ -151,7 +152,7 @@ module MCP
       refute_predicate session, :initialized?
       # `initialize` must still succeed afterwards.
       response = @server.handle(
-        { jsonrpc: "2.0", method: "initialize", id: 2, params: { clientInfo: { name: "c", version: "1" } } },
+        { jsonrpc: "2.0", method: "initialize", id: 2, params: initialize_params },
         session: session,
       )
       refute_nil response[:result]
@@ -176,6 +177,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = @server.handle(request)
@@ -204,7 +206,7 @@ module MCP
       }
 
       assert_equal expected_result, response
-      assert_instrumentation_data({ method: "initialize" })
+      assert_instrumentation_data({ method: "initialize", client: { name: "test-client", version: "1.0.0" } })
     end
 
     test "#handle initialize result carries declared capability extensions" do
@@ -216,7 +218,7 @@ module MCP
         },
       )
 
-      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
 
       assert_equal(
         { "com.example/feature" => { enabled: true } },
@@ -230,7 +232,7 @@ module MCP
       capabilities.support_extensions("io.modelcontextprotocol/tasks" => {})
 
       server = Server.new(name: "extensions_test", capabilities: capabilities)
-      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      response = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
 
       assert_equal(
         {
@@ -247,10 +249,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          clientInfo: { name: "test_client", version: "1.0.0" },
-          capabilities: { extensions: extensions },
-        },
+        params: initialize_params(capabilities: { extensions: extensions }),
       }
 
       @server.handle(request)
@@ -265,10 +264,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          clientInfo: { name: "test_client", version: "1.0.0" },
-          capabilities: { extensions: extensions },
-        },
+        params: initialize_params(capabilities: { extensions: extensions }),
       }
 
       @server.handle(request, session: session)
@@ -282,9 +278,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          clientInfo: client_info,
-        },
+        params: initialize_params(clientInfo: client_info),
       }
 
       @server.handle(request)
@@ -297,9 +291,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          clientInfo: client_info,
-        },
+        params: initialize_params(clientInfo: client_info),
       }
       @server.handle(initialize_request)
 
@@ -319,7 +311,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: { clientInfo: { name: "original", version: "1.0" } },
+        params: initialize_params(clientInfo: { name: "original", version: "1.0" }),
       }
       first_response = @server.handle(first_request, session: session)
       refute_nil first_response[:result]
@@ -328,13 +320,66 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 2,
-        params: { clientInfo: { name: "intruder", version: "9.9" }, protocolVersion: "2024-11-05" },
+        params: initialize_params(clientInfo: { name: "intruder", version: "9.9" }, protocolVersion: "2024-11-05"),
       }
       second_response = @server.handle(second_request, session: session)
 
       assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, second_response[:error][:code]
       assert_equal "Invalid Request", second_response[:error][:message]
       assert_equal({ name: "original", version: "1.0" }, session.client)
+    end
+
+    test "#handle initialize with empty params returns -32602 and does not initialize the session" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      response = @server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: {} }, session: session)
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      refute_predicate session, :initialized?
+    end
+
+    test "#handle initialize without params returns -32602" do
+      response = @server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+    end
+
+    test "#handle initialize with a missing required field returns -32602" do
+      [:protocolVersion, :capabilities, :clientInfo].each do |field|
+        params = initialize_params.tap { |hash| hash.delete(field) }
+
+        response = @server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: params })
+
+        assert_equal(-32602, response[:error][:code], "expected -32602 when #{field} is missing")
+        assert_includes response[:error][:data], field.to_s
+      end
+    end
+
+    test "#handle initialize with clientInfo missing name or version returns -32602" do
+      [{ name: "client-without-version" }, { version: "1.0.0" }].each do |client_info|
+        response = @server.handle({
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: initialize_params(clientInfo: client_info),
+        })
+
+        assert_equal(-32602, response[:error][:code])
+        assert_includes response[:error][:data], "clientInfo"
+      end
+    end
+
+    test "#handle initialize with an unsupported protocolVersion still negotiates the fallback version" do
+      response = @server.handle({
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: initialize_params(protocolVersion: "1999-01-01"),
+      })
+
+      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
     test "instrumentation data does not include client key when no clientInfo provided" do
@@ -1540,6 +1585,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = @server.handle(request)
@@ -1552,6 +1598,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = server.handle(request)
@@ -1567,6 +1614,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = server.handle(request)
@@ -1580,6 +1628,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
       response = server.handle(request)
 
@@ -1592,6 +1641,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
       response = server.handle(request)
 
@@ -1607,6 +1657,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
       response = server.handle(request)
       expected_icons = [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com", theme: "light" }]
@@ -1620,6 +1671,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = server.handle(request)
@@ -1632,6 +1684,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params,
       }
 
       response = server.handle(request)
@@ -1905,6 +1958,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
+        params: initialize_params(protocolVersion: "1999-01-01"),
       }
 
       response = server.handle(request)
@@ -1918,9 +1972,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          protocolVersion: "2025-06-18",
-        },
+        params: initialize_params(protocolVersion: "2025-06-18"),
       }
 
       response = server.handle(request)
@@ -1934,9 +1986,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          protocolVersion: "1999-01-01",
-        },
+        params: initialize_params(protocolVersion: "1999-01-01"),
       }
 
       response = server.handle(request)
@@ -1954,9 +2004,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          protocolVersion: "2025-06-18",
-        },
+        params: initialize_params(protocolVersion: "2025-06-18"),
       }
 
       response = server.handle(request)
@@ -1972,9 +2020,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          protocolVersion: "2025-03-26",
-        },
+        params: initialize_params(protocolVersion: "2025-03-26"),
       }
 
       response = server.handle(request)
@@ -1990,9 +2036,7 @@ module MCP
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
-        params: {
-          protocolVersion: "2024-11-05",
-        },
+        params: initialize_params(protocolVersion: "2024-11-05"),
       }
 
       response = server.handle(request)
@@ -2381,7 +2425,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2419,7 +2463,7 @@ module MCP
         { completion: { values: ["python", "pytorch", "pyside"], total: 10, hasMore: true } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2457,7 +2501,7 @@ module MCP
         { completion: { values: ["file:///src", "file:///spec"], hasMore: false } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2500,7 +2544,7 @@ module MCP
         { completion: { values: ["flask"], hasMore: false } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       server.handle({
@@ -2529,7 +2573,7 @@ module MCP
         { completion: { values: (1..150).map(&:to_s), hasMore: false } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2556,7 +2600,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2578,7 +2622,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2600,7 +2644,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2624,7 +2668,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2646,7 +2690,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2677,7 +2721,7 @@ module MCP
         { completion: { values: ["file:///README.md"], hasMore: false } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2708,7 +2752,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2731,7 +2775,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2759,7 +2803,7 @@ module MCP
         nil
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2794,7 +2838,7 @@ module MCP
         { "completion" => { "values" => ["alpha", "beta"], "hasMore" => true } }
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2818,7 +2862,7 @@ module MCP
         capabilities: { completions: {} },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2837,7 +2881,7 @@ module MCP
         prompts: [],
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2860,7 +2904,7 @@ module MCP
         capabilities: { resources: { subscribe: true } },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2886,7 +2930,7 @@ module MCP
         capabilities: { resources: { subscribe: true } },
       )
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2918,7 +2962,7 @@ module MCP
         {}
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2951,7 +2995,7 @@ module MCP
         {}
       end
 
-      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1 })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
       server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
 
       response = server.handle({
@@ -2970,6 +3014,73 @@ module MCP
         response,
       )
       assert_equal "https://example.com/resource", received_params[:uri]
+    end
+
+    test "#handle resources/subscribe without uri returns -32602" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/subscribe",
+        params: {},
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+      assert_includes response[:error][:data], "uri"
+    end
+
+    test "#handle resources/unsubscribe without uri returns -32602" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/unsubscribe",
+        params: {},
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params", response[:error][:message]
+    end
+
+    test "#handle resources/subscribe without uri does not invoke a custom handler" do
+      server = Server.new(
+        name: "test_server",
+        capabilities: { resources: { subscribe: true } },
+      )
+
+      handler_called = false
+      server.resources_subscribe_handler do |_params|
+        handler_called = true
+        {}
+      end
+
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/subscribe",
+        params: {},
+      })
+
+      assert_equal(-32602, response[:error][:code])
+      refute handler_called
     end
 
     test "tools/call with no args" do

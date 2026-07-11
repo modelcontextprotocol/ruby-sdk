@@ -87,9 +87,9 @@ module MCP
       assert_equal({ roots: { listChanged: true } }, server.client_capabilities)
     end
 
-    test "init stores nil when client sends no capabilities" do
+    test "init rejects params without capabilities and stores nothing" do
       server = Server.new(name: "test", version: "1.0")
-      server.handle({
+      response = server.handle({
         jsonrpc: "2.0",
         method: "initialize",
         id: 1,
@@ -99,6 +99,7 @@ module MCP
         },
       })
 
+      assert_equal(-32602, response[:error][:code])
       assert_nil server.client_capabilities
     end
 

@@ -108,6 +108,7 @@ module MCP
             id: "1",
             params: {
               protocolVersion: "2025-11-25",
+              capabilities: {},
               clientInfo: { name: "stdio-client", version: "1.0" },
             },
           }
@@ -140,6 +141,7 @@ module MCP
             id: "first",
             params: {
               protocolVersion: "2025-11-25",
+              capabilities: {},
               clientInfo: { name: "original", version: "1.0" },
             },
           }
@@ -149,6 +151,7 @@ module MCP
             id: "second",
             params: {
               protocolVersion: "2024-11-05",
+              capabilities: {},
               clientInfo: { name: "intruder", version: "9.9" },
             },
           }
