@@ -196,80 +196,107 @@ module MCP
           }
           notification[:params] = params if params
 
+          if session_id
+            deliver_targeted_notification(notification, session_id, related_request_id)
+          else
+            deliver_broadcast_notification(notification)
+          end
+        end
+
+        def deliver_targeted_notification(notification, session_id, related_request_id)
+          # JSON response mode returns a single JSON object as the POST response,
+          # so request-scoped notifications (e.g. progress, log) cannot be delivered
+          # alongside it. Session-scoped standalone notifications
+          # (e.g. `resources/updated`, `elicitation/complete`) still flow via GET SSE.
+          return false if @enable_json_response && related_request_id
+
           streams_to_close = []
 
-          result = @mutex.synchronize do
-            if session_id
-              # JSON response mode returns a single JSON object as the POST response,
-              # so request-scoped notifications (e.g. progress, log) cannot be delivered
-              # alongside it. Session-scoped standalone notifications
-              # (e.g. `resources/updated`, `elicitation/complete`) still flow via GET SSE.
-              next false if @enable_json_response && related_request_id
+          # Resolve the target stream under the lock, then write outside it: a stalled SSE reader
+          # must not block every other session that needs `@mutex`.
+          stream = @mutex.synchronize do
+            next unless (session = @sessions[session_id])
 
-              # Send to specific session
-              if (session = @sessions[session_id])
-                stream = active_stream(session, related_request_id: related_request_id)
-              end
-              next false unless stream
+            if session_expired?(session)
+              cleanup_and_collect_stream(session_id, streams_to_close)
+              next
+            end
+
+            active_stream(session, related_request_id: related_request_id)
+          end
+
+          close_streams(streams_to_close)
+          return false unless stream
+
+          write_notification(stream, notification, session_id, related_request_id)
+        end
+
+        def deliver_broadcast_notification(notification)
+          streams_to_close = []
+
+          # Snapshot the connected streams under the lock, then write to each outside it.
+          targets = @mutex.synchronize do
+            expired_session_ids = []
+
+            collected = @sessions.filter_map do |session_id, session|
+              next unless (stream = session[:get_sse_stream])
 
               if session_expired?(session)
-                cleanup_and_collect_stream(session_id, streams_to_close)
-                next false
+                expired_session_ids << session_id
+                next
               end
 
-              begin
-                send_to_stream(stream, notification)
-                true
-              rescue *STREAM_WRITE_ERRORS => e
-                MCP.configuration.exception_reporter.call(
-                  e,
-                  { session_id: session_id, error: "Failed to send notification" },
-                )
-                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
-                  session[:post_request_streams].delete(related_request_id)
-                  streams_to_close << stream
-                else
-                  cleanup_and_collect_stream(session_id, streams_to_close)
-                end
-                false
-              end
+              [session_id, stream]
+            end
+
+            expired_session_ids.each do |session_id|
+              cleanup_and_collect_stream(session_id, streams_to_close)
+            end
+
+            collected
+          end
+
+          close_streams(streams_to_close)
+
+          targets.count do |session_id, stream|
+            write_notification(stream, notification, session_id, nil)
+          end
+        end
+
+        # Writes a notification to an SSE stream without holding `@mutex`. On a write error,
+        # drops the broken stream and returns false; on success returns true.
+        def write_notification(stream, notification, session_id, related_request_id)
+          send_to_stream(stream, notification)
+          true
+        rescue *STREAM_WRITE_ERRORS => e
+          MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to send notification" })
+          drop_broken_stream(session_id, stream, related_request_id)
+          false
+        end
+
+        # Removes a stream that failed to accept a write. A request-scoped stream is dropped on its own;
+        # a session-scoped (GET SSE) failure tears down the whole session. The `@sessions` mutation runs
+        # under `@mutex`, and the affected streams are closed outside it.
+        def drop_broken_stream(session_id, stream, related_request_id)
+          streams_to_close = []
+
+          @mutex.synchronize do
+            session = @sessions[session_id]
+            if related_request_id && session&.dig(:post_request_streams, related_request_id)
+              session[:post_request_streams].delete(related_request_id)
+              streams_to_close << stream
             else
-              # Broadcast to all connected SSE sessions
-              sent_count = 0
-              failed_sessions = []
-
-              @sessions.each do |sid, session|
-                next unless (stream = session[:get_sse_stream])
-
-                if session_expired?(session)
-                  failed_sessions << sid
-                  next
-                end
-
-                begin
-                  send_to_stream(stream, notification)
-                  sent_count += 1
-                rescue *STREAM_WRITE_ERRORS => e
-                  MCP.configuration.exception_reporter.call(
-                    e,
-                    { session_id: sid, error: "Failed to send notification" },
-                  )
-                  failed_sessions << sid
-                end
-              end
-
-              # Clean up failed sessions
-              failed_sessions.each { |sid| cleanup_and_collect_stream(sid, streams_to_close) }
-
-              sent_count
+              cleanup_and_collect_stream(session_id, streams_to_close)
             end
           end
 
-          streams_to_close.each do |stream|
+          close_streams(streams_to_close)
+        end
+
+        def close_streams(streams)
+          streams.each do |stream|
             close_stream_safely(stream)
           end
-
-          result
         end
 
         # Sends a server-to-client JSON-RPC request (e.g., `sampling/createMessage`) and
@@ -299,27 +326,25 @@ module MCP
           request = { jsonrpc: "2.0", id: request_id, method: method }
           request[:params] = params if params
 
-          sent = false
-
-          @mutex.synchronize do
+          # Register the pending response and resolve the stream under the lock, but perform
+          # the write outside it so a stalled reader cannot block every other session on `@mutex`.
+          stream = @mutex.synchronize do
             unless (session = @sessions[session_id])
               raise "Session not found: #{session_id}."
             end
 
             @pending_responses[request_id] = { queue: queue, session_id: session_id }
 
-            if (stream = active_stream(session, related_request_id: related_request_id))
-              begin
-                send_to_stream(stream, request)
-                sent = true
-              rescue *STREAM_WRITE_ERRORS
-                if related_request_id && session[:post_request_streams]&.key?(related_request_id)
-                  session[:post_request_streams].delete(related_request_id)
-                  close_stream_safely(stream)
-                else
-                  cleanup_session_unsafe(session_id)
-                end
-              end
+            active_stream(session, related_request_id: related_request_id)
+          end
+
+          sent = false
+          if stream
+            begin
+              send_to_stream(stream, request)
+              sent = true
+            rescue *STREAM_WRITE_ERRORS
+              drop_broken_stream(session_id, stream, related_request_id)
             end
           end
 
@@ -1164,11 +1189,15 @@ module MCP
         end
 
         def send_keepalive_ping(session_id)
-          @mutex.synchronize do
-            if @sessions[session_id] && @sessions[session_id][:get_sse_stream]
-              send_ping_to_stream(@sessions[session_id][:get_sse_stream])
-            end
+          # Resolve the stream under the lock, then write outside it so a stalled reader
+          # cannot block every other session on `@mutex`.
+          stream = @mutex.synchronize do
+            session = @sessions[session_id]
+            session && session[:get_sse_stream]
           end
+          return unless stream
+
+          send_ping_to_stream(stream)
         rescue *STREAM_WRITE_ERRORS => e
           MCP.configuration.exception_reporter.call(
             e,
