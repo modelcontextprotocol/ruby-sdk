@@ -5089,7 +5089,7 @@ module MCP
             "POST",
             "/",
             { "CONTENT_TYPE" => "application/json" },
-            { jsonrpc: "2.0", method: "initialize", id: id }.to_json,
+            { jsonrpc: "2.0", method: "initialize", id: id, params: initialize_params }.to_json,
           )
           @transport.handle_request(init_request)[1]["Mcp-Session-Id"]
         end
