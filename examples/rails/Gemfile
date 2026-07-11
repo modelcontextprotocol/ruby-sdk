@@ -1,0 +1,7 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "mcp", path: "../.."
+gem "puma"
+gem "rails", "~> 8.0"

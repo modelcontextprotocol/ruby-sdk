@@ -140,6 +140,21 @@ The client will:
 - Provide an interactive menu to trigger notifications
 - Display all received SSE events in real-time
 
+### 7. Rails Server (`rails/`)
+
+A minimal Rails application that mounts `StreamableHTTPTransport` in its routes, following the "Rails (mount)" pattern from the top-level README.
+It demonstrates class-based tools in `app/tools/` and a resource with a read handler.
+
+**Usage:**
+
+```console
+$ cd examples/rails
+$ bundle install
+$ bundle exec puma --port 9292
+```
+
+The MCP endpoint is available at `http://localhost:9292/mcp`. See [`rails/README.md`](rails/README.md) for a full curl-based walkthrough.
+
 ### Testing with MCP Inspector
 
 [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) is a browser-based tool for testing and debugging MCP servers.
