@@ -2464,6 +2464,16 @@ The client provides a wrapper class for tools returned by the server:
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
 
+### Multi-Round-Trip Results (Experimental, SEP-2322)
+
+The MCP 2026-07-28 draft replaces in-flight server-to-client requests with Multi Round-Trip Requests: instead of issuing `sampling/createMessage`, `roots/list`,
+or `elicitation/create` while a request is being processed, a server may answer with a result whose `resultType` is `"input_required"`, carrying an `inputRequests` map
+and an opaque `requestState`; the client fulfills the requests and re-issues the original request with `inputResponses` and the echoed `requestState`.
+
+The Ruby client recognizes such results and raises `MCP::Client::InputRequiredError` instead of returning them as if they were final. The error exposes `input_requests`, `request_state`,
+and the raw `result`; automatic resumption is not implemented yet, so callers respond manually if they opt into the draft flow. `MCP::ResultType::COMPLETE` and `MCP::ResultType::INPUT_REQUIRED`
+are provided for forward compatibility. Servers on stable protocol versions never send `resultType`, so existing behavior is unchanged.
+
 ## Conformance Testing
 
 The `conformance/` directory contains a test server and runner that validate the SDK against the MCP specification using [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
