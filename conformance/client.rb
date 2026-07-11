@@ -139,7 +139,11 @@ end
 oauth = scenario.start_with?("auth/") ? build_provider_for(scenario, conformance_context) : nil
 transport = MCP::Client::HTTP.new(url: server_url, oauth: oauth)
 client = MCP::Client.new(transport: transport)
-client.connect(client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION })
+capabilities = scenario == "elicitation-sep1034-client-defaults" ? { elicitation: {} } : {}
+client.connect(
+  client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION },
+  capabilities: capabilities,
+)
 
 case scenario
 when "initialize"
@@ -158,6 +162,19 @@ when "sse-retry"
   test_reconnection = tools.find { |t| t.name == "test_reconnection" }
   abort("Tool test_reconnection not found") unless test_reconnection
   client.call_tool(tool: test_reconnection, arguments: {})
+when "elicitation-sep1034-client-defaults"
+  # SEP-1034: the server sends `elicitation/create` on the tools/call SSE stream with every property declaring
+  # a `default` and none required. The handler accepts and fills the omitted fields from those defaults.
+  client.on_elicitation do |params|
+    { action: "accept", content: MCP::Client::Elicitation.apply_defaults(params["requestedSchema"] || {}) }
+  end
+
+  tools = client.tools
+  defaults_tool = tools.find { |t| t.name == "test_client_elicitation_defaults" }
+
+  abort("Tool test_client_elicitation_defaults not found") unless defaults_tool
+
+  client.call_tool(tool: defaults_tool, arguments: {})
 when %r|\Aauth/|
   # Auth-only scenarios: the protocol-level checks (PRM/AS metadata, DCR, PKCE, token usage)
   # are observed by the conformance server during `connect` and the subsequent request below.

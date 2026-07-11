@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "client/elicitation"
 require_relative "client/oauth"
 require_relative "client/stdio"
 require_relative "client/http"
@@ -27,6 +28,20 @@ module MCP
         @request = request
         @error_type = error_type
         @original_error = original_error
+      end
+    end
+
+    # Raised inside a server-to-client request handler (registered via `on_server_request`, e.g. `on_sampling`)
+    # to answer the request with a specific JSON-RPC error code instead of the default internal error.
+    # Mirrors the TypeScript SDK's `McpError` and the Python SDK's `ErrorData` return: for example,
+    # the sampling spec answers a rejected request with code `-1`.
+    # https://modelcontextprotocol.io/specification/2025-11-25/client/sampling
+    class ServerRequestError < StandardError
+      attr_reader :code
+
+      def initialize(message, code:)
+        super(message)
+        @code = code
       end
     end
 
@@ -382,6 +397,30 @@ module MCP
       response = request(method: "completion/complete", params: params, meta: meta, cancellation: cancellation)
 
       response.dig("result", "completion") || { "values" => [], "hasMore" => false }
+    end
+
+    # Registers a handler for `elicitation/create` requests the server sends while one of
+    # this client's requests is in flight. The handler receives the request `params`
+    # (message and `requestedSchema`, string keys) and must return an `ElicitResult`-shaped Hash:
+    # `{ action: "accept" | "decline" | "cancel", content: { ... } }`.
+    #
+    # Requires a transport that supports server-to-client requests (e.g. `MCP::Client::HTTP`);
+    # pass `capabilities: { elicitation: {} }` to `connect` so the server knows it may send them.
+    #
+    # @example Accept with schema defaults applied (SEP-1034)
+    #   client.on_elicitation do |params|
+    #     {
+    #       action: "accept",
+    #       content: MCP::Client::Elicitation.apply_defaults(params["requestedSchema"]),
+    #     }
+    #   end
+    # https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
+    def on_elicitation(&handler)
+      unless transport.respond_to?(:on_server_request)
+        raise ArgumentError, "The transport does not support server-to-client requests"
+      end
+
+      transport.on_server_request(Methods::ELICITATION_CREATE, &handler)
     end
 
     # Sends a `ping` request to the server to verify the connection is alive.

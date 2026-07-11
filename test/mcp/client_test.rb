@@ -47,6 +47,25 @@ module MCP
       assert_nil(client.server_info)
     end
 
+    def test_on_elicitation_registers_handler_on_transport
+      transport = mock
+      handler = proc { { action: "accept", content: {} } }
+      transport.expects(:on_server_request).with("elicitation/create")
+
+      Client.new(transport: transport).on_elicitation(&handler)
+    end
+
+    def test_on_elicitation_raises_when_transport_does_not_support_server_requests
+      transport = mock
+      transport.stubs(:respond_to?).with(:on_server_request).returns(false)
+
+      error = assert_raises(ArgumentError) do
+        Client.new(transport: transport).on_elicitation { { action: "accept", content: {} } }
+      end
+
+      assert_includes(error.message, "does not support server-to-client requests")
+    end
+
     def test_connected_delegates_to_transport_when_supported
       transport = mock
       transport.expects(:connected?).returns(true)
