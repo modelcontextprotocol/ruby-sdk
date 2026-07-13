@@ -853,6 +853,113 @@ module MCP
         assert_empty(stream.buffer)
       end
 
+      def test_send_request_rejects_sse_event_exceeding_max_message_bytes
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+        client = HTTP.new(url: url, max_message_bytes: 64)
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: #{"a" * 128}\n",
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_includes(error.message, "Server SSE event exceeds 64 bytes")
+        assert_equal(:internal_error, error.error_type)
+      end
+
+      def test_send_request_rejects_json_body_exceeding_max_message_bytes
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+        client = HTTP.new(url: url, max_message_bytes: 64)
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { tools: ["a" * 128] } }.to_json,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        assert_equal(:internal_error, error.error_type)
+      end
+
+      def test_send_request_accepts_sse_events_that_each_stay_within_max_message_bytes
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+        client = HTTP.new(url: url, max_message_bytes: 256)
+
+        # The notifications and the response together exceed the limit; each event stays
+        # under it, so dispatched events must not count against the ones that follow.
+        notification = { jsonrpc: "2.0", method: "notifications/progress", params: { token: "a" * 100 } }.to_json
+        sse_body = "data: #{notification}\n\n" * 3 +
+          "data: {\"jsonrpc\":\"2.0\",\"id\":\"test_id\",\"result\":{\"tools\":[]}}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "tools" => [] }, response["result"])
+      end
+
+      def test_sse_stream_rejects_unterminated_event_exceeding_max_message_bytes
+        stream = HTTP.const_get(:SSEStream).new(abortable: false, max_message_bytes: 64)
+        env = stub(response_headers: { "content-type" => "text/event-stream" })
+        chunk = "data: #{"a" * 128}"
+
+        error = assert_raises(HTTP.const_get(:MessageTooLargeError)) do
+          stream.on_data.call(chunk, chunk.bytesize, env)
+        end
+
+        assert_includes(error.message, "Server SSE event exceeds 64 bytes")
+      end
+
+      def test_sse_stream_bounds_buffered_chunks_when_env_is_unavailable
+        stream = HTTP.const_get(:SSEStream).new(abortable: true, max_message_bytes: 64)
+
+        error = assert_raises(HTTP.const_get(:MessageTooLargeError)) do
+          stream.on_data.call("a" * 65, 65)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+      end
+
+      def test_initialize_rejects_max_message_bytes_that_is_not_a_positive_integer
+        [0, -1, nil, "4"].each do |value|
+          error = assert_raises(ArgumentError) do
+            HTTP.new(url: url, max_message_bytes: value)
+          end
+
+          assert_equal("max_message_bytes must be a positive Integer", error.message)
+        end
+      end
+
       def test_send_request_dispatches_server_request_to_registered_handler
         request = {
           jsonrpc: "2.0",

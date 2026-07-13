@@ -30,6 +30,13 @@ module MCP
       # (60 seconds for Net::HTTP) would recycle quiet streams too eagerly.
       SSE_LISTENER_READ_TIMEOUT = 300
 
+      # Upper bound in bytes on a single JSON-RPC message from the server - an SSE event or
+      # a JSON response body - buffered in memory while reading a response. Without a bound,
+      # a server that never terminates an SSE event (or never ends a JSON body) grows
+      # the buffer indefinitely. Matches the 4 MiB default of `MCP::Client::Stdio::MAX_LINE_BYTES`
+      # and the server transports' request cap.
+      MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+
       # Raised when an `oauth:` provider is paired with an MCP URL that is neither HTTPS nor
       # a loopback `http://` URL, since a bearer token sent over plain HTTP to a remote host
       # is trivially observed and stolen.
@@ -71,6 +78,12 @@ module MCP
       class StreamAbort < StandardError; end
       private_constant :StreamAbort
 
+      # Raised inside the streaming callback when the server sends more bytes than
+      # `max_message_bytes` without completing a message. Translated into
+      # a `RequestHandlerError` (or a listener stop) where the request context is known.
+      class MessageTooLargeError < StandardError; end
+      private_constant :MessageTooLargeError
+
       # Per-exchange SSE state shared between the initial POST stream and any SEP-1699 reconnection GET streams:
       # the incrementally parsed JSON-RPC response, the last received SSE event id (for `Last-Event-ID`),
       # and the server's `retry:` reconnection delay. Non-SSE bodies accumulate in `buffer` for the JSON path.
@@ -78,8 +91,9 @@ module MCP
         attr_reader :buffer, :response, :last_event_id, :retry_ms
         attr_accessor :abortable
 
-        def initialize(abortable:, on_request: nil)
+        def initialize(abortable:, max_message_bytes: MAX_MESSAGE_BYTES, on_request: nil)
           @abortable = abortable
+          @max_message_bytes = max_message_bytes
           @on_request = on_request
           @buffer = +""
           @parser = nil
@@ -95,14 +109,24 @@ module MCP
         end
 
         # Faraday `on_data` streaming callback. SSE chunks are parsed incrementally;
-        # anything else (JSON bodies) accumulates in `buffer`.
+        # anything else (JSON bodies) accumulates in `buffer`. Both paths are bounded
+        # by `max_message_bytes`, checked after the awaited response had its chance to
+        # abort the stream so an over-limit tail cannot mask a response that already arrived.
         def on_data
           proc do |chunk, _received_bytes, env|
             if event_stream?(env)
               feed(chunk)
               raise StreamAbort if @abortable && @response
+
+              if parser_buffered_bytes > @max_message_bytes
+                raise MessageTooLargeError, "Server SSE event exceeds #{@max_message_bytes} bytes without completing"
+              end
             else
               @buffer << chunk
+
+              if @buffer.bytesize > @max_message_bytes
+                raise MessageTooLargeError, "Server response body exceeds #{@max_message_bytes} bytes"
+              end
             end
           end
         end
@@ -154,6 +178,20 @@ module MCP
           end
         end
 
+        # Bytes the parser has buffered for a not-yet-dispatched event: the partial line
+        # and the accumulated `data:` field values (plus the small event type and last event id buffers).
+        # External byte counting cannot tell consumed-and-discarded bytes (comments, field names, delimiters)
+        # from consumed-and-retained ones, so the parser's own String buffers are measured instead;
+        # summing every String instance variable keeps the measurement valid if the parser renames or adds buffers.
+        # A parser rewrite that buffered elsewhere would make this return 0 and quietly lift the cap -
+        # the regression tests feeding an over-limit event guard against that.
+        def parser_buffered_bytes
+          parser.instance_variables.sum do |name|
+            value = parser.instance_variable_get(name)
+            value.is_a?(String) ? value.bytesize : 0
+          end
+        end
+
         def parser
           @parser ||= begin
             require "event_stream_parser"
@@ -169,7 +207,13 @@ module MCP
 
       attr_reader :url, :session_id, :protocol_version, :server_info, :oauth
 
-      def initialize(url:, headers: {}, oauth: nil, &block)
+      def initialize(url:, headers: {}, oauth: nil, max_message_bytes: MAX_MESSAGE_BYTES, &block)
+        # `nil` or a non-positive value would make the buffering unbounded and silently
+        # disable the protection, so reject it up front.
+        unless max_message_bytes.is_a?(Integer) && max_message_bytes > 0
+          raise ArgumentError, "max_message_bytes must be a positive Integer"
+        end
+
         if oauth && !MCP::Client::OAuth::Discovery.secure_url?(url)
           # Mask credentials (userinfo) and query parameters before quoting the URL in the error message
           # so they cannot leak into logs.
@@ -183,6 +227,7 @@ module MCP
         @headers = headers
         @faraday_customizer = block
         @oauth = oauth
+        @max_message_bytes = max_message_bytes
         # Snapshot the canonical URL at construction time. This single value
         # serves two related roles, both of which need to see the query string:
         #
@@ -336,6 +381,7 @@ module MCP
           # so the response object (and its `Mcp-Session-Id` header) is always available for capture.
           stream = SSEStream.new(
             abortable: method.to_s != MCP::Methods::INITIALIZE,
+            max_message_bytes: @max_message_bytes,
             on_request: ->(message) { dispatch_server_request(message) },
           )
 
@@ -354,6 +400,12 @@ module MCP
           capture_session_info(method, response, body) if response
 
           body
+        rescue MessageTooLargeError => e
+          raise RequestHandlerError.new(
+            e.message,
+            { method: method, params: params },
+            error_type: :internal_error,
+          )
         rescue Faraday::BadRequestError => e
           raise RequestHandlerError.new(
             "The #{method} request is invalid",
@@ -699,6 +751,7 @@ module MCP
       def listen_for_server_requests
         stream = SSEStream.new(
           abortable: false,
+          max_message_bytes: @max_message_bytes,
           on_request: ->(message) { dispatch_server_request(message) },
         )
         consecutive_failures = 0
@@ -714,6 +767,9 @@ module MCP
             end
 
             consecutive_failures = 0
+          rescue MessageTooLargeError
+            # Reconnecting would let the server stream the same over-limit event again, so stop listening instead of retrying.
+            break
           rescue Faraday::Error => e
             break if e.response&.dig(:status) == 405
 
