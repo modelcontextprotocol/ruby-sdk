@@ -27,7 +27,7 @@ module MCP
             nil # Simulate end of input
           end
 
-          def set_encoding(encoding) # rubocop:disable Naming/AccessorMethodName
+          def set_encoding(encoding)
             # Mock implementation
           end
 

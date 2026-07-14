@@ -16,7 +16,7 @@ module JsonRpcHandler
     PARSE_ERROR = -32700
   end
 
-  DEFAULT_ALLOWED_ID_CHARACTERS = /\A[a-zA-Z0-9_-]+\z/
+  DEFAULT_ALLOWED_ID_CHARACTERS = /\A[a-zA-Z0-9_-]+\z/.freeze
 
   # Sentinel return value from a handler. When a handler returns this,
   # `process_request` emits no JSON-RPC response for the request,

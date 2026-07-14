@@ -1925,7 +1925,10 @@ module MCP
         end
 
         test "missing MCP-Protocol-Version header falls back to default for validation" do
-          MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.stubs(:include?).returns(false)
+          # The constant is frozen, so swap it out instead of stubbing `include?` on it.
+          original_versions = MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS
+          MCP::Configuration.send(:remove_const, :SUPPORTED_STABLE_PROTOCOL_VERSIONS)
+          MCP::Configuration.const_set(:SUPPORTED_STABLE_PROTOCOL_VERSIONS, [].freeze)
 
           request = Rack::Request.new(
             "REQUEST_METHOD" => "POST",
@@ -1938,6 +1941,9 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_includes body["error"]["message"], MCP::Configuration::DEFAULT_NEGOTIATED_PROTOCOL_VERSION
+        ensure
+          MCP::Configuration.send(:remove_const, :SUPPORTED_STABLE_PROTOCOL_VERSIONS)
+          MCP::Configuration.const_set(:SUPPORTED_STABLE_PROTOCOL_VERSIONS, original_versions)
         end
 
         test "POST request with empty MCP-Protocol-Version header returns 400" do

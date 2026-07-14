@@ -14,9 +14,7 @@ module MCP
       rescue => e
         already_reported = begin
           !!exception_already_reported&.call(e)
-        # rubocop:disable Lint/RescueException
         rescue Exception
-          # rubocop:enable Lint/RescueException
           # The predicate is expected to be side-effect-free and return a boolean.
           # Any exception raised from it (including non-StandardError such as SystemExit)
           # must not shadow the original exception.

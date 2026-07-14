@@ -8,7 +8,7 @@ module MCP
       # Applied after `Regexp.escape`, which turns `{` and `}` into `\{` and `\}`.
       # Variable names are restricted to valid Regexp named-group names,
       # so RFC 6570 operator expressions (e.g. `{?query}`) stay literal and never match.
-      VARIABLE_PATTERN = /\\\{([A-Za-z_]\w*)\\\}/
+      VARIABLE_PATTERN = /\\\{([A-Za-z_]\w*)\\\}/.freeze
 
       attr_reader :uri_template_value
       attr_reader :title_value

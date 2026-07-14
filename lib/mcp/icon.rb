@@ -2,7 +2,7 @@
 
 module MCP
   class Icon
-    SUPPORTED_THEMES = ["light", "dark"]
+    SUPPORTED_THEMES = ["light", "dark"].freeze
 
     attr_reader :mime_type, :sizes, :src, :theme
 
