@@ -913,6 +913,67 @@ module MCP
         assert_equal("Please accept with defaults", received_params["message"])
       end
 
+      def test_send_request_dispatches_sampling_request_to_registered_handler
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "ask_llm", arguments: {} },
+        }
+
+        sampling_request = {
+          jsonrpc: "2.0",
+          id: 0,
+          method: "sampling/createMessage",
+          params: {
+            messages: [{ role: "user", content: { type: "text", text: "Hi" } }],
+            maxTokens: 100,
+          },
+        }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = "event: message\ndata: #{sampling_request.to_json}\n\n" \
+          "event: message\ndata: #{tool_result.to_json}\n\n"
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_response = {
+          jsonrpc: "2.0",
+          id: 0,
+          result: {
+            role: "assistant",
+            content: { type: "text", text: "Hello there" },
+            model: "test-model",
+            stopReason: "endTurn",
+          },
+        }
+        response_stub = stub_request(:post, url).with(
+          body: expected_response.to_json,
+        ).to_return(status: 202, body: "")
+
+        received_params = nil
+        client.on_server_request("sampling/createMessage") do |params|
+          received_params = params
+          {
+            role: "assistant",
+            content: { type: "text", text: "Hello there" },
+            model: "test-model",
+            stopReason: "endTurn",
+          }
+        end
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(response_stub)
+        assert_equal(100, received_params["maxTokens"])
+      end
+
       def test_send_request_answers_unregistered_server_request_with_method_not_found
         request = {
           jsonrpc: "2.0",
