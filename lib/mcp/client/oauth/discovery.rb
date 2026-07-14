@@ -37,7 +37,7 @@ module MCP
         # Matches a single `key=value` pair inside an HTTP auth-scheme challenge.
         # `value` is either a quoted string (which can contain commas and spaces)
         # or a bare token, per RFC 7235.
-        WWW_AUTH_PARAM_PATTERN = /\A([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/
+        WWW_AUTH_PARAM_PATTERN = /\A([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/.freeze
 
         class << self
           # Parses a `WWW-Authenticate` header and returns the parameters of

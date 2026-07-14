@@ -963,9 +963,7 @@ module MCP
     end
 
     def index_resources_by_uri(resources)
-      resources.each_with_object({}) do |resource, hash|
-        hash[resource.uri] = resource
-      end
+      resources.to_h { |resource| [resource.uri, resource] }
     end
 
     def error_tool_response(text)

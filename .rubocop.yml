@@ -16,3 +16,7 @@ Lint/IncompatibleIoSelectWithFiberScheduler:
 
 Minitest/LiteralAsActualArgument:
   Enabled: true
+
+Naming/MethodName:
+  AllowedPatterns:
+    - '\Atest_'
