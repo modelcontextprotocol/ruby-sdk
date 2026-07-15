@@ -2318,6 +2318,10 @@ response = client.call_tool(
 
 The server will send `notifications/progress` back to the client during execution.
 
+`MCP::Client::HTTP.new` accepts an optional `max_message_bytes:` keyword that caps the bytes buffered in memory for a single message from the server -
+an SSE event or a JSON response body. A message that reaches this limit before completing is rejected as a transport error, preventing unbounded memory growth from
+a server that never terminates an SSE event. It defaults to `4 * 1024 * 1024` (4 MiB); raise it if your server returns larger responses.
+
 #### Server-to-Client Requests (Elicitation)
 
 Servers can send requests back to the client while one of the client's own requests is in flight - for example,
