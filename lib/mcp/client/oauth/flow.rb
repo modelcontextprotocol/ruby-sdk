@@ -51,8 +51,11 @@ module MCP
 
           as_metadata = authorization_server_metadata(authorization_server: authorization_server, legacy: prm.nil?)
 
-          if provider_authorization_flow == :client_credentials
+          case provider_authorization_flow
+          when :client_credentials
             return run_client_credentials!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
+          when :jwt_bearer
+            return run_jwt_bearer!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
           end
 
           ensure_pkce_supported!(as_metadata)
@@ -152,6 +155,36 @@ module MCP
             "Stored client credentials are bound to a different authorization server " \
               "(stored issuer #{stored_issuer.inspect}, current #{as_metadata["issuer"].inspect}); " \
               "refusing to send them to the current authorization server (SEP-2352)."
+        end
+
+        # Runs the RFC 7523 `jwt-bearer` grant for the SEP-990 Enterprise Managed Authorization extension:
+        # the provider supplies an ID-JAG assertion (typically obtained from an enterprise IdP via `IDJAGTokenExchange`),
+        # which is presented at the token endpoint with `client_secret_basic` authentication. Shares the same discovery
+        # and security checks as `run!`; like `client_credentials`, there is no PKCE, redirect, or authorization request.
+        # The assertion's audience is the issuer identifier that `ensure_issuer_matches!` validated.
+        # https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990
+        def run_jwt_bearer!(as_metadata:, prm:, resource:, scope:)
+          client_info = @provider.client_information
+          unless client_info.is_a?(Hash) && client_info_required_value(client_info, "client_id")
+            raise AuthorizationError, "Cannot run the jwt-bearer grant: the provider has no stored `client_id`."
+          end
+
+          assertion = @provider.jwt_bearer_assertion(audience: as_metadata["issuer"], resource: resource)
+          if assertion.nil? || assertion.to_s.empty?
+            raise AuthorizationError, "The provider's assertion_provider returned no ID-JAG assertion."
+          end
+
+          form = {
+            "grant_type" => "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion" => assertion,
+          }
+          effective_scope = resolve_scope(scope: scope, prm: prm)
+          form["scope"] = effective_scope if effective_scope
+          form["resource"] = resource if resource
+
+          tokens = post_to_token_endpoint(as_metadata: as_metadata, client_info: client_info, form: form)
+          @provider.save_tokens(tokens)
+          :authorized
         end
 
         # Exchanges the saved `refresh_token` for a fresh access token (RFC 6749 Section 6).

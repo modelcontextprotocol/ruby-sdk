@@ -253,6 +253,53 @@ module MCP
           end
         end
 
+        def test_run_uses_jwt_bearer_grant_for_cross_app_access_provider
+          # SEP-990: the ID-JAG assertion (obtained out of band, typically via IdP token exchange) is presented at
+          # the token endpoint with client_secret_basic; no PKCE, redirect, or DCR is involved.
+          received = nil
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(audience:, resource:) {
+              received = { audience: audience, resource: resource }
+              "id-jag-assertion"
+            },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+          # The assertion audience is the validated AS issuer; the resource is the canonical MCP server URL.
+          assert_equal({ audience: @auth_base, resource: "https://srv.example.com/mcp" }, received)
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+            expected_basic = "Basic " + Base64.strict_encode64("xaa-client:xaa-secret")
+            form["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer" &&
+              form["assertion"] == "id-jag-assertion" &&
+              form["resource"] == "https://srv.example.com/mcp" &&
+              !form.key?("code") &&
+              !form.key?("code_verifier") &&
+              req.headers["Authorization"] == expected_basic
+          end
+        end
+
+        def test_run_jwt_bearer_raises_when_assertion_provider_returns_nothing
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(audience:, resource:) {},
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/returned no ID-JAG/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
         def test_run_uses_authorization_code_grant_for_default_provider
           # A standard `Provider` declares `authorization_flow == :authorization_code`,
           # so `Flow` runs the interactive grant regardless of what `client_metadata[:grant_types]` happens to list.

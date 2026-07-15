@@ -87,6 +87,27 @@ def build_client_credentials_provider(context)
   end
 end
 
+# Builds a SEP-990 Cross-App Access provider: the harness injects an IdP ID token plus the IdP token endpoint
+# via context; the assertion provider exchanges them for an ID-JAG (RFC 8693), which the flow then presents to
+# the MCP authorization server with the jwt-bearer grant.
+def build_cross_app_access_provider(context)
+  assertion_provider = ->(audience:, resource:) do
+    MCP::Client::OAuth::IDJAGTokenExchange.request(
+      token_endpoint: context["idp_token_endpoint"],
+      id_token: context["idp_id_token"],
+      client_id: context["idp_client_id"],
+      audience: audience,
+      resource: resource,
+    )
+  end
+
+  MCP::Client::OAuth::CrossAppAccessProvider.new(
+    client_id: context["client_id"],
+    client_secret: context["client_secret"],
+    assertion_provider: assertion_provider,
+  )
+end
+
 # Builds an OAuth provider that drives the authorization code + PKCE + DCR flow
 # non-interactively against the conformance test's auth server. The conformance
 # `/authorize` endpoint redirects synchronously to `redirect_uri` with
@@ -129,7 +150,9 @@ def build_oauth_provider(context, scenario:)
 end
 
 def build_provider_for(scenario, context)
-  if scenario.start_with?("auth/client-credentials")
+  if context["idp_id_token"]
+    build_cross_app_access_provider(context)
+  elsif scenario.start_with?("auth/client-credentials")
     build_client_credentials_provider(context)
   else
     build_oauth_provider(context, scenario: scenario)
