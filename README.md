@@ -2346,6 +2346,44 @@ since servers deliver requests that are not tied to a client request on that str
 a JSON-RPC `-32601` (method not found) error. To handle methods other than `elicitation/create`, register directly on the transport with
 `http_transport.on_server_request("method/name") { |params| ... }`.
 
+#### Server-to-Client Requests (Sampling)
+
+Servers can also request an LLM completion from the client with [`sampling/createMessage`](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling),
+letting a server leverage the client's model access without its own API keys.
+
+> MCP Sampling is deprecated as of protocol version `2026-07-28` (SEP-2577), while remaining fully supported under `2025-11-25`.
+> Register this handler to interoperate with servers that still send sampling requests during the deprecation window;
+> new servers should call LLM provider APIs directly.
+
+Register a handler and advertise the capability on `connect`:
+
+```ruby
+client.connect(capabilities: { sampling: {} })
+
+client.on_sampling do |params|
+  completion = my_llm.complete(params["messages"], max_tokens: params["maxTokens"])
+  {
+    role: "assistant",
+    content: { type: "text", text: completion.text },
+    model: completion.model,
+    stopReason: "endTurn",
+  }
+end
+```
+
+For trust and safety, the spec recommends a human in the loop able to review, edit, or reject the request and the generated response.
+To reject a request, raise `MCP::Client::ServerRequestError` with the spec's user-rejection code `-1`:
+
+```ruby
+client.on_sampling do |params|
+  raise MCP::Client::ServerRequestError.new("User rejected sampling request", code: -1) unless approved?(params)
+
+  generate_completion(params)
+end
+```
+
+Use `capabilities: { sampling: { tools: {} } }` to receive tool-enabled sampling requests. Like elicitation, this uses the same standalone GET SSE listening stream.
+
 #### HTTP Authorization
 
 By default, the HTTP transport layer provides no authentication to the server, but you can provide custom headers if you need authentication. For example, to use Bearer token authentication:

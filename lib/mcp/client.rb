@@ -423,6 +423,44 @@ module MCP
       transport.on_server_request(Methods::ELICITATION_CREATE, &handler)
     end
 
+    # Registers a handler for `sampling/createMessage` requests the server sends while one of this client's requests is in flight.
+    # The handler receives the request `params` (`messages`, `maxTokens`, optionally `systemPrompt`, `modelPreferences`, `tools`,
+    # `toolChoice`, ...; string keys) and must return a `CreateMessageResult`-shaped Hash:
+    # `{ role: "assistant", content: { type: "text", text: "..." }, model: "...", stopReason: "..." }`.
+    #
+    # For trust and safety, the spec recommends a human in the loop able to review, edit, or reject the request and the generated response
+    # before it is returned to the server. To reject, raise `ServerRequestError` with the spec's user-rejection code `-1`.
+    #
+    # Requires a transport that supports server-to-client requests (e.g. `MCP::Client::HTTP`); pass `capabilities: { sampling: {} }` to
+    # `connect` (or `{ sampling: { tools: {} } }` to receive tool-enabled sampling requests) so the server knows it may send them.
+    #
+    # @example Forward the request to an LLM and return its completion
+    #
+    #   client.on_sampling do |params|
+    #     raise MCP::Client::ServerRequestError.new("User rejected sampling request", code: -1) unless approved?(params)
+    #
+    #     completion = my_llm.complete(params["messages"], max_tokens: params["maxTokens"])
+    #     {
+    #       role: "assistant",
+    #       content: { type: "text", text: completion.text },
+    #       model: completion.model,
+    #       stopReason: "endTurn",
+    #     }
+    #   end
+    #
+    # https://modelcontextprotocol.io/specification/2025-11-25/client/sampling
+    #
+    # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Register this handler only to interoperate with servers that still send sampling requests during the deprecation window;
+    #   new servers should call LLM provider APIs directly.
+    def on_sampling(&handler)
+      unless transport.respond_to?(:on_server_request)
+        raise ArgumentError, "The transport does not support server-to-client requests"
+      end
+
+      transport.on_server_request(Methods::SAMPLING_CREATE_MESSAGE, &handler)
+    end
+
     # Sends a `ping` request to the server to verify the connection is alive.
     # Per the MCP spec, the server responds with an empty result.
     #
