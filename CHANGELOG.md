@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-18
+
+### Added
+
+- Support SEP-990 Cross-App Access via ID-JAG and the `jwt-bearer` grant (#454)
+- Support client-side sampling via `MCP::Client#on_sampling` (#458)
+
+### Fixed
+
+- Reject notifications carrying an unknown or expired session (#455)
+- Handle an `initialize` request sent without an ID (#456)
+- Bound client-side message buffering in the HTTP transport (#459)
+- Lowercase response header names in `StreamableHTTPTransport` (#460)
+
 ## [0.24.0] - 2026-07-12
 
 ### Added
