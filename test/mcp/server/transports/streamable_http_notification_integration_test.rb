@@ -28,7 +28,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new
@@ -77,7 +77,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
-          session_id1 = init_response1[1]["Mcp-Session-Id"]
+          session_id1 = init_response1[1]["mcp-session-id"]
 
           init_request2 = create_rack_request(
             "POST",
@@ -86,7 +86,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
-          session_id2 = init_response2[1]["Mcp-Session-Id"]
+          session_id2 = init_response2[1]["mcp-session-id"]
 
           # Connect both sessions with SSE
           io1 = StringIO.new
@@ -132,7 +132,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new
@@ -168,7 +168,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new
@@ -212,7 +212,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new

@@ -105,7 +105,7 @@ class McpSseLogger
           @mcp_logger.error("Response error: #{parsed["error"]["message"]}")
         else
           @mcp_logger.info("Response: success (id: #{parsed["id"]})")
-          @sse_logger.info("Session created: #{headers["Mcp-Session-Id"]}") if headers["Mcp-Session-Id"]
+          @sse_logger.info("Session created: #{headers["mcp-session-id"]}") if headers["mcp-session-id"]
         end
       rescue JSON::ParserError
         @mcp_logger.warn("Invalid JSON in response")

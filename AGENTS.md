@@ -32,6 +32,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - Use frozen string literals
 - Follow Ruby community conventions
 - Keep dependencies minimal
+- Use lowercase HTTP response header names (e.g. `mcp-session-id`); the Rack 3 SPEC requires this, and the MCP spec's `Mcp-Session-Id` casing is prose convention only
 
 ## Commit message conventions
 

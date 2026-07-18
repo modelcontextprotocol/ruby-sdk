@@ -19,9 +19,9 @@ module MCP
         class InvalidJsonError < StandardError; end
 
         SSE_HEADERS = {
-          "Content-Type" => "text/event-stream",
-          "Cache-Control" => "no-cache",
-          "Connection" => "keep-alive",
+          "content-type" => "text/event-stream",
+          "cache-control" => "no-cache",
+          "connection" => "keep-alive",
         }.freeze
 
         # Secure defaults for stateful mode. Without a finite idle timeout, sessions live until an explicit client DELETE,
@@ -566,7 +566,7 @@ module MCP
         end
 
         def handle_delete(request)
-          success_response = [200, { "Content-Type" => "application/json" }, [{ success: true }.to_json]]
+          success_response = [200, { "content-type" => "application/json" }, [{ success: true }.to_json]]
 
           if @stateless
             protocol_version_error = validate_protocol_version_header(request)
@@ -762,7 +762,7 @@ module MCP
 
         def json_rpc_error_response(status:, code:, message:)
           body = { jsonrpc: "2.0", id: nil, error: { code: code, message: message } }
-          [status, { "Content-Type" => "application/json" }, [body.to_json]]
+          [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 
         def notification?(body)
@@ -870,10 +870,10 @@ module MCP
           end
 
           headers = {
-            "Content-Type" => "application/json",
+            "content-type" => "application/json",
           }
 
-          headers["Mcp-Session-Id"] = session_id if session_id
+          headers["mcp-session-id"] = session_id if session_id
 
           [200, headers, [response]]
         end
@@ -915,7 +915,7 @@ module MCP
             # which would produce an empty body the client cannot parse as JSON.
             return handle_accepted if response.nil?
 
-            [200, { "Content-Type" => "application/json" }, [response]]
+            [200, { "content-type" => "application/json" }, [response]]
           end
         end
 
@@ -1148,7 +1148,7 @@ module MCP
               message: message,
             },
           }
-          [400, { "Content-Type" => "application/json" }, [body.to_json]]
+          [400, { "content-type" => "application/json" }, [body.to_json]]
         end
 
         def session_already_connected_response

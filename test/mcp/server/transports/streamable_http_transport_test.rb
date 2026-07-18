@@ -57,7 +57,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Now make the ping request with the session ID
           request = create_rack_request(
@@ -72,7 +72,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
 
           io = StringIO.new
           response[2].call(io)
@@ -80,6 +80,47 @@ module MCP
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
           assert_equal({}, body["result"])
+        end
+
+        test "response header names are lowercase as required by the Rack 3 spec" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init" }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["mcp-session-id"]
+
+          get_request = create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          delete_request = create_rack_request(
+            "DELETE",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          )
+          parse_error_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            "invalid json",
+          )
+
+          responses = {
+            initialize: init_response,
+            get_sse: @transport.handle_request(get_request),
+            delete: @transport.handle_request(delete_request),
+            parse_error: @transport.handle_request(parse_error_request),
+          }
+
+          responses.each do |name, (_status, headers, _body)|
+            headers.each_key do |key|
+              assert_equal key.downcase, key, "#{name} response header `#{key}` must be lowercase"
+            end
+          end
         end
 
         test "id-bearing notification message is rejected with Method not found" do
@@ -90,7 +131,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -124,7 +165,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -141,7 +182,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -169,7 +210,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -199,8 +240,8 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "application/json", response[1]["Content-Type"]
-          assert response[1]["Mcp-Session-Id"]
+          assert_equal "application/json", response[1]["content-type"]
+          assert response[1]["mcp-session-id"]
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -216,7 +257,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
           assert session_id
 
           duplicate_request = create_rack_request(
@@ -272,7 +313,7 @@ module MCP
               { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
             )
             init_response = transport.handle_request(init_request)
-            session_id = init_response[1]["Mcp-Session-Id"]
+            session_id = init_response[1]["mcp-session-id"]
             assert(session_id)
 
             sleep(0.1)
@@ -308,7 +349,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          refute response[1].key?("Mcp-Session-Id"), "no session id should leak from a failed init"
+          refute response[1].key?("mcp-session-id"), "no session id should leak from a failed init"
 
           body = JSON.parse(response[2][0])
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
@@ -359,7 +400,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Then try to connect with GET
           request = create_rack_request(
@@ -372,7 +413,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
           assert response[2].is_a?(Proc) # The body should be a Proc for streaming
         end
 
@@ -384,7 +425,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE then close it
           io = StringIO.new
@@ -411,7 +452,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
         end
 
         test "handles POST request as SSE even when GET SSE stream has EPIPE" do
@@ -422,7 +463,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE with a broken pipe
           reader, writer = IO.pipe
@@ -449,7 +490,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal(200, response[0])
-          assert_equal("text/event-stream", response[1]["Content-Type"])
+          assert_equal("text/event-stream", response[1]["content-type"])
         ensure
           begin
             writer.close
@@ -466,7 +507,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE with a mock that raises ECONNRESET
           mock_stream = Object.new
@@ -494,7 +535,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
         end
 
         test "handles GET request with missing session ID" do
@@ -506,7 +547,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -564,7 +605,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = @transport.handle_request(init_request)[1]["Mcp-Session-Id"]
+          session_id = @transport.handle_request(init_request)[1]["mcp-session-id"]
 
           notification = create_rack_request(
             "POST",
@@ -649,7 +690,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Simulate an active SSE stream by storing a stream object in the session
           mock_stream = StringIO.new
@@ -664,7 +705,7 @@ module MCP
 
           response = @transport.handle_request(get_request)
           assert_equal 409, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -682,7 +723,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Establish stream A
           stream_a = StringIO.new
@@ -709,7 +750,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 404, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Session not found", body["error"]["message"]
@@ -728,7 +769,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 404, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Session not found", body["error"]["message"]
@@ -743,7 +784,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Then try to delete it
           request = create_rack_request(
@@ -754,7 +795,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert body["success"]
@@ -769,7 +810,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 404, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Session not found", body["error"]["message"]
@@ -783,7 +824,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           delete_request = create_rack_request(
             "DELETE",
@@ -816,7 +857,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           first_delete = create_rack_request(
             "DELETE",
@@ -847,7 +888,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Missing session ID", body["error"]["message"]
@@ -862,7 +903,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Then connect with GET
           io = StringIO.new
@@ -898,7 +939,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Simulate multiple request_streams being set on the session.
           closed = []
@@ -947,7 +988,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
-          session_id1 = init_response1[1]["Mcp-Session-Id"]
+          session_id1 = init_response1[1]["mcp-session-id"]
 
           # Create second session
           init_request2 = create_rack_request(
@@ -957,7 +998,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
-          session_id2 = init_response2[1]["Mcp-Session-Id"]
+          session_id2 = init_response2[1]["mcp-session-id"]
 
           # Connect first session with GET
           io1 = StringIO.new
@@ -1050,7 +1091,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new
@@ -1086,7 +1127,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
-          session_id1 = init_response1[1]["Mcp-Session-Id"]
+          session_id1 = init_response1[1]["mcp-session-id"]
 
           init_request2 = create_rack_request(
             "POST",
@@ -1095,7 +1136,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "456", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
-          session_id2 = init_response2[1]["Mcp-Session-Id"]
+          session_id2 = init_response2[1]["mcp-session-id"]
 
           # Connect both sessions with SSE
           io1 = StringIO.new
@@ -1150,7 +1191,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with SSE
           io = StringIO.new
@@ -1187,7 +1228,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Use a mock stream that raises Errno::ECONNRESET on write.
           mock_stream = Object.new
@@ -1224,7 +1265,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Use a mock stream that verifies mutex is NOT held during close.
           mutex = @transport.instance_variable_get(:@mutex)
@@ -1255,7 +1296,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           io = StringIO.new
@@ -1294,7 +1335,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           io = StringIO.new
@@ -1335,7 +1376,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
           )
           init_response1 = @transport.handle_request(init_request1)
-          session_id1 = init_response1[1]["Mcp-Session-Id"]
+          session_id1 = init_response1[1]["mcp-session-id"]
 
           init_request2 = create_rack_request(
             "POST",
@@ -1344,7 +1385,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "2", params: initialize_params }.to_json,
           )
           init_response2 = @transport.handle_request(init_request2)
-          session_id2 = init_response2[1]["Mcp-Session-Id"]
+          session_id2 = init_response2[1]["mcp-session-id"]
 
           # Session 1: mock stream that raises ECONNRESET.
           broken_stream = Object.new
@@ -1454,7 +1495,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Use a mock stream that raises Errno::ECONNRESET on write.
           mock_stream = Object.new
@@ -1503,7 +1544,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 405, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -1570,7 +1611,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 406, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Not Acceptable: Accept header must include application/json and text/event-stream",
@@ -1683,7 +1724,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request_without_accept(
             "GET",
@@ -1696,7 +1737,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
         end
 
         test "GET request without Accept header returns 406" do
@@ -1707,7 +1748,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request_without_accept(
             "GET",
@@ -1733,7 +1774,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request_without_accept(
             "GET",
@@ -1759,7 +1800,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "GET",
@@ -1772,7 +1813,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
         end
 
         test "GET request with Accept: */* succeeds" do
@@ -1783,7 +1824,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request_without_accept(
             "GET",
@@ -1796,7 +1837,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
         end
 
         test "POST initialize request ignores MCP-Protocol-Version header" do
@@ -1874,7 +1915,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -1889,7 +1930,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 400, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -1907,7 +1948,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -1935,7 +1976,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -1960,7 +2001,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -2006,7 +2047,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -2034,7 +2075,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -2062,7 +2103,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "GET",
@@ -2088,7 +2129,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "GET",
@@ -2108,7 +2149,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "DELETE",
@@ -2163,7 +2204,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = stateless_transport.handle_request(init_request)
-          assert_nil init_response[1]["Mcp-Session-Id"]
+          assert_nil init_response[1]["mcp-session-id"]
         end
 
         test "stateless mode responds without any session ID when session ID is present" do
@@ -2183,7 +2224,7 @@ module MCP
           assert_equal 200, response[0]
           assert_equal(
             {
-              "Content-Type" => "application/json",
+              "content-type" => "application/json",
             },
             response[1],
           )
@@ -2205,7 +2246,7 @@ module MCP
           )
           response = stateless_transport.handle_request(get_request)
           assert_equal 405, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "Method not allowed", body["error"]["message"]
@@ -2221,7 +2262,7 @@ module MCP
           )
           response = stateless_transport.handle_request(delete_request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert body["success"]
@@ -2237,7 +2278,7 @@ module MCP
           )
           response = stateless_transport.handle_request(delete_request)
           assert_equal 200, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert body["success"]
@@ -2304,7 +2345,7 @@ module MCP
             assert_equal 200, response[0]
             body = JSON.parse(response[2][0])
             assert body.key?("result"), "initialize ##{i + 1} should succeed, got #{body.inspect}"
-            refute response[1].key?("Mcp-Session-Id")
+            refute response[1].key?("mcp-session-id")
           end
         end
 
@@ -2365,7 +2406,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect with GET SSE
           io = StringIO.new
@@ -2391,7 +2432,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
 
           post_io = StringIO.new
           response[2].call(post_io)
@@ -2411,7 +2452,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -2425,7 +2466,7 @@ module MCP
 
           response = transport.handle_request(request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
+          assert_equal("application/json", response[1]["content-type"])
 
           body = JSON.parse(response[2][0])
           assert_equal("1", body["id"])
@@ -2517,7 +2558,7 @@ module MCP
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           tool_request = create_rack_request(
             "POST",
@@ -2536,7 +2577,7 @@ module MCP
 
           response = transport.handle_request(tool_request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
+          assert_equal("application/json", response[1]["content-type"])
 
           body = JSON.parse(response[2][0])
           assert_equal("call-1", body["id"])
@@ -2569,7 +2610,7 @@ module MCP
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           io = StringIO.new
@@ -2600,7 +2641,7 @@ module MCP
 
           response = transport.handle_request(tool_request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
+          assert_equal("application/json", response[1]["content-type"])
 
           # Notification should NOT leak to GET SSE stream.
           io.rewind
@@ -2678,7 +2719,7 @@ module MCP
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           io = StringIO.new
@@ -2709,7 +2750,7 @@ module MCP
 
           response = transport.handle_request(tool_request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
+          assert_equal("application/json", response[1]["content-type"])
 
           # Broadcast notification should arrive on GET SSE stream.
           io.rewind
@@ -2732,8 +2773,8 @@ module MCP
 
           response = transport.handle_request(request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
-          assert_nil(response[1]["Mcp-Session-Id"])
+          assert_equal("application/json", response[1]["content-type"])
+          assert_nil(response[1]["mcp-session-id"])
 
           body = JSON.parse(response[2][0])
           assert_equal("1", body["id"])
@@ -2777,7 +2818,7 @@ module MCP
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           io = StringIO.new
           get_request = create_rack_request(
@@ -2806,7 +2847,7 @@ module MCP
 
           response = transport.handle_request(tool_request)
           assert_equal(200, response[0])
-          assert_equal("application/json", response[1]["Content-Type"])
+          assert_equal("application/json", response[1]["content-type"])
 
           io.rewind
           assert_includes(io.read, "notifications/resources/updated")
@@ -2828,7 +2869,7 @@ module MCP
 
           response = @transport.handle_request(request)
           assert_equal 500, response[0]
-          assert_equal({ "Content-Type" => "application/json" }, response[1])
+          assert_equal({ "content-type" => "application/json" }, response[1])
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -2872,7 +2913,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           error = assert_raises(RuntimeError) do
             @transport.send_request("sampling/createMessage", { "messages" => [] }, session_id: session_id)
@@ -2890,7 +2931,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect SSE.
           io = StringIO.new
@@ -2959,7 +3000,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           get_io = StringIO.new
@@ -3019,7 +3060,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init-a", params: initialize_params }.to_json,
           )
           resp_a = @transport.handle_request(init_a)
-          session_a = resp_a[1]["Mcp-Session-Id"]
+          session_a = resp_a[1]["mcp-session-id"]
 
           init_b = create_rack_request(
             "POST",
@@ -3028,7 +3069,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init-b", params: initialize_params }.to_json,
           )
           resp_b = @transport.handle_request(init_b)
-          session_b = resp_b[1]["Mcp-Session-Id"]
+          session_b = resp_b[1]["mcp-session-id"]
 
           # Connect SSE for session A.
           io_a = StringIO.new
@@ -3090,7 +3131,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           io = StringIO.new
           get_request = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id })
@@ -3130,7 +3171,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           io = StringIO.new
           get_request = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id })
@@ -3198,7 +3239,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           io = StringIO.new
           get_request = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id })
@@ -3267,7 +3308,7 @@ module MCP
             }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
           server_session = transport.instance_variable_get(:@sessions)[session_id][:server_session]
 
           tool_request = create_rack_request(
@@ -3324,7 +3365,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect SSE.
           io = StringIO.new
@@ -3383,7 +3424,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect SSE.
           io = StringIO.new
@@ -3427,7 +3468,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Connect GET SSE.
           get_io = StringIO.new
@@ -3526,7 +3567,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Set up sampling capability for the session.
           @transport.instance_variable_get(:@sessions)[session_id][:server_session]
@@ -3612,7 +3653,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Define a tool that sends a notification during execution.
           notification_sent = Queue.new
@@ -3669,7 +3710,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Define a tool that reports progress during execution.
           progress_reported = Queue.new
@@ -3722,7 +3763,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           notif_request = create_rack_request(
             "POST",
@@ -3751,7 +3792,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
           assert(session_id)
 
           # Session should now be expired (timeout is 0)
@@ -3782,7 +3823,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Session should now be expired (timeout is 0)
           sleep(0.01)
@@ -3816,7 +3857,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Make a request - session should still be valid
           request = create_rack_request(
@@ -3845,7 +3886,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -3873,7 +3914,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Send requests every 0.2s to keep the session alive.
           # Total elapsed time (~0.6s) exceeds timeout (0.5s), but each request
@@ -3906,7 +3947,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
           assert(session_id)
 
           # Wait for session to expire
@@ -3937,7 +3978,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Wait for the session to exceed the idle timeout (0.01s)
           sleep(0.02)
@@ -3972,7 +4013,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Replace the stream with one that verifies mutex is NOT held during close.
           mutex = transport.instance_variable_get(:@mutex)
@@ -4033,7 +4074,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           # A freshly created session is well within the timeout, so normal use is unaffected.
-          session_id = transport.handle_request(init_request)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
           request = create_rack_request(
             "POST",
             "/",
@@ -4158,7 +4199,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Wait for the session to exceed the idle timeout (0.01s)
           sleep(0.02)
@@ -4179,7 +4220,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           # Attach a mock stream to the session
           stream = StringIO.new
@@ -4202,7 +4243,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -4298,7 +4339,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
-          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+          session1 = transport.handle_request(init1)[1]["mcp-session-id"]
 
           init2 = create_rack_request(
             "POST",
@@ -4311,7 +4352,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
-          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+          session2 = transport.handle_request(init2)[1]["mcp-session-id"]
 
           # Connect SSE for both sessions.
           io1 = StringIO.new
@@ -4374,7 +4415,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
-          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+          session1 = transport.handle_request(init1)[1]["mcp-session-id"]
 
           init2 = create_rack_request(
             "POST",
@@ -4387,7 +4428,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
-          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+          session2 = transport.handle_request(init2)[1]["mcp-session-id"]
 
           # Connect SSE for both sessions.
           io1 = StringIO.new
@@ -4448,7 +4489,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "alpha", version: "1.0" }),
             }.to_json,
           )
-          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+          session1 = transport.handle_request(init1)[1]["mcp-session-id"]
 
           # Initialize session 2 with client "beta".
           init2 = create_rack_request(
@@ -4462,7 +4503,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "beta", version: "2.0" }),
             }.to_json,
           )
-          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+          session2 = transport.handle_request(init2)[1]["mcp-session-id"]
 
           # Each session should have its own client info.
           sessions = transport.instance_variable_get(:@sessions)
@@ -4486,7 +4527,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "a", version: "1.0" }),
             }.to_json,
           )
-          session1 = transport.handle_request(init1)[1]["Mcp-Session-Id"]
+          session1 = transport.handle_request(init1)[1]["mcp-session-id"]
 
           init2 = create_rack_request(
             "POST",
@@ -4499,7 +4540,7 @@ module MCP
               params: initialize_params(clientInfo: { name: "b", version: "1.0" }),
             }.to_json,
           )
-          session2 = transport.handle_request(init2)[1]["Mcp-Session-Id"]
+          session2 = transport.handle_request(init2)[1]["mcp-session-id"]
 
           # Session 1 sets log level to "error".
           set_level1 = create_rack_request(
@@ -4553,7 +4594,7 @@ module MCP
 
           response = @transport.call(env)
           assert_equal 200, response[0]
-          assert_equal "application/json", response[1]["Content-Type"]
+          assert_equal "application/json", response[1]["content-type"]
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
@@ -4580,7 +4621,7 @@ module MCP
             "HTTP_ACCEPT" => "application/json, text/event-stream",
           }
           init_response = @transport.call(init_env)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           get_env = {
             "REQUEST_METHOD" => "GET",
@@ -4592,7 +4633,7 @@ module MCP
 
           response = @transport.call(get_env)
           assert_equal 200, response[0]
-          assert_equal "text/event-stream", response[1]["Content-Type"]
+          assert_equal "text/event-stream", response[1]["content-type"]
           assert response[2].is_a?(Proc)
         end
 
@@ -4605,7 +4646,7 @@ module MCP
             "HTTP_ACCEPT" => "application/json, text/event-stream",
           }
           init_response = @transport.call(init_env)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           delete_env = {
             "REQUEST_METHOD" => "DELETE",
@@ -4629,7 +4670,7 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init-frozen", params: initialize_params }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          session_id = init_response[1]["Mcp-Session-Id"]
+          session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
             "POST",
@@ -4640,7 +4681,7 @@ module MCP
 
           status, headers, = @transport.handle_request(request)
           assert_equal 200, status
-          assert_equal "text/event-stream", headers["Content-Type"]
+          assert_equal "text/event-stream", headers["content-type"]
           refute headers.frozen?, "SSE response headers should not be frozen"
         end
 
@@ -4726,7 +4767,7 @@ module MCP
 
           status, headers, body = transport.handle_request(request)
           assert_equal(403, status)
-          assert_equal("application/json", headers["Content-Type"])
+          assert_equal("application/json", headers["content-type"])
           parsed = JSON.parse(body.first)
           assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"])
           assert_equal("Forbidden: Invalid Origin header", parsed["error"]["message"])
@@ -4848,7 +4889,7 @@ module MCP
 
           status, headers, body = @transport.handle_request(request)
           assert_equal(403, status)
-          assert_equal("application/json", headers["Content-Type"])
+          assert_equal("application/json", headers["content-type"])
           parsed = JSON.parse(body.first)
           assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"])
           assert_equal("Forbidden: Invalid Host header", parsed["error"]["message"])
@@ -5025,7 +5066,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
 
           attacker = create_rack_request(
             "POST",
@@ -5056,7 +5097,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
 
           same_origin = create_rack_request(
             "POST",
@@ -5093,7 +5134,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
 
           ping = lambda do
             create_rack_request(
@@ -5126,7 +5167,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
           refute_nil(session_id)
 
           headers = { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }
@@ -5168,7 +5209,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
           )
-          session_id = transport.handle_request(init)[1]["Mcp-Session-Id"]
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
 
           transport.handle_request(create_rack_request(
             "POST",
@@ -5210,7 +5251,7 @@ module MCP
             { "CONTENT_TYPE" => "application/json" },
             { jsonrpc: "2.0", method: "initialize", id: id, params: initialize_params }.to_json,
           )
-          @transport.handle_request(init_request)[1]["Mcp-Session-Id"]
+          @transport.handle_request(init_request)[1]["mcp-session-id"]
         end
 
         # Installs a stream that records, on every write, whether `@mutex` was held at that moment.
