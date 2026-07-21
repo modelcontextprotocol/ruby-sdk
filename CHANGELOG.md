@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-24
+
+First stable release. The public API is now stable: breaking changes ship only in major releases,
+apart from the narrow exceptions documented in [VERSIONING.md](VERSIONING.md).
+
+### Added
+
+- Add `ROADMAP.md` outlining the path toward SEP-1730 (#465)
+- Add `VERSIONING.md` documenting the versioning and breaking-change policy (#466)
+
 ## [0.25.0] - 2026-07-18
 
 ### Added
