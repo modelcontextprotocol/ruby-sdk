@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Expose the server's `annotations` field on `MCP::Client::Tool` — `Client#tools`/`#list_tools` previously dropped it
-
 ## [0.23.0] - 2026-07-07
 
 ### Added
