@@ -166,6 +166,7 @@ module MCP
           description: tool["description"],
           input_schema: tool["inputSchema"],
           output_schema: tool["outputSchema"],
+          annotations: tool["annotations"],
         )
       end
 
