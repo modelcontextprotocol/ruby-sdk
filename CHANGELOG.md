@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Warn when deprecated Roots, Sampling, or Logging APIs are used with protocol version `2026-07-28` (#406)
+
 ## [0.25.0] - 2026-07-18
 
 ### Added

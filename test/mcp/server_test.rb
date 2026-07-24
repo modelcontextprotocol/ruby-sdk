@@ -6,6 +6,7 @@ module MCP
   class ServerTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
     include InitializeParamsTestHelper
+    include DeprecationWarningTestHelper
     setup do
       @tool = Tool.define(
         name: "test_tool",
@@ -1178,6 +1179,67 @@ module MCP
       refute response.key?(:error)
     end
 
+    test "#configure_logging_level warns when negotiated protocol version is 2026-07-28" do
+      server = Server.new(tools: [TestTool])
+      server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: {
+            protocolVersion: "2026-07-28",
+            capabilities: {},
+            clientInfo: { name: "test-client", version: "1.0" },
+          },
+        },
+      )
+
+      response = nil
+      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+        response = server.handle(
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "logging/setLevel",
+            params: {
+              level: "info",
+            },
+          },
+        )
+      end
+
+      assert_empty response[:result]
+    end
+
+    test "#configure_logging_level does not warn when negotiated protocol version is older" do
+      server = Server.new(tools: [TestTool])
+      server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "test-client", version: "1.0" },
+          },
+        },
+      )
+
+      assert_no_deprecation_warning do
+        server.handle(
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "logging/setLevel",
+            params: {
+              level: "info",
+            },
+          },
+        )
+      end
+    end
+
     test "#configure_logging_level returns an error object when invalid log level is provided" do
       server = Server.new(
         tools: [TestTool],
@@ -1225,6 +1287,35 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
+      assert_equal(-32603, response[:error][:code])
+      assert_includes response[:error][:data], "Server does not support logging"
+    end
+
+    test "#configure_logging_level warns when configured protocol version is 2026-07-28 and server lacks logging capability" do
+      server = Server.new(
+        tools: [TestTool],
+        configuration: Configuration.new(protocol_version: "2026-07-28"),
+        capabilities: {
+          tools: { listChanged: true },
+          prompts: { listChanged: true },
+          resources: { listChanged: true },
+        },
+      )
+
+      response = nil
+      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+        response = server.handle(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "logging/setLevel",
+            params: {
+              level: "debug",
+            },
+          },
+        )
+      end
+
       assert_equal(-32603, response[:error][:code])
       assert_includes response[:error][:data], "Server does not support logging"
     end
