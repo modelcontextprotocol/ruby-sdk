@@ -3156,6 +3156,16 @@ module MCP
       end
     end
 
+    class JsonObjectValue
+      def initialize(value)
+        @value = value
+      end
+
+      def to_json(*args)
+        @value.to_json(*args)
+      end
+    end
+
     test "server_context_with_meta uses accessor method, not ivar directly" do
       subclass = Class.new(Server) do
         def server_context
@@ -3247,23 +3257,28 @@ module MCP
       end
     end
 
-    test "#handle tools/call mirrors non-object structuredContent into serialized text content" do
+    test "#handle tools/call mirrors non-object structuredContent when content is omitted or nil" do
       # Per SEP-2106, `structuredContent` may be any JSON value. Older clients may only read `content`,
       # so the server adds a serialized fallback when the tool provided no content blocks.
       server = Server.new(name: "structured_test", tools: [])
-      server.define_tool(name: "array_tool") do
+      server.define_tool(name: "nil_content_tool") do
         Tool::Response.new(nil, structured_content: [1, 2])
       end
+      server.define_tool(name: "omitted_content_tool") do
+        Tool::Response.new(structured_content: [1, 2])
+      end
 
-      response = server.handle({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        id: 1,
-        params: { name: "array_tool", arguments: {} },
-      })
+      ["nil_content_tool", "omitted_content_tool"].each_with_index do |tool_name, index|
+        response = server.handle({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: index + 1,
+          params: { name: tool_name, arguments: {} },
+        })
 
-      assert_equal [1, 2], response.dig(:result, :structuredContent)
-      assert_equal [{ type: "text", text: "[1,2]" }], response.dig(:result, :content)
+        assert_equal [1, 2], response.dig(:result, :structuredContent)
+        assert_equal [{ type: "text", text: "[1,2]" }], response.dig(:result, :content)
+      end
     end
 
     test "#handle tools/call does not overwrite explicit content when structuredContent is non-object" do
@@ -3296,6 +3311,60 @@ module MCP
       })
 
       assert_equal({ answer: 42 }, response.dig(:result, :structuredContent))
+      assert_empty response.dig(:result, :content)
+    end
+
+    test "#handle tools/call recognizes object-like structuredContent by its JSON shape" do
+      structured_content = JsonObjectValue.new(answer: 42)
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "object_tool") do
+        Tool::Response.new(nil, structured_content: structured_content)
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "object_tool", arguments: {} },
+      })
+
+      assert_equal structured_content, response.dig(:result, :structuredContent)
+      assert_empty response.dig(:result, :content)
+    end
+
+    test "#handle tools/call preserves explicit empty content for non-object structuredContent" do
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "array_tool") do
+        Tool::Response.new([], structured_content: [1, 2])
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "array_tool", arguments: {} },
+      })
+
+      assert_equal [1, 2], response.dig(:result, :structuredContent)
+      assert_empty response.dig(:result, :content)
+    end
+
+    test "#handle tools/call preserves explicit empty content for object-like structuredContent" do
+      structured_content = JsonObjectValue.new(answer: 42)
+
+      server = Server.new(name: "structured_test", tools: [])
+      server.define_tool(name: "object_tool") do
+        Tool::Response.new([], structured_content: structured_content)
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "object_tool", arguments: {} },
+      })
+
+      assert_equal structured_content, response.dig(:result, :structuredContent)
       assert_empty response.dig(:result, :content)
     end
 

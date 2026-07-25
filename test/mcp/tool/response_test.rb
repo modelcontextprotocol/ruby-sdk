@@ -16,6 +16,12 @@ module MCP
         refute response.error?
       end
 
+      test "#content_provided? distinguishes empty content from omitted or nil content" do
+        assert Response.new([]).content_provided?
+        refute Response.new.content_provided?
+        refute Response.new(nil).content_provided?
+      end
+
       test "#initialize with content and error set to true" do
         content = [{
           type: "text",

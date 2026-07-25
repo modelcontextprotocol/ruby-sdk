@@ -745,11 +745,15 @@ module MCP
 
       progress_token = request.dig(:_meta, :progressToken)
 
-      result = call_tool_with_args(
+      response = call_tool_with_args(
         tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id, cancellation: cancellation
       )
+      result = response.to_h
       validate_tool_call_result!(tool, result)
-      serialize_structured_content_fallback(result)
+      serialize_structured_content_fallback(
+        result,
+        content_provided: response.respond_to?(:content_provided?) && response.content_provided?,
+      )
     rescue RequestHandlerError, CancelledError
       # CancelledError is intentionally not wrapped so `handle_request` can turn it into
       # `JsonRpcHandler::NO_RESPONSE` per the MCP cancellation spec.
@@ -986,14 +990,18 @@ module MCP
 
     # Per SEP-2106, `structuredContent` may be any JSON value, not only an object.
     # Clients on older protocol versions may only read `content`,
-    # so when a tool returns non-object structured content without providing
-    # any content blocks, mirror the value into `content` as serialized JSON text.
-    def serialize_structured_content_fallback(result)
+    # so when a tool returns non-object structured content without explicitly
+    # providing `content`, mirror the value into serialized JSON text.
+    def serialize_structured_content_fallback(result, content_provided: false)
       structured = result[:structuredContent]
       return result if structured.nil? || structured.is_a?(Hash)
+      return result if content_provided
       return result unless result[:content].nil? || result[:content].empty?
 
-      result.merge(content: [{ type: "text", text: JSON.generate(structured) }])
+      serialized = JSON.generate(structured)
+      return result if JSON.parse(serialized).is_a?(Hash)
+
+      result.merge(content: [{ type: "text", text: serialized }])
     end
 
     # Whether a tool/prompt handler opts in to receiving an `MCP::ServerContext`.
@@ -1026,9 +1034,9 @@ module MCP
           related_request_id: related_request_id,
           cancellation: cancellation,
         )
-        tool.call(**args, server_context: server_context).to_h
+        tool.call(**args, server_context: server_context)
       else
-        tool.call(**args).to_h
+        tool.call(**args)
       end
     end
 
