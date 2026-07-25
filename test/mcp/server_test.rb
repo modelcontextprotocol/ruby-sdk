@@ -172,6 +172,49 @@ module MCP
       end
     end
 
+    test "UnsupportedProtocolVersionError surfaces as -32022 with the SEP-2575 data shape" do
+      server = Server.new(name: "error_test", tools: [TestTool])
+      server.define_tool(name: "unsupported_version_tool") do
+        raise Server::UnsupportedProtocolVersionError, "1900-01-01"
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "unsupported_version_tool" },
+      })
+
+      assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, response.dig(:error, :code)
+      assert_equal "Unsupported protocol version", response.dig(:error, :message)
+      assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, response.dig(:error, :data, :supported)
+      assert_equal "1900-01-01", response.dig(:error, :data, :requested)
+    end
+
+    test "UnsupportedProtocolVersionError reports an unknown requested version" do
+      error = Server::UnsupportedProtocolVersionError.new(nil)
+
+      assert_equal "unknown", error.error_data[:requested]
+    end
+
+    test "MissingRequiredClientCapabilityError surfaces as -32021 with the SEP-2575 data shape" do
+      server = Server.new(name: "error_test", tools: [TestTool])
+      server.define_tool(name: "missing_capability_tool") do
+        raise Server::MissingRequiredClientCapabilityError, { elicitation: {} }
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "missing_capability_tool" },
+      })
+
+      assert_equal ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY, response.dig(:error, :code)
+      assert_equal "Missing required client capability", response.dig(:error, :message)
+      assert_equal({ elicitation: {} }, response.dig(:error, :data, :requiredCapabilities))
+    end
+
     test "#handle initialize request returns protocol info, server info, and capabilities" do
       request = {
         jsonrpc: "2.0",

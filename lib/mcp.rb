@@ -16,6 +16,7 @@ module MCP
   autoload :ErrorCodes, "mcp/error_codes"
   autoload :Icon, "mcp/icon"
   autoload :Prompt, "mcp/prompt"
+  autoload :RequestEnvelope, "mcp/request_envelope"
   autoload :Resource, "mcp/resource"
   autoload :ResourceTemplate, "mcp/resource_template"
   autoload :ResultType, "mcp/result_type"

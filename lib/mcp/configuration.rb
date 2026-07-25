@@ -8,6 +8,20 @@ module MCP
     ].freeze
     DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
 
+    # Protocol versions of the stateless "modern" lifecycle introduced by the MCP 2026-07-28 spec release (SEP-2575).
+    # Modern versions are deliberately kept out of `SUPPORTED_STABLE_PROTOCOL_VERSIONS`: the modern lifecycle has
+    # no `initialize` handshake, so these versions are never negotiated (each request carries its own version in `_meta`
+    # and is validated against this list independently), and `protocol_version=` keeps rejecting them for the same reason.
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+    LATEST_MODERN_PROTOCOL_VERSION = "2026-07-28"
+    SUPPORTED_MODERN_PROTOCOL_VERSIONS = [LATEST_MODERN_PROTOCOL_VERSION].freeze
+
+    class << self
+      def modern_protocol_version?(version)
+        SUPPORTED_MODERN_PROTOCOL_VERSIONS.include?(version)
+      end
+    end
+
     attr_writer :exception_reporter, :around_request
 
     # @deprecated Use {#around_request=} instead. `instrumentation_callback`
