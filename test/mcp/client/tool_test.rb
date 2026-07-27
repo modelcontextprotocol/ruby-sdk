@@ -33,6 +33,24 @@ module MCP
         assert_nil(@tool.output_schema)
       end
 
+      def test_annotations_returns_nil_when_not_provided
+        assert_nil(@tool.annotations)
+      end
+
+      def test_annotations_returns_annotations_when_provided
+        tool_with_annotations = Tool.new(
+          name: "test_tool_with_annotations",
+          description: "A test tool with annotations",
+          input_schema: { "type" => "object" },
+          annotations: { "readOnlyHint" => true, "title" => "Test Tool" },
+        )
+
+        assert_equal(
+          { "readOnlyHint" => true, "title" => "Test Tool" },
+          tool_with_annotations.annotations,
+        )
+      end
+
       def test_output_schema_returns_output_schema_when_provided
         tool_with_output = Tool.new(
           name: "test_tool_with_output",
@@ -53,12 +71,14 @@ module MCP
           description: "A tool with all parameters",
           input_schema: { "type" => "object" },
           output_schema: { "type" => "object", "properties" => { "status" => { "type" => "boolean" } } },
+          annotations: { "readOnlyHint" => true },
         )
 
         assert_equal("full_tool", tool.name)
         assert_equal("A tool with all parameters", tool.description)
         assert_equal({ "type" => "object" }, tool.input_schema)
         assert_equal({ "type" => "object", "properties" => { "status" => { "type" => "boolean" } } }, tool.output_schema)
+        assert_equal({ "readOnlyHint" => true }, tool.annotations)
       end
     end
   end
