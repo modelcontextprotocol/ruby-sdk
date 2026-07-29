@@ -101,6 +101,43 @@ module MCP
           assert_equal("test-token-after-flow", provider.access_token)
         end
 
+        def test_send_request_does_not_follow_a_resource_metadata_challenge_off_the_server_origin
+          # End to end over the transport, which is where the header is actually parsed:
+          # a server that answers 401 must not be able to name an unrelated host in
+          # `resource_metadata` and have the client fetch it. The request never leaving
+          # is the point; the 401 surfacing to the caller is secondary.
+          metadata_url = "https://169.254.169.254/latest/meta-data/iam/"
+
+          stub_request(:post, @mcp_url).to_return(
+            status: 401,
+            headers: {
+              "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{metadata_url}"),
+            },
+            body: "",
+          )
+          stub_request(:get, metadata_url).to_return(status: 200, body: "{}")
+
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+
+          assert_raises(StandardError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+          end
+
+          assert_not_requested(:get, metadata_url)
+        end
+
         def test_send_request_runs_step_up_flow_on_403_insufficient_scope
           # First call with the initial token: 403 carrying an `insufficient_scope`
           # Bearer challenge with the escalated scope. The transport must re-run

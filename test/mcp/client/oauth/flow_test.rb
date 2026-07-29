@@ -68,6 +68,23 @@ module MCP
           WebMock.reset!
         end
 
+        # A plain authorization-code provider for the destination-check tests.
+        # They all expect to fail before any redirect happens, so the handlers stay inert;
+        # a test that reached them would be asserting the wrong thing.
+        def ssrf_test_provider
+          Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { ["code", "state"] },
+          )
+        end
+
         def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic")
           ClientCredentialsProvider.new(
             client_id: "cc-client",
@@ -1744,10 +1761,212 @@ module MCP
           assert_match(/resource_metadata|HTTPS|Communication Security/i, error.message)
         end
 
+        def test_run_does_not_fetch_a_resource_metadata_url_off_the_server_origin
+          # A server that answers 401 chooses the `resource_metadata` URL, and discovery puts it first
+          # in the candidate list. Left unchecked, a single response header aims the client's first OAuth request
+          # at any host it can route to, including the cloud metadata address. The assertion that matters is not
+          # the raise but `assert_not_requested`: nothing downstream can un-send a request.
+          metadata_url = "https://169.254.169.254/latest/meta-data/iam/"
+          stub_request(:get, metadata_url).to_return(status: 200, body: "{}")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(
+              server_url: @server_url,
+              resource_metadata_url: metadata_url,
+            )
+          end
+
+          assert_not_requested(:get, metadata_url)
+          assert_match(/resource_metadata/i, error.message)
+          assert_match(/origin/i, error.message)
+        end
+
+        def test_run_does_not_fetch_an_https_resource_metadata_url_on_a_foreign_public_origin
+          # The scheme check alone passes this one: it is HTTPS, just not the server's.
+          metadata_url = "https://attacker.example.com/.well-known/oauth-protected-resource"
+          stub_request(:get, metadata_url).to_return(status: 200, body: "{}")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(
+              server_url: @server_url,
+              resource_metadata_url: metadata_url,
+            )
+          end
+
+          assert_not_requested(:get, metadata_url)
+        end
+
+        def test_refresh_does_not_fetch_a_resource_metadata_url_off_the_server_origin
+          # `refresh!` reads the same header on a 401 and must gate it identically;
+          # otherwise the token-refresh path stays reachable after `run!` is closed.
+          metadata_url = "https://169.254.169.254/latest/meta-data/iam/"
+          stub_request(:get, metadata_url).to_return(status: 200, body: "{}")
+
+          provider = ssrf_test_provider
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(
+              server_url: @server_url,
+              resource_metadata_url: metadata_url,
+            )
+          end
+
+          assert_not_requested(:get, metadata_url)
+        end
+
+        def test_run_does_not_contact_an_authorization_server_on_a_private_address
+          # One hop deeper than the `resource_metadata` URL: the server serves its own PRM from its own origin,
+          # then names a private address as its authorization server. Same-origin cannot see this one,
+          # so the range check has to.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: ["https://169.254.169.254"],
+            ),
+          )
+          stub_request(:get, %r{\Ahttps://169\.254\.169\.254/}).to_return(status: 200, body: "{}")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:get, %r{\Ahttps://169\.254\.169\.254/})
+          assert_match(/private network/i, error.message)
+        end
+
+        def test_run_does_not_contact_an_authorization_server_spelled_as_a_packed_integer
+          # `0xa9fea9fe` is 169.254.169.254 written for `inet_aton`. The connection resolves it to
+          # the same address, so the previous test's protection has to survive the rewrite.
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: ["https://0xa9fea9fe"],
+            ),
+          )
+          stub_request(:get, %r{\Ahttps://0xa9fea9fe/}).to_return(status: 200, body: "{}")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:get, %r{\Ahttps://0xa9fea9fe/})
+          assert_match(/private network/i, error.message)
+        end
+
+        def test_run_does_not_post_to_a_token_endpoint_on_a_private_address
+          # The token endpoint receives the client credentials and the authorization code,
+          # so an AS document that relocates it inside the client's network is a credential disclosure,
+          # not just a probe.
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "https://10.0.0.5/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          stub_request(:post, "https://10.0.0.5/token").to_return(status: 200, body: "{}")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:post, "https://10.0.0.5/token")
+          assert_match(/private network/i, error.message)
+        end
+
+        def test_run_does_not_post_to_a_registration_endpoint_on_a_private_address
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "https://192.168.1.1/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          stub_request(:post, "https://192.168.1.1/register").to_return(status: 201, body: "{}")
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: ssrf_test_provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:post, "https://192.168.1.1/register")
+        end
+
+        def test_run_allows_a_private_authorization_server_when_the_mcp_server_is_also_private
+          # The shape the conformance harness runs and the shape local development takes:
+          # the MCP server and the authorization server sit on two loopback ports.
+          # Once the caller has pointed the client at a private address, the authorization server
+          # living there too is not an escalation, and refusing it would break every local setup.
+          server_url = "http://localhost:9292/mcp"
+          prm_url = "http://localhost:9292/.well-known/oauth-protected-resource/mcp"
+          auth_base = "http://localhost:9393"
+
+          stub_request(:get, prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: server_url, authorization_servers: [auth_base]),
+          )
+          stub_request(:get, "#{auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: auth_base,
+              authorization_endpoint: "#{auth_base}/authorize",
+              token_endpoint: "#{auth_base}/token",
+              registration_endpoint: "#{auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          stub_request(:post, "#{auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "local-client"),
+          )
+          stub_request(:post, "#{auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "local-token", token_type: "Bearer", expires_in: 3600),
+          )
+
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: server_url, resource_metadata_url: prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("local-token", provider.access_token)
+        end
+
         def test_run_rejects_when_as_metadata_issuer_does_not_match
-          # RFC 8414 Section 3.3: the AS metadata's `issuer` value MUST equal
-          # the discovery URL. A metadata document advertising a different issuer
-          # than the one PRM pointed at is treated as a confused-deputy attempt.
+          # RFC 8414 Section 3.3: the AS metadata's `issuer` value MUST equal the discovery URL.
+          # A metadata document advertising a different issuer than the one PRM pointed at is treated
+          # as a confused-deputy attempt.
           stub_request(:get, @as_metadata_url).to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
@@ -1781,9 +2000,8 @@ module MCP
         end
 
         def test_run_rejects_when_as_metadata_issuer_differs_by_trailing_slash
-          # RFC 8414 Section 3.3 requires the issuer to be identical, not "equivalent
-          # after normalization". `https://auth.example.com` and
-          # `https://auth.example.com/` are different strings and MUST NOT match.
+          # RFC 8414 Section 3.3 requires the issuer to be identical, not "equivalent after normalization".
+          # `https://auth.example.com` and `https://auth.example.com/` are different strings and MUST NOT match.
           stub_request(:get, @as_metadata_url).to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },

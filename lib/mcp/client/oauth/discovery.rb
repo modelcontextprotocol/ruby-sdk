@@ -8,7 +8,7 @@ module MCP
     module OAuth
       # Stateless helpers that map MCP-authorization spec URLs and headers into something
       # the `Flow` orchestrator and `MCP::Client::HTTP` transport can act on.
-      # The module bundles five concerns that share no state but are closely related to
+      # The module bundles six concerns that share no state but are closely related to
       # the spec's "Discovery" and "Communication Security" sections:
       #
       # - **`WWW-Authenticate` parsing** (`parse_www_authenticate`): pulls
@@ -22,6 +22,10 @@ module MCP
       # - **Communication Security check** (`secure_url?`): enforces "HTTPS only"
       #   for every OAuth-facing URL, with the loopback carve-out described in
       #   `secure_url?`'s comment.
+      # - **Destination checks** (`same_origin?`, `private_network_host?`):
+      #   answer *where* a URL points, which the scheme alone does not. `Flow` uses
+      #   them to refuse server-supplied discovery URLs aimed at hosts the MCP server
+      #   has no business steering the client toward.
       # - **URL canonicalization** (`canonicalize_url`): normalizes scheme,
       #   host, port, path, percent-encoded dot segments, and fragments
       #   so two URLs that *refer to the same resource* compare as equal,
@@ -193,6 +197,51 @@ module MCP
             false
           end
 
+          # Returns true when `url` and `other` share an origin: same scheme, same host,
+          # and same port. Scheme and host compare case-insensitively, and an implicit default port compares
+          # equal to the same port written out, because `URI::HTTP#port` already resolves to the default.
+          #
+          # Anything that fails to parse or carries no host returns false, so a caller using this as
+          # a security gate refuses rather than admits on malformed input.
+          def same_origin?(url, other)
+            uri = URI.parse(url.to_s)
+            other_uri = URI.parse(other.to_s)
+            return false if uri.host.nil? || uri.host.empty?
+            return false if other_uri.host.nil? || other_uri.host.empty?
+
+            uri.scheme&.downcase == other_uri.scheme&.downcase &&
+              uri.host.downcase == other_uri.host.downcase &&
+              uri.port == other_uri.port
+          rescue URI::InvalidURIError
+            false
+          end
+
+          # Returns true when `host` is an IP literal that is not reachable from the public internet,
+          # or the `localhost` name. The ranges are the ones RFC 9728 Section 7.7 and the MCP security best practices name
+          # as SSRF targets, so `169.254.0.0/16` covers the `169.254.169.254` cloud metadata address that motivates the check.
+          #
+          # Hostnames are deliberately NOT resolved. A lookup here would be a second network request driven by
+          # the same untrusted input, and the address it returned could differ from the one the HTTP client connects to
+          # a moment later, so the check would read as a guarantee it cannot make. That leaves names like `vault.corp.internal`
+          # out of reach of this predicate; it is one layer of an SSRF defense, not the whole of one.
+          def private_network_host?(host)
+            return false if host.nil? || host.empty?
+
+            normalized = host.downcase
+            return true if normalized == "localhost"
+
+            literal = normalized.delete_prefix("[").delete_suffix("]")
+            address = parse_ip_address(literal)
+            return numeric_ipv4_spelling?(literal) unless address
+
+            # `::ffff:169.254.169.254` addresses the same interface as `169.254.169.254`,
+            # so compare the IPv4 form rather than letting the mapped spelling through.
+            address = address.native if address.ipv6? && address.ipv4_mapped?
+
+            ranges = address.ipv4? ? PRIVATE_IPV4_RANGES : PRIVATE_IPV6_RANGES
+            ranges.any? { |range| range.include?(address) }
+          end
+
           # Returns true when `url` satisfies the structural requirements for
           # a Client ID Metadata Document URL per the MCP 2025-11-25
           # authorization specification and `draft-ietf-oauth-client-id-metadata-document-00`.
@@ -287,20 +336,17 @@ module MCP
             uri.to_s
           end
 
-          # Returns true when `prm` (a PRM `resource` URL) covers `server`
-          # (the MCP endpoint URL): same scheme/host/port, with PRM's path being
-          # a prefix of the server's path. When PRM also advertises a query
-          # string, the server's query MUST be identical to it
-          # (otherwise a hijacked PRM that advertises `?tenant=evil` would cover
-          # an MCP server at `?tenant=victim` and let the attacker mint
-          # a different tenant's token for the same origin + path).
-          # PRM with *no* query (URI#query returns `nil`) acts as a generic identifier
-          # over the origin + path prefix and covers any server query.
+          # Returns true when `prm` (a PRM `resource` URL) covers `server` (the MCP endpoint URL):
+          # same scheme/host/port, with PRM's path being a prefix of the server's path. When PRM
+          # also advertises a query string, the server's query MUST be identical to it (otherwise
+          # a hijacked PRM that advertises `?tenant=evil` would cover an MCP server at `?tenant=victim`
+          # and let the attacker mint a different tenant's token for the same origin + path).
+          # PRM with *no* query (URI#query returns `nil`) acts as a generic identifier over
+          # the origin + path prefix and covers any server query.
           #
-          # An empty query (`prm_url?` -- URI#query returns `""`) is NOT
-          # treated as wildcard: it represents the URI literally `<...>?`,
-          # which is distinct from "no query at all" and from any non-empty query,
-          # so it must match exactly.
+          # An empty query (`prm_url?` -- URI#query returns `""`) is NOT treated as wildcard:
+          # it represents the URI literally `<...>?`, which is distinct from "no query at all"
+          # and from any non-empty query, so it must match exactly.
           #
           # Both arguments must already be canonicalized.
           def resource_covers?(prm:, server:)
@@ -340,6 +386,29 @@ module MCP
           IPV6_LOOPBACK = IPAddr.new("::1")
           private_constant :IPV4_LOOPBACK_RANGE, :IPV6_LOOPBACK
 
+          # Backing ranges for `private_network_host?`.
+          #
+          # `0.0.0.0/8` is "this network" and `100.64.0.0/10` is the carrier-grade NAT
+          # space; neither is a destination a legitimate authorization server publishes,
+          # and both are reachable enough from a client's network position to be worth
+          # refusing. `::/96` covers the unspecified address, IPv6 loopback, and
+          # the deprecated IPv4-compatible form (`::10.0.0.1`) in one range.
+          PRIVATE_IPV4_RANGES = [
+            IPAddr.new("0.0.0.0/8"),
+            IPAddr.new("10.0.0.0/8"),
+            IPAddr.new("100.64.0.0/10"),
+            IPAddr.new("127.0.0.0/8"),
+            IPAddr.new("169.254.0.0/16"),
+            IPAddr.new("172.16.0.0/12"),
+            IPAddr.new("192.168.0.0/16"),
+          ].freeze
+          PRIVATE_IPV6_RANGES = [
+            IPAddr.new("::/96"),
+            IPAddr.new("fc00::/7"),
+            IPAddr.new("fe80::/10"),
+          ].freeze
+          private_constant :PRIVATE_IPV4_RANGES, :PRIVATE_IPV6_RANGES
+
           def loopback_host?(host)
             return false if host.nil? || host.empty?
 
@@ -360,6 +429,31 @@ module MCP
             IPAddr.new(candidate)
           rescue IPAddr::Error
             nil
+          end
+
+          # Matches one part of the `inet_aton` numeric grammar: hexadecimal (`0x7f`),
+          # octal (`0177`), or decimal (`127`).
+          INET_ATON_PART = /\A(?:0x\h+|0[0-7]*|[1-9]\d*)\z/.freeze
+          private_constant :INET_ATON_PART
+
+          # Returns true when `host` is written in the numeric IPv4 grammar `inet_aton` accepts
+          # and `IPAddr` rejects: one to four dot-separated parts, each hexadecimal, octal, or
+          # decimal, with the last part filling the remaining bytes. `2130706433`, `127.1`, and
+          # `0x7f000001` all reach 127.0.0.1, and `0xa9fea9fe` reaches the cloud metadata address,
+          # so a check that understood only the canonical form would refuse `169.254.169.254`
+          # while waving through every other spelling of it.
+          #
+          # Such a host is refused outright rather than decoded and range-checked, because its
+          # value is resolver-dependent: a leading zero reads as octal on one platform and decimal
+          # on another, which is the difference between 8.0.0.1 and 10.0.0.1 for `010.0.0.1`.
+          # Deciding here which one it meant would leave whichever reading was not taken as a way
+          # through. No authorization server is legitimately addressed in this notation, so
+          # refusing the grammar entirely costs nothing and leaves no spelling to miss.
+          def numeric_ipv4_spelling?(host)
+            parts = host.split(".", -1)
+            return false if parts.empty? || parts.length > 4
+
+            parts.all? { |part| INET_ATON_PART.match?(part) }
           end
 
           # A redirect URI counts as native when it uses a custom non-http(s) scheme
