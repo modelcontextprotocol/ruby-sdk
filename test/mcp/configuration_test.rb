@@ -66,6 +66,21 @@ module MCP
       assert_equal("protocol_version must be 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
     end
 
+    test "exposes the SEP-2575 modern protocol versions" do
+      assert_equal "2026-07-28", Configuration::LATEST_MODERN_PROTOCOL_VERSION
+      assert_equal ["2026-07-28"], Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS
+      assert Configuration.modern_protocol_version?("2026-07-28")
+      refute Configuration.modern_protocol_version?("2025-11-25")
+    end
+
+    test "raises ArgumentError when setting a modern protocol version" do
+      # Modern versions (SEP-2575) are never negotiated via `initialize`, so they are deliberately not settable as
+      # the legacy fallback version.
+      assert_raises(ArgumentError) do
+        Configuration.new(protocol_version: Configuration::LATEST_MODERN_PROTOCOL_VERSION)
+      end
+    end
+
     test "raises ArgumentError when protocol_version is not a boolean value" do
       config = Configuration.new
       exception = assert_raises(ArgumentError) do

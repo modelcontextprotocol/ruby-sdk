@@ -59,6 +59,41 @@ module MCP
       end
     end
 
+    # Raised when a request carries a protocol version the server does not support under the stateless lifecycle of
+    # MCP 2026-07-28 (SEP-2575). Maps to JSON-RPC error `-32022` with `data: { supported: [...], requested: "..." }`
+    # so the client can select a mutually supported version and retry.
+    #
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+    class UnsupportedProtocolVersionError < RequestHandlerError
+      def initialize(requested, request = nil, supported: Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS)
+        super(
+          "Unsupported protocol version",
+          request,
+          error_type: :unsupported_protocol_version,
+          error_code: ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION,
+          error_data: { supported: supported, requested: requested || "unknown" },
+        )
+      end
+    end
+
+    # Raised when processing a request requires a client capability the request did not declare in `_meta`
+    # (`io.modelcontextprotocol/clientCapabilities`). Per SEP-2575, servers MUST NOT rely on capabilities
+    # the client has not declared. Maps to JSON-RPC error `-32021` with `data: { requiredCapabilities: {...} }`
+    # listing the missing capabilities.
+    #
+    # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+    class MissingRequiredClientCapabilityError < RequestHandlerError
+      def initialize(required_capabilities, request = nil)
+        super(
+          "Missing required client capability",
+          request,
+          error_type: :missing_required_client_capability,
+          error_code: ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+          error_data: { requiredCapabilities: required_capabilities },
+        )
+      end
+    end
+
     # Raised when a requested resource URI does not exist. Per SEP-2164,
     # resource-not-found errors use the standard JSON-RPC Invalid Params code (-32602)
     # with the requested URI in the error `data` member. Raise this from
