@@ -22,7 +22,7 @@ Call `MCP::Client#connect` to perform the MCP [initialization handshake](https:/
 
 ```ruby
 client.connect
-# => { "protocolVersion" => "2025-11-25", "capabilities" => {...}, "serverInfo" => {...} }
+# => { "protocolVersion" => "2026-07-28", "capabilities" => {...}, "serverInfo" => {...} }
 
 client.connected?  # => true
 client.server_info # => cached InitializeResult
@@ -99,7 +99,7 @@ After `connect` succeeds, the HTTP transport captures the `Mcp-Session-Id` heade
 
 ```ruby
 http_transport.session_id       # => "abc123..."
-http_transport.protocol_version # => "2025-11-25"
+http_transport.protocol_version # => "2026-07-28"
 ```
 
 If the server terminates the session, subsequent requests return HTTP 404 and the transport raises `MCP::Client::SessionExpiredError` (a subclass of `RequestHandlerError`). Session state is cleared automatically; callers should start a new session by calling `connect` again.

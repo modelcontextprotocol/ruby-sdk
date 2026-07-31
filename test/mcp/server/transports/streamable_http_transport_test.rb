@@ -1993,6 +1993,32 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "POST request with the 2026-07-28 MCP-Protocol-Version header succeeds" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params(protocolVersion: "2026-07-28") }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          assert_equal "2026-07-28", JSON.parse(init_response[2][0])["result"]["protocolVersion"]
+          session_id = init_response[1]["mcp-session-id"]
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28",
+            },
+            { jsonrpc: "2.0", method: "tools/list", id: "list" }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
         test "POST request without MCP-Protocol-Version header succeeds" do
           init_request = create_rack_request(
             "POST",

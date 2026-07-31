@@ -2036,6 +2036,20 @@ module MCP
       assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
+    test "server negotiates 2026-07-28 when the client requests it via initialize" do
+      server = Server.new(name: "test_server")
+
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: initialize_params(protocolVersion: "2026-07-28"),
+      }
+
+      response = server.handle(request)
+      assert_equal "2026-07-28", response[:result][:protocolVersion]
+    end
+
     test "server removes description and icons from server_info when negotiating to 2025-06-18" do
       server = Server.new(
         name: "test_server",
