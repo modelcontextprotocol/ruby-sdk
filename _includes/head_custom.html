@@ -40,6 +40,81 @@
     return mediaQuery.matches ? "dark" : "light";
   }
 
+  const colorSchemePattern = /just-the-docs-(default|light|dark)\.css(\?.*)?$/;
+  let pendingColorLink = null;
+
+  function findColorStylesheet() {
+    const links = document.querySelectorAll('link[rel="stylesheet"]');
+    for (let index = 0; index < links.length; index += 1) {
+      if (colorSchemePattern.test(links[index].getAttribute("href") || "")) {
+        return links[index];
+      }
+    }
+
+    return null;
+  }
+
+  function stylesheetTheme(link) {
+    const match = colorSchemePattern.exec(link.getAttribute("href") || "");
+    const scheme = match ? match[1] : "default";
+    return scheme === "default" ? "light" : scheme;
+  }
+
+  /*
+   * Swap the color stylesheet without going through jtd.setTheme, which
+   * rewrites the href of the render-blocking link and lets the page paint
+   * unstyled until the replacement CSS arrives. The site has no color_scheme,
+   * so the default stylesheet equals the light one and needs no swap at all;
+   * for dark, keep the old sheet applied until the new one has loaded.
+   */
+  function setColorStylesheet(theme) {
+    const currentLink = findColorStylesheet();
+    if (!currentLink) {
+      return;
+    }
+
+    if (pendingColorLink) {
+      if (pendingColorLink.parentNode) {
+        pendingColorLink.parentNode.removeChild(pendingColorLink);
+      }
+      pendingColorLink = null;
+    }
+
+    if (stylesheetTheme(currentLink) === theme) {
+      return;
+    }
+
+    const newLink = document.createElement("link");
+    newLink.setAttribute("rel", "stylesheet");
+    newLink.setAttribute("blocking", "render");
+    newLink.setAttribute(
+      "href",
+      currentLink.getAttribute("href").replace(colorSchemePattern, "just-the-docs-" + theme + ".css")
+    );
+
+    newLink.addEventListener("load", function() {
+      if (pendingColorLink !== newLink) {
+        return;
+      }
+      pendingColorLink = null;
+      if (currentLink.parentNode) {
+        currentLink.parentNode.removeChild(currentLink);
+      }
+    });
+
+    newLink.addEventListener("error", function() {
+      if (pendingColorLink === newLink) {
+        pendingColorLink = null;
+      }
+      if (newLink.parentNode) {
+        newLink.parentNode.removeChild(newLink);
+      }
+    });
+
+    currentLink.parentNode.insertBefore(newLink, currentLink.nextSibling);
+    pendingColorLink = newLink;
+  }
+
   function nextPreference(preference) {
     const index = validPreferences.indexOf(preference);
     if (index === -1 || index === validPreferences.length - 1) {
@@ -62,9 +137,7 @@
     const safePreference = isValidPreference(preference) ? preference : "system";
     const theme = resolvedTheme(safePreference);
 
-    if (window.jtd && typeof window.jtd.setTheme === "function") {
-      window.jtd.setTheme(theme);
-    }
+    setColorStylesheet(theme);
     document.documentElement.setAttribute("data-theme-preference", safePreference);
     document.documentElement.setAttribute("data-theme", theme);
     setThemeToggleLabel(safePreference);
