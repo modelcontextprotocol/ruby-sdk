@@ -62,6 +62,16 @@
   color-scheme: dark;
 }
 
+/*
+ * Applied before the dark stylesheet finishes loading, so browsers that
+ * do not support blocking="render" avoid a light-colored first paint.
+ * Values match $grey-dk-300 and $grey-lt-300 from the dark color scheme.
+ */
+:root[data-theme="dark"] body {
+  background-color: #27262b;
+  color: #e6e1e8;
+}
+
 :root[data-theme="light"] {
   color-scheme: light;
 }
