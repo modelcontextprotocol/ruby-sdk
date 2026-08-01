@@ -1,2 +1,6 @@
 server: []
-client: []
+client:
+  # TODO: The conformance framework's client-initialization check pins the expected requested version to 2025-11-25,
+  # while this SDK's latest protocol version is 2026-07-28. Remove once the @modelcontextprotocol/conformance package
+  # accepts 2026-07-28.
+  - initialize

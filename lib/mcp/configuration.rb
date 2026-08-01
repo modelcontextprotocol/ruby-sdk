@@ -2,16 +2,17 @@
 
 module MCP
   class Configuration
-    LATEST_STABLE_PROTOCOL_VERSION = "2025-11-25"
+    LATEST_STABLE_PROTOCOL_VERSION = "2026-07-28"
     SUPPORTED_STABLE_PROTOCOL_VERSIONS = [
-      LATEST_STABLE_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05",
+      LATEST_STABLE_PROTOCOL_VERSION, "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
     ].freeze
     DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
 
     # Protocol versions of the stateless "modern" lifecycle introduced by the MCP 2026-07-28 spec release (SEP-2575).
-    # Modern versions are deliberately kept out of `SUPPORTED_STABLE_PROTOCOL_VERSIONS`: the modern lifecycle has
-    # no `initialize` handshake, so these versions are never negotiated (each request carries its own version in `_meta`
-    # and is validated against this list independently), and `protocol_version=` keeps rejecting them for the same reason.
+    # 2026-07-28 serves both lifecycles of the dual-era model: it is negotiable through the legacy `initialize`
+    # handshake (so it also appears in `SUPPORTED_STABLE_PROTOCOL_VERSIONS`), and it is the version of the modern
+    # lifecycle, where each request carries its own version in `_meta` and is validated against this list
+    # independently, with no handshake.
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
     LATEST_MODERN_PROTOCOL_VERSION = "2026-07-28"
     SUPPORTED_MODERN_PROTOCOL_VERSIONS = [LATEST_MODERN_PROTOCOL_VERSION].freeze
