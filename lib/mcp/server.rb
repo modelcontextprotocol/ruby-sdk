@@ -65,13 +65,15 @@ module MCP
     #
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
     class UnsupportedProtocolVersionError < RequestHandlerError
-      def initialize(requested, request = nil, supported: Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS)
+      # No keyword parameters here: with one present, Ruby 2.7 would split a trailing symbol-keyed `request` Hash
+      # into keywords and fail with "unknown keywords".
+      def initialize(requested, request = nil)
         super(
           "Unsupported protocol version",
           request,
           error_type: :unsupported_protocol_version,
           error_code: ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION,
-          error_data: { supported: supported, requested: requested || "unknown" },
+          error_data: { supported: Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, requested: requested || "unknown" },
         )
       end
     end
@@ -560,25 +562,26 @@ module MCP
           server_context: { request: request },
           exception_already_reported: ->(e) { reported_exception.equal?(e) },
         ) do
+          envelope = lift_request_envelope(params, method: method, session: session)
           result = case method
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
-            build_read_resource_result(read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation))
+            build_read_resource_result(read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope))
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
             validate_resource_subscription_params!(params)
-            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
             {}
           when Methods::TOOLS_CALL
-            call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+            call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
           when Methods::PROMPTS_GET
-            get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+            get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
           when Methods::COMPLETION_COMPLETE
-            complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+            complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
           when Methods::LOGGING_SET_LEVEL
             configure_logging_level(params, session: session)
           else
-            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
           end
           client = session&.client || @client
           add_instrumentation_data(client: client) if client
@@ -607,6 +610,34 @@ module MCP
           session&.unregister_in_flight(related_request_id) if related_request_id
         end
       }
+    end
+
+    # Lifts the SEP-2575 per-request `_meta` envelope for modern requests. Only a request whose `_meta` carries
+    # the full required triple is classified as modern; a partial triple keeps flowing through the legacy path untouched.
+    # Notifications carry no envelope (their `_meta` is a `NotificationMetaObject`), and `server/discover` is
+    # pre-version discovery, so both are exempt. On a session already era-locked to modern, `initialize` is
+    # rejected with `-32022` (the modern lifecycle has no handshake) and the triple becomes required for
+    # every other request.
+    def lift_request_envelope(params, method:, session:)
+      return if Methods.notification?(method)
+      return if method == Methods::SERVER_DISCOVER
+
+      modern_session = session.respond_to?(:era) && session.era == :modern
+
+      if modern_session && method == Methods::INITIALIZE
+        requested = params.is_a?(Hash) ? params[:protocolVersion] || params["protocolVersion"] : nil
+        raise UnsupportedProtocolVersionError.new(requested, params)
+      end
+
+      if RequestEnvelope.modern?(params)
+        RequestEnvelope.parse!(params, request: params)
+      elsif modern_session
+        raise RequestHandlerError.new(
+          "Invalid Request: modern sessions require the SEP-2575 `_meta` envelope",
+          params,
+          error_type: :invalid_request,
+        )
+      end
     end
 
     def handle_cancelled_notification(params, session: nil)
@@ -748,7 +779,7 @@ module MCP
       apply_cache_metadata({ tools: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def call_tool(request, session: nil, related_request_id: nil, cancellation: nil)
+    def call_tool(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       tool_name = request[:name]
 
       tool = tools[tool_name]
@@ -781,7 +812,7 @@ module MCP
       progress_token = request.dig(:_meta, :progressToken)
 
       response = call_tool_with_args(
-        tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id, cancellation: cancellation
+        tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope
       )
       result = response.to_h
       validate_tool_call_result!(tool, result)
@@ -808,7 +839,7 @@ module MCP
       apply_cache_metadata({ prompts: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil)
+    def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       prompt_name = request[:name]
       prompt = @prompts[prompt_name]
       unless prompt
@@ -826,6 +857,7 @@ module MCP
         session: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
+        envelope: envelope,
       )
 
       call_prompt_template_with_args(prompt, prompt_args, server_context)
@@ -921,7 +953,7 @@ module MCP
       { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "public" }.merge(result)
     end
 
-    def complete(params, session: nil, related_request_id: nil, cancellation: nil)
+    def complete(params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       validate_completion_params!(params)
 
       result = dispatch_optional_context_handler(
@@ -930,6 +962,7 @@ module MCP
         session: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
+        envelope: envelope,
       )
 
       normalize_completion_result(result)
@@ -938,13 +971,14 @@ module MCP
     # Invokes `resources/read` via the registered handler. If the handler block opts in to `server_context:`,
     # pass an `MCP::ServerContext` so the handler can observe cancellation via `server_context.cancelled?` or
     # `server_context.raise_if_cancelled!`.
-    def read_resource_contents(request, session: nil, related_request_id: nil, cancellation: nil)
+    def read_resource_contents(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       dispatch_optional_context_handler(
         @handlers[Methods::RESOURCES_READ],
         request,
         session: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
+        envelope: envelope,
       )
     end
 
@@ -952,7 +986,7 @@ module MCP
     # `completion_handler`, `resources_subscribe_handler`, `resources_unsubscribe_handler`, or `define_custom_method`.
     # Existing handlers that only accept `params` are called unchanged; handlers that declare a `server_context:`
     # keyword receive an `MCP::ServerContext` wrapping the raw server context with cancellation plumbing.
-    def dispatch_optional_context_handler(handler, params, session: nil, related_request_id: nil, cancellation: nil)
+    def dispatch_optional_context_handler(handler, params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       return handler.call(params) unless handler_declares_server_context?(handler)
 
       server_context = build_server_context(
@@ -960,6 +994,7 @@ module MCP
         session: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
+        envelope: envelope,
       )
       handler.call(params, server_context: server_context)
     end
@@ -984,7 +1019,7 @@ module MCP
 
     # Builds an `MCP::ServerContext` used to give a handler access to session-scoped helpers
     # (progress, cancellation, nested server-to-client requests).
-    def build_server_context(request:, session:, related_request_id:, cancellation:)
+    def build_server_context(request:, session:, related_request_id:, cancellation:, envelope: nil)
       meta_source = request.is_a?(Hash) ? request : {}
       progress_token = meta_source.dig(:_meta, :progressToken)
       progress = Progress.new(notification_target: session, progress_token: progress_token, related_request_id: related_request_id)
@@ -994,6 +1029,7 @@ module MCP
         notification_target: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
+        envelope: envelope,
       )
     end
 
@@ -1053,7 +1089,7 @@ module MCP
       end
     end
 
-    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
       # Transports parse incoming JSON with `symbolize_names: true`, so `arguments` already arrives symbolized
       # at every nesting level. This top-level transform only guards callers that hand in string-keyed top-level arguments;
       # it does not recurse, and nested object keys remain symbols. Tools therefore receive symbol keys all the way down.
@@ -1068,6 +1104,7 @@ module MCP
           notification_target: session,
           related_request_id: related_request_id,
           cancellation: cancellation,
+          envelope: envelope,
         )
         tool.call(**args, server_context: server_context)
       else

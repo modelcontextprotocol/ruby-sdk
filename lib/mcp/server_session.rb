@@ -7,12 +7,22 @@ module MCP
   # Holds per-connection state for a single client session.
   # Created by the transport layer; delegates request handling to the shared `Server`.
   class ServerSession
+    ERAS = [:legacy, :modern].freeze
+
     attr_reader :session_id, :client, :logging_message_notification
 
-    def initialize(server:, transport:, session_id: nil)
+    # Connection-era lock of the dual-era serving model (SEP-2575): `nil` until the first era-distinctive message succeeds,
+    # then `:legacy` or `:modern` for the connection's lifetime. Modern-era transports construct their per-request sessions
+    # with `era: :modern` up front.
+    attr_reader :era
+
+    def initialize(server:, transport:, session_id: nil, era: nil)
+      validate_era!(era) if era
+
       @server = server
       @transport = transport
       @session_id = session_id
+      @era = era
       @client = nil
       @client_capabilities = nil
       @logging_message_notification = nil
@@ -31,6 +41,19 @@ module MCP
     # (the initialization phase MUST be the first interaction).
     def mark_initialized!
       @initialized = true
+      # A successful `initialize` is the legacy-distinctive message of the dual-era serving model (SEP-2575),
+      # so it also locks the connection era.
+      @era ||= :legacy
+    end
+
+    # One-shot era lock. Locking the already-locked era is a no-op; flipping an established era raises,
+    # because a connection can never change eras.
+    def lock_era!(era)
+      validate_era!(era)
+      return if @era == era
+      raise "Session era already locked to #{@era}" if @era
+
+      @era = era
     end
 
     # Registers a `Cancellation` token for an in-flight request.
@@ -235,6 +258,10 @@ module MCP
     end
 
     private
+
+    def validate_era!(era)
+      raise ArgumentError, "era must be one of #{ERAS.inspect}" unless ERAS.include?(era)
+    end
 
     # Forwards `send_notification` to the transport with only the kwargs the transport's method signature
     # actually accepts. Custom transports that implement the abstract `send_notification(method, params = nil)`

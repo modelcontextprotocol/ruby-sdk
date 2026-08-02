@@ -4,12 +4,17 @@ module MCP
   class ServerContext
     attr_reader :cancellation
 
-    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil)
+    # The SEP-2575 per-request envelope (`MCP::RequestEnvelope`) when the request was classified as modern;
+    # `nil` on legacy requests.
+    attr_reader :envelope
+
+    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil, envelope: nil)
       @context = context
       @progress = progress
       @notification_target = notification_target
       @related_request_id = related_request_id
       @cancellation = cancellation
+      @envelope = envelope
     end
 
     def cancelled?
@@ -18,6 +23,52 @@ module MCP
 
     def raise_if_cancelled!
       @cancellation&.raise_if_cancelled!
+    end
+
+    # Whether the current request follows the stateless modern lifecycle (SEP-2575).
+    def modern?
+      !@envelope.nil?
+    end
+
+    # Client identity for the current request. Modern requests carry it in the `_meta` envelope;
+    # legacy sessions fall back to the state stored by `initialize`. The envelope always wins
+    # because servers MUST NOT infer identity from prior requests.
+    def client_info
+      return @envelope.client_info if @envelope
+
+      @notification_target.client if @notification_target.respond_to?(:client)
+    end
+
+    # Client capabilities for the current request, with the same envelope-first resolution as {#client_info}.
+    def client_capabilities
+      return @envelope.client_capabilities if @envelope
+
+      @notification_target.client_capabilities if @notification_target.respond_to?(:client_capabilities)
+    end
+
+    # The protocol version the current request was made with. `nil` on legacy requests,
+    # where the version is a session-level negotiation result rather than per-request data.
+    def protocol_version
+      @envelope&.protocol_version
+    end
+
+    # Guards the current request on a declared client capability (SEP-2575). `path` names nested capability keys,
+    # e.g. `require_client_capability!(:elicitation, :form)`. Raises `Server::MissingRequiredClientCapabilityError`
+    # (JSON-RPC error `-32021` with `data: { requiredCapabilities: ... }`) when the capability was not declared.
+    def require_client_capability!(*path)
+      raise ArgumentError, "at least one capability key is required" if path.empty?
+
+      declared = client_capabilities
+      value = path.reduce(declared) do |acc, key|
+        break unless acc.is_a?(Hash)
+
+        symbol_value = acc[key.to_sym]
+        symbol_value.nil? ? acc[key.to_s] : symbol_value
+      end
+      return unless value.nil?
+
+      required = path.reverse.inject({}) { |acc, key| { key.to_sym => acc } }
+      raise Server::MissingRequiredClientCapabilityError, required
     end
 
     # Reports progress for the current tool operation.
@@ -40,6 +91,14 @@ module MCP
     #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil)
       return unless @notification_target
+
+      # Modern requests opt in to logging per request (SEP-2575): without `io.modelcontextprotocol/logLevel` in `_meta`,
+      # the server MUST NOT send any `notifications/message` for the request, and an insufficient level drops
+      # the message the same way. Session- or server-level gating still applies downstream on delegation.
+      if @envelope
+        threshold = @envelope.log_level && LoggingMessageNotification.new(level: @envelope.log_level)
+        return unless threshold&.valid_level? && threshold.should_notify?(level)
+      end
 
       @notification_target.notify_log_message(data: data, level: level, logger: logger, related_request_id: @related_request_id)
     end
