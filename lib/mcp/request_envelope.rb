@@ -17,6 +17,11 @@ module MCP
     # Deprecated as of 2026-07-28 (SEP-2577) but still part of the wire format.
     LOG_LEVEL_META_KEY = "io.modelcontextprotocol/logLevel"
 
+    # Result-side counterpart of the request envelope: the server's identity rides in
+    # the result's `_meta` as an optional stamp, not as a top-level field, since the SEP was
+    # finalized (spec PR modelcontextprotocol/modelcontextprotocol#3002). A server MAY omit it.
+    SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+
     REQUIRED_META_KEYS = [
       PROTOCOL_VERSION_META_KEY,
       CLIENT_INFO_META_KEY,

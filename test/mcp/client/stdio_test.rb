@@ -1414,6 +1414,198 @@ module MCP
         [transport, server_thread, [stdin_read, stdin_write, stdout_read, stdout_write]]
       end
 
+      def test_send_request_allows_server_discover_before_connect
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          discover_request = JSON.parse(stdin_read.gets)
+          response = {
+            jsonrpc: "2.0",
+            id: discover_request["id"],
+            result: { supportedVersions: ["2026-07-28"], ttlMs: 0, cacheScope: "private" },
+          }
+          stdout_write.puts(JSON.generate(response))
+          stdout_write.flush
+        end
+
+        # No prior `connect`: `server/discover` (SEP-2575) is sessionless discovery.
+        response = transport.send_request(request: { jsonrpc: "2.0", id: "d1", method: "server/discover" })
+
+        assert_equal(["2026-07-28"], response.dig("result", "supportedVersions"))
+        refute_predicate(transport, :connected?)
+      ensure
+        server_thread&.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_connect_modern_probes_discover_and_stamps_requests
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        received = []
+        server_thread = Thread.new do
+          discover_request = JSON.parse(stdin_read.gets)
+          received << discover_request
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: discover_request["id"],
+            result: {
+              supportedVersions: ["2026-07-28"],
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0" },
+              ttlMs: 0,
+              cacheScope: "private",
+            },
+          }))
+          stdout_write.flush
+
+          tools_request = JSON.parse(stdin_read.gets)
+          received << tools_request
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: tools_request["id"], result: { tools: [] } }))
+          stdout_write.flush
+        end
+
+        result = transport.connect(mode: :modern, client_info: { name: "my-app", version: "9.9" })
+        response = transport.send_request(request: { jsonrpc: "2.0", id: "t1", method: "tools/list" })
+
+        assert_equal(["2026-07-28"], result["supportedVersions"])
+        assert_predicate(transport, :modern?)
+        assert_predicate(transport, :connected?)
+        assert_equal("2026-07-28", transport.protocol_version)
+        assert_equal("t1", response["id"])
+
+        # No `initialize` was sent; both frames carry the SEP-2575 envelope.
+        assert_equal(["server/discover", "tools/list"], received.map { |frame| frame["method"] })
+        triple = received[1].dig("params", "_meta")
+        assert_equal("2026-07-28", triple["io.modelcontextprotocol/protocolVersion"])
+        assert_equal({ "name" => "my-app", "version" => "9.9" }, triple["io.modelcontextprotocol/clientInfo"])
+        assert_equal({}, triple["io.modelcontextprotocol/clientCapabilities"])
+      ensure
+        server_thread&.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_connect_auto_falls_back_to_the_legacy_handshake
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          discover_request = JSON.parse(stdin_read.gets)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: discover_request["id"],
+            error: { code: -32601, message: "Method not found" },
+          }))
+          stdout_write.flush
+
+          init_request = JSON.parse(stdin_read.gets)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # `notifications/initialized`
+          stdin_read.gets
+        end
+
+        result = transport.connect(mode: :auto)
+
+        assert_equal("2025-11-25", result["protocolVersion"])
+        assert_equal("2025-11-25", transport.protocol_version)
+        refute_predicate(transport, :modern?)
+        assert_predicate(transport, :connected?)
+      ensure
+        server_thread&.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_connect_auto_bounds_the_discover_probe_when_no_read_timeout_is_configured
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+        transport.stubs(:start)
+
+        observed_timeout = nil
+        transport.define_singleton_method(:probe_discover) do
+          observed_timeout = @read_timeout
+          raise RequestHandlerError.new("probe timed out", {}, error_type: :internal_error)
+        end
+        transport.define_singleton_method(:connect_legacy) do |**|
+          { "protocolVersion" => "2025-11-25" }
+        end
+
+        result = transport.connect(mode: :auto)
+
+        assert_equal(Stdio::DEFAULT_DISCOVER_PROBE_TIMEOUT, observed_timeout)
+        assert_nil(transport.instance_variable_get(:@read_timeout))
+        assert_equal("2025-11-25", result["protocolVersion"])
+      end
+
+      def test_connect_auto_falls_back_when_the_server_never_answers_the_probe
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+        # A configured `read_timeout` also bounds the probe; the server below reads
+        # the `server/discover` request and never responds, which must count as
+        # legacy evidence instead of blocking `connect` forever.
+        transport = Stdio.new(command: "ruby", args: ["server.rb"], read_timeout: 0.05)
+
+        server_thread = Thread.new do
+          # Silently swallow the probe.
+          stdin_read.gets
+
+          init_request = JSON.parse(stdin_read.gets)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # `notifications/initialized`
+          stdin_read.gets
+        end
+
+        result = transport.connect(mode: :auto)
+
+        assert_equal("2025-11-25", result["protocolVersion"])
+        refute_predicate(transport, :modern?)
+      ensure
+        server_thread&.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
       def mock_wait_thread
         thread = mock("wait_thread")
         thread.stubs(:alive?).returns(true)

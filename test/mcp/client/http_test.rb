@@ -1844,6 +1844,109 @@ module MCP
         refute_predicate(client, :connected?)
       end
 
+      def test_connect_modern_probes_discover_and_adopts_the_modern_lifecycle
+        discover_stub = stub_discover
+
+        result = client.connect(mode: :modern)
+
+        assert_requested(discover_stub)
+        assert_predicate(client, :connected?)
+        assert_predicate(client, :modern?)
+        assert_equal(["2026-07-28"], result["supportedVersions"])
+        assert_equal(result, client.server_info)
+        assert_equal("2026-07-28", client.protocol_version)
+      end
+
+      def test_modern_requests_carry_the_envelope_and_matching_header
+        stub_discover
+        client.connect(
+          mode: :modern,
+          client_info: { name: "my-app", version: "9.9" },
+          capabilities: { elicitation: {} },
+        )
+
+        request_stub = stub_request(:post, url).with do |req|
+          body = JSON.parse(req.body)
+          meta = body.dig("params", "_meta")
+          body["method"] == "tools/list" &&
+            req.headers["Mcp-Protocol-Version"] == "2026-07-28" &&
+            meta == {
+              "io.modelcontextprotocol/protocolVersion" => "2026-07-28",
+              "io.modelcontextprotocol/clientInfo" => { "name" => "my-app", "version" => "9.9" },
+              "io.modelcontextprotocol/clientCapabilities" => { "elicitation" => {} },
+            }
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { tools: [] } }.to_json,
+        )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+
+        assert_requested(request_stub)
+      end
+
+      def test_connect_modern_fails_without_a_mutual_modern_version
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+        )
+
+        error = assert_raises(RequestHandlerError) { client.connect(mode: :modern) }
+
+        assert_includes(error.message, "no mutually supported modern protocol version")
+        refute_predicate(client, :connected?)
+        refute_predicate(client, :modern?)
+      end
+
+      def test_connect_auto_falls_back_to_the_legacy_handshake_on_discovery_errors
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { error: { code: -32601, message: "Method not found" } }.to_json,
+        )
+        init_stub = stub_initialize
+        notification_stub = stub_notification
+
+        result = client.connect(mode: :auto)
+
+        assert_requested(init_stub)
+        assert_requested(notification_stub)
+        refute_predicate(client, :modern?)
+        assert_predicate(client, :connected?)
+        assert_equal("2025-11-25", result["protocolVersion"])
+      end
+
+      def test_connect_auto_falls_back_when_discovery_lacks_a_mutual_modern_version
+        # Rollout tolerance: a server may answer discovery while only serving legacy versions;
+        # auto mode falls back to the legacy handshake.
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+        )
+        init_stub = stub_initialize
+        stub_notification
+
+        client.connect(mode: :auto)
+
+        assert_requested(init_stub)
+        refute_predicate(client, :modern?)
+        assert_predicate(client, :connected?)
+      end
+
+      def test_connect_rejects_unknown_modes_and_legacy_versions_for_modern_mode
+        assert_raises(ArgumentError) { client.connect(mode: :bogus) }
+        assert_raises(ArgumentError) { client.connect(mode: :modern, protocol_version: "2025-11-25") }
+      end
+
       def test_reconnect_after_close
         stub_initialize
         stub_notification
@@ -1947,6 +2050,24 @@ module MCP
         stub_request(:post, url)
           .with { |req| JSON.parse(req.body)["method"] == "notifications/initialized" }
           .to_return(status: 202, body: "")
+      end
+
+      def stub_discover
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: {
+            result: {
+              supportedVersions: ["2026-07-28"],
+              capabilities: { tools: {} },
+              _meta: { "io.modelcontextprotocol/serverInfo": { name: "test-server", version: "1.0" } },
+              ttlMs: 0,
+              cacheScope: "private",
+            },
+          }.to_json,
+        )
       end
 
       def stub_request(method, url)

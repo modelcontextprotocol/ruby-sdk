@@ -129,10 +129,13 @@ module MCP
       response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
       result = response[:result]
 
-      assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, result[:supportedVersions]
+      assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, result[:supportedVersions]
       assert_equal @server.capabilities, result[:capabilities]
-      assert_equal @server_name, result.dig(:serverInfo, :name)
-      assert_equal "1.2.3", result.dig(:serverInfo, :version)
+      # Per the finalized spec (PR #3002), the server identity is the optional `_meta` stamp,
+      # not a top-level `serverInfo` field.
+      assert_equal @server_name, result.dig(:_meta, RequestEnvelope::SERVER_INFO_META_KEY, :name)
+      assert_equal "1.2.3", result.dig(:_meta, RequestEnvelope::SERVER_INFO_META_KEY, :version)
+      refute result.key?(:serverInfo)
       assert_equal "Optional instructions for the client", result[:instructions]
     end
 
@@ -142,7 +145,7 @@ module MCP
 
       response = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
 
-      assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, response.dig(:result, :supportedVersions)
+      assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, response.dig(:result, :supportedVersions)
     end
 
     test "#handle server/discover does not mark the session initialized" do
@@ -165,6 +168,26 @@ module MCP
       response = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
 
       refute response[:result].key?(:instructions)
+    end
+
+    test "#handle server/discover always carries the required cache hints with spec defaults" do
+      # Unlike the opt-in SEP-2549 hints on list/read results, `ttlMs`/`cacheScope`
+      # are REQUIRED on `DiscoverResult`.
+      server = Server.new(name: "discover_test")
+
+      result = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })[:result]
+
+      assert_equal 0, result[:ttlMs]
+      assert_equal "private", result[:cacheScope]
+    end
+
+    test "#handle server/discover reuses the configured SEP-2549 cache hints" do
+      server = Server.new(name: "discover_test", ttl_ms: 3_600_000, cache_scope: "public")
+
+      result = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })[:result]
+
+      assert_equal 3_600_000, result[:ttlMs]
+      assert_equal "public", result[:cacheScope]
     end
 
     test "#define_custom_method raises for server/discover" do

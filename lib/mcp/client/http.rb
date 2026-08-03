@@ -6,6 +6,7 @@ require_relative "../configuration"
 require_relative "../methods"
 require_relative "../protocol_deprecations"
 require_relative "../version"
+require_relative "modern_envelope"
 
 module MCP
   class Client
@@ -252,6 +253,8 @@ module MCP
         @connected = false
         @server_request_handlers = {}
         @listener_thread = nil
+        @modern_client_info = nil
+        @modern_capabilities = nil
       end
 
       # Registers a handler for a server-to-client request (e.g. `elicitation/create`) delivered on an SSE stream.
@@ -287,73 +290,37 @@ module MCP
       # @return [Hash] The server's `InitializeResult`.
       # @raise [RequestHandlerError] If the server responds with a JSON-RPC error
       #   or a malformed result.
+      # @param mode [Symbol] Lifecycle selection (SEP-2575): `:legacy` (default) performs
+      #   the handshake below, `:modern` skips it and probes `server/discover`,
+      #   and `:auto` probes `server/discover` first, falling back to the legacy handshake
+      #   when the server does not serve a mutually supported modern version.
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
-      def connect(client_info: nil, protocol_version: nil, capabilities: {})
+      def connect(client_info: nil, protocol_version: nil, capabilities: {}, mode: :legacy)
         return @server_info if connected?
 
         client_info ||= { name: "mcp-ruby-client", version: MCP::VERSION }
-        protocol_version ||= MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION
 
-        response = send_request(request: {
-          jsonrpc: JsonRpcHandler::Version::V2_0,
-          id: SecureRandom.uuid,
-          method: MCP::Methods::INITIALIZE,
-          params: {
-            protocolVersion: protocol_version,
-            capabilities: capabilities,
-            clientInfo: client_info,
-          },
-        })
-
-        if response.is_a?(Hash) && response.key?("error")
-          clear_session
-          error = response["error"]
-          raise RequestHandlerError.new(
-            "Server initialization failed: #{error["message"]}",
-            { method: MCP::Methods::INITIALIZE },
-            error_type: :internal_error,
-          )
+        case mode
+        when :legacy
+          connect_legacy(client_info: client_info, protocol_version: protocol_version, capabilities: capabilities)
+        when :modern
+          connect_modern(client_info: client_info, protocol_version: protocol_version, capabilities: capabilities)
+        when :auto
+          connect_auto(client_info: client_info, protocol_version: protocol_version, capabilities: capabilities)
+        else
+          raise ArgumentError, "mode must be :legacy, :modern, or :auto"
         end
+      end
 
-        unless response.is_a?(Hash) && response["result"].is_a?(Hash)
-          clear_session
-          raise RequestHandlerError.new(
-            "Server initialization failed: missing result in response",
-            { method: MCP::Methods::INITIALIZE },
-            error_type: :internal_error,
-          )
-        end
-
-        @server_info = response["result"]
-        negotiated_protocol_version = @server_info["protocolVersion"]
-        unless MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(negotiated_protocol_version)
-          clear_session
-          raise RequestHandlerError.new(
-            "Server initialization failed: unsupported protocol version #{negotiated_protocol_version.inspect}",
-            { method: MCP::Methods::INITIALIZE },
-            error_type: :internal_error,
-          )
-        end
-
-        MCP::ProtocolDeprecations.warn_for_client_capabilities(capabilities, protocol_version: negotiated_protocol_version, uplevel: 1)
-
-        begin
-          send_request(request: {
-            jsonrpc: JsonRpcHandler::Version::V2_0,
-            method: MCP::Methods::NOTIFICATIONS_INITIALIZED,
-          })
-        rescue StandardError
-          clear_session
-          raise
-        end
-
-        @connected = true
-        start_listening if @server_request_handlers.any?
-        @server_info
+      # Whether the transport operates in the stateless modern lifecycle (SEP-2575):
+      # no handshake was performed and every request carries the `_meta` envelope.
+      def modern?
+        !@modern_client_info.nil?
       end
 
       # Returns true once `connect` has completed the full handshake
-      # (`initialize` response received and `notifications/initialized` sent).
+      # (`initialize` response received and `notifications/initialized` sent),
+      # or once the modern lifecycle was adopted via `server/discover`.
       # Returns false before the first handshake and after `close`.
       def connected?
         @connected
@@ -373,6 +340,18 @@ module MCP
       # a cancellation referring to an unknown request id when the cancel POST happens to arrive first.
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation
       def send_request(request:)
+        # Modern requests (never notifications, whose `_meta` has no envelope) carry
+        # the SEP-2575 triple; the `MCP-Protocol-Version` header from `session_headers`
+        # matches it by construction.
+        if modern? && (request[:id] || request["id"])
+          request = ModernEnvelope.stamp(
+            request,
+            protocol_version: @protocol_version,
+            client_info: @modern_client_info,
+            capabilities: @modern_capabilities,
+          )
+        end
+
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
         oauth_retried = false
@@ -534,6 +513,153 @@ module MCP
       private
 
       attr_reader :headers
+
+      def connect_legacy(client_info:, protocol_version:, capabilities:)
+        protocol_version ||= MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION
+
+        response = send_request(request: {
+          jsonrpc: JsonRpcHandler::Version::V2_0,
+          id: SecureRandom.uuid,
+          method: MCP::Methods::INITIALIZE,
+          params: {
+            protocolVersion: protocol_version,
+            capabilities: capabilities,
+            clientInfo: client_info,
+          },
+        })
+
+        if response.is_a?(Hash) && response.key?("error")
+          clear_session
+          error = response["error"]
+          raise RequestHandlerError.new(
+            "Server initialization failed: #{error["message"]}",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        unless response.is_a?(Hash) && response["result"].is_a?(Hash)
+          clear_session
+          raise RequestHandlerError.new(
+            "Server initialization failed: missing result in response",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        @server_info = response["result"]
+        negotiated_protocol_version = @server_info["protocolVersion"]
+        unless MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(negotiated_protocol_version)
+          clear_session
+          raise RequestHandlerError.new(
+            "Server initialization failed: unsupported protocol version #{negotiated_protocol_version.inspect}",
+            { method: MCP::Methods::INITIALIZE },
+            error_type: :internal_error,
+          )
+        end
+
+        MCP::ProtocolDeprecations.warn_for_client_capabilities(capabilities, protocol_version: negotiated_protocol_version, uplevel: 1)
+
+        begin
+          send_request(request: {
+            jsonrpc: JsonRpcHandler::Version::V2_0,
+            method: MCP::Methods::NOTIFICATIONS_INITIALIZED,
+          })
+        rescue StandardError
+          clear_session
+          raise
+        end
+
+        @connected = true
+        start_listening if @server_request_handlers.any?
+        @server_info
+      end
+
+      # Enters the modern lifecycle by probing `server/discover` at the requested (or latest) modern version.
+      # No `initialize` or `notifications/initialized` is sent; the probe response becomes `server_info`.
+      def connect_modern(client_info:, protocol_version:, capabilities:)
+        version = protocol_version || MCP::Configuration::LATEST_MODERN_PROTOCOL_VERSION
+        unless MCP::Configuration.modern_protocol_version?(version)
+          raise ArgumentError, "protocol_version #{version.inspect} is not a supported modern protocol version"
+        end
+
+        enter_modern_mode(protocol_version: version, client_info: client_info, capabilities: capabilities)
+
+        begin
+          result = probe_discover
+        rescue StandardError
+          leave_modern_mode
+          raise
+        end
+
+        supported = result["supportedVersions"]
+        unless supported.is_a?(Array) && supported.include?(version)
+          leave_modern_mode
+          raise RequestHandlerError.new(
+            "Server discovery failed: no mutually supported modern protocol version " \
+              "(server supports #{supported.inspect})",
+            { method: MCP::Methods::SERVER_DISCOVER },
+            error_type: :internal_error,
+          )
+        end
+
+        @server_info = result
+        @connected = true
+        @server_info
+      end
+
+      # Probes `server/discover` and adopts the modern lifecycle when the server serves
+      # a mutually supported modern version; otherwise falls back to the legacy handshake.
+      # The fallback intentionally covers a successful discovery without a mutual modern
+      # version as well: during the 2026-07-28 rollout a server may answer discovery while
+      # only serving legacy versions.
+      def connect_auto(client_info:, protocol_version:, capabilities:)
+        connect_modern(client_info: client_info, protocol_version: nil, capabilities: capabilities)
+      rescue RequestHandlerError
+        connect_legacy(client_info: client_info, protocol_version: protocol_version, capabilities: capabilities)
+      end
+
+      def enter_modern_mode(protocol_version:, client_info:, capabilities:)
+        @modern_client_info = client_info
+        @modern_capabilities = capabilities || {}
+        # `session_headers` sends `@protocol_version` as the `MCP-Protocol-Version` header,
+        # which the modern lifecycle requires to match the `_meta`-carried version.
+        @protocol_version = protocol_version
+      end
+
+      def leave_modern_mode
+        @modern_client_info = nil
+        @modern_capabilities = nil
+        @protocol_version = nil
+      end
+
+      def probe_discover
+        response = send_request(request: {
+          jsonrpc: JsonRpcHandler::Version::V2_0,
+          id: SecureRandom.uuid,
+          method: MCP::Methods::SERVER_DISCOVER,
+        })
+
+        if response.is_a?(Hash) && response.key?("error")
+          error = response["error"]
+          raise RequestHandlerError.new(
+            "Server discovery failed: #{error["message"]}",
+            { method: MCP::Methods::SERVER_DISCOVER },
+            error_type: :internal_error,
+          )
+        end
+
+        result = response.is_a?(Hash) ? response["result"] : nil
+        unless result.is_a?(Hash)
+          raise RequestHandlerError.new(
+            "Server discovery failed: missing result in response",
+            { method: MCP::Methods::SERVER_DISCOVER },
+            error_type: :internal_error,
+          )
+        end
+
+        result
+      end
 
       def client
         require_faraday!
@@ -730,6 +856,8 @@ module MCP
         @protocol_version = nil
         @server_info = nil
         @connected = false
+        @modern_client_info = nil
+        @modern_capabilities = nil
       end
 
       # Opens the standalone GET SSE listening stream on a background thread so server-to-client requests
