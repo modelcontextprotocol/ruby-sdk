@@ -49,7 +49,9 @@ module MCP
             end
             break if line.nil?
 
-            response = @session.handle_json(line.strip)
+            line = line.strip
+            parsed = parse_line(line)
+            response = parsed ? dispatch_with_era(parsed) : @session.handle_json(line)
             send_response(response) if response
           end
         rescue Interrupt
@@ -90,6 +92,12 @@ module MCP
         # cancellation has very limited value here regardless; servers that need cancellation propagation for nested
         # server-to-client requests should use `StreamableHTTPTransport`.
         def send_request(method, params = nil)
+          # The modern lifecycle (SEP-2575) forbids server-initiated JSON-RPC requests;
+          # multi round-trip `input_required` results (SEP-2322) replace them.
+          if @session && @session.era == :modern
+            raise "Server-initiated requests are not available in the modern lifecycle (SEP-2575)."
+          end
+
           request_id = generate_request_id
           request = { jsonrpc: "2.0", id: request_id, method: method }
           request[:params] = params if params
@@ -116,7 +124,7 @@ module MCP
 
               return parsed[:result]
             else
-              response = @session ? @session.handle(parsed) : @server.handle(parsed)
+              response = @session ? dispatch_with_era(parsed) : @server.handle(parsed)
               send_response(response) if response
             end
           end
@@ -142,6 +150,35 @@ module MCP
           end
 
           line
+        end
+
+        # Parses a frame once so era classification can inspect its method and `_meta`.
+        # Returns `nil` for frames that are not JSON objects; those fall back to
+        # `ServerSession#handle_json` so protocol-level error responses stay identical.
+        def parse_line(line)
+          parsed = JSON.parse(line, symbolize_names: true)
+          parsed.is_a?(Hash) ? parsed : nil
+        rescue JSON::ParserError
+          nil
+        end
+
+        # Serves one frame under the dual-era model (SEP-2575): the first era-distinctive message to succeed locks
+        # the connection era. A successful `initialize` locks `:legacy` inside `Server#init`; a successful `server/discover`
+        # or a successful request carrying the full modern `_meta` triple locks `:modern`. Era-violating frames
+        # (an `initialize` after a modern lock, a modern envelope after a legacy lock, or a missing envelope after a modern lock)
+        # are rejected in-band by `Server#lift_request_envelope`.
+        def dispatch_with_era(parsed)
+          response = @session.handle(parsed)
+          lock_modern_era_on_success(parsed, response)
+          response
+        end
+
+        def lock_modern_era_on_success(parsed, response)
+          return if @session.era
+          return if !response.is_a?(Hash) || response.key?(:error)
+          return if parsed[:method] != Methods::SERVER_DISCOVER && !RequestEnvelope.modern?(parsed[:params])
+
+          @session.lock_era!(:modern)
         end
       end
     end

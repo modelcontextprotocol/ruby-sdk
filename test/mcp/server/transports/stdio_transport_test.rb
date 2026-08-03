@@ -7,6 +7,7 @@ module MCP
     module Transports
       class StdioTransportTest < ActiveSupport::TestCase
         include InstrumentationTestHelper
+        include InitializeParamsTestHelper
 
         setup do
           configuration = MCP::Configuration.new
@@ -549,6 +550,140 @@ module MCP
             $stdin = original_stdin
             $stdout = original_stdout
           end
+        end
+
+        test "locks the legacy era on a successful initialize and rejects a later modern envelope" do
+          responses = run_transport_session([
+            initialize_request(id: 1),
+            modern_ping_request(id: 2),
+          ])
+
+          refute responses[0].key?(:error)
+          assert_equal :legacy, session_era
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
+        end
+
+        test "initialize negotiating 2026-07-28 still locks the legacy era" do
+          # 2026-07-28 serves both lifecycles of the dual-era model: negotiating it through
+          # the legacy handshake locks `:legacy`, so a later modern envelope is still rejected.
+          responses = run_transport_session([
+            initialize_request(id: 1, protocol_version: "2026-07-28"),
+            modern_ping_request(id: 2),
+          ])
+
+          assert_equal "2026-07-28", responses[0].dig(:result, :protocolVersion)
+          assert_equal :legacy, session_era
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
+        end
+
+        test "locks the modern era on a successful server/discover and rejects a later initialize with -32022" do
+          responses = run_transport_session([
+            { jsonrpc: "2.0", method: "server/discover", id: 1 },
+            initialize_request(id: 2),
+            modern_ping_request(id: 3),
+          ])
+
+          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, responses[0].dig(:result, :supportedVersions)
+          assert_equal :modern, session_era
+          assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, responses[1].dig(:error, :code)
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, responses[1].dig(:error, :data, :supported)
+          refute responses[2].key?(:error)
+        end
+
+        test "locks the modern era on a successful request carrying the modern envelope" do
+          responses = run_transport_session([modern_ping_request(id: 1)])
+
+          refute responses[0].key?(:error)
+          assert_equal :modern, session_era
+        end
+
+        test "does not lock an era when the era-distinctive request fails" do
+          # An unsupported envelope version fails with -32022, so the connection stays unlocked
+          # and a legacy initialize can still succeed afterwards.
+          responses = run_transport_session([
+            modern_ping_request(id: 1, version: "2027-01-01"),
+            initialize_request(id: 2),
+          ])
+
+          assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, responses[0].dig(:error, :code)
+          refute responses[1].key?(:error)
+          assert_equal :legacy, session_era
+        end
+
+        test "requires the modern envelope after a modern era lock" do
+          responses = run_transport_session([
+            modern_ping_request(id: 1),
+            { jsonrpc: "2.0", method: "ping", id: 2 },
+          ])
+
+          refute responses[0].key?(:error)
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
+        end
+
+        test "#send_request raises on a modern-locked session" do
+          run_transport_session([modern_ping_request(id: 1)])
+
+          error = assert_raises(RuntimeError) do
+            @transport.send_request("roots/list")
+          end
+          assert_match(/modern lifecycle/, error.message)
+        end
+
+        private
+
+        def initialize_request(id:, protocol_version: "2025-11-25")
+          {
+            jsonrpc: "2.0",
+            method: "initialize",
+            id: id,
+            params: initialize_params(
+              protocolVersion: protocol_version,
+              clientInfo: { name: "legacy_client", version: "1.0" },
+            ),
+          }
+        end
+
+        def modern_ping_request(id:, version: "2026-07-28")
+          {
+            jsonrpc: "2.0",
+            method: "ping",
+            id: id,
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": version,
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }
+        end
+
+        # Feeds the frames to a fresh transport session over swapped stdio and returns the parsed responses in order.
+        def run_transport_session(frames)
+          input = StringIO.new(frames.map { |frame| JSON.generate(frame) }.join("\n") + "\n")
+          output = StringIO.new
+
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+
+            thread = Thread.new { @transport.open }
+            sleep(0.1)
+            @transport.close
+            thread.join
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+
+          output.string.each_line.map { |line| JSON.parse(line, symbolize_names: true) }
+        end
+
+        def session_era
+          @transport.instance_variable_get(:@session).era
         end
       end
     end
