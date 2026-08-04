@@ -765,6 +765,125 @@ module MCP
         assert_equal({ "content" => [] }, response["result"])
       end
 
+      def test_send_request_releases_the_calling_thread_on_an_excessive_reconnection_delay
+        # A server priming a stream, closing it, and asking for a day-long `retry:` used to park
+        # the calling thread for that long. The default budget now stops the resume without sleeping.
+        stub_reconnection_with_retry(86_400_000)
+        client.expects(:sleep).never
+
+        error = assert_raises(MCP::Client::RequestHandlerError) do
+          client.send_request(request: reconnection_request)
+        end
+
+        assert_includes error.message, "reconnection budget"
+      end
+
+      def test_send_request_raises_a_server_reconnection_delay_of_zero_to_the_minimum
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_reconnection", arguments: {} },
+        }
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 0\ndata:\n\n",
+        )
+
+        get_body = 'data: {"jsonrpc":"2.0","id":"test_id","result":{"content":[]}}' \
+          "\n\n"
+        stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: get_body,
+        )
+
+        client.expects(:sleep).with(HTTP::MIN_RECONNECTION_DELAY_MS / 1000.0)
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+      end
+
+      def test_send_request_honors_a_reconnection_delay_that_fits_the_budget
+        # Nothing is shortened while the server's `retry:` fits: the client waits it out and resumes.
+        custom_client = HTTP.new(url: url, max_reconnection_wait: 60)
+
+        stub_reconnection_with_retry(30_000)
+        custom_client.expects(:sleep).with(30.0)
+
+        response = custom_client.send_request(request: reconnection_request)
+
+        assert_equal({ "content" => [] }, response["result"])
+      end
+
+      def test_send_request_gives_up_rather_than_reconnect_before_the_server_asked
+        # A delay past the budget is never shortened; the client stops trying to resume instead, so
+        # the calling thread is released immediately rather than after the server's chosen interval.
+        custom_client = HTTP.new(url: url, max_reconnection_wait: 10)
+
+        stub_reconnection_with_retry(86_400_000)
+        custom_client.expects(:sleep).never
+
+        error = assert_raises(MCP::Client::RequestHandlerError) do
+          custom_client.send_request(request: reconnection_request)
+        end
+
+        assert_includes error.message, "would exceed the 10 second reconnection budget"
+      end
+
+      def test_send_request_falls_back_to_the_default_delay_for_an_unusable_retry_value
+        # The SSE parser only accepts a run of digits, so a negative or non-numeric `retry:` never reaches
+        # the delay calculation as a value; both arrive as "the server sent none".
+        ["-5000", "abc", "1e6", "500ms"].each do |value|
+          WebMock.reset!
+          fresh_client = HTTP.new(url: url)
+
+          stub_reconnection_with_retry(value)
+          fresh_client.expects(:sleep).with(HTTP::DEFAULT_RECONNECTION_DELAY_MS / 1000.0)
+
+          response = fresh_client.send_request(request: reconnection_request)
+
+          assert_equal({ "content" => [] }, response["result"])
+        end
+      end
+
+      def test_listener_applies_the_delay_floor_to_a_zero_retry_value
+        # The listening stream reconnects indefinitely after a graceful close, so a `retry: 0` would spin
+        # without the floor. The 500s that follow let the listener reach its failure cap and stop.
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+        stub_request(:get, url).to_return(
+          { status: 200, headers: { "Content-Type" => "text/event-stream" }, body: "id: e1\nretry: 0\ndata:\n\n" },
+          { status: 500 },
+          { status: 500 },
+        )
+
+        client.expects(:sleep).with(HTTP::MIN_RECONNECTION_DELAY_MS / 1000.0).at_least_once
+        client.connect
+        client.on_server_request("elicitation/create") { { action: "decline" } }
+        listener = client.instance_variable_get(:@listener_thread)
+
+        wait_until { !listener.alive? }
+      ensure
+        client.close
+      end
+
+      def test_raises_argument_error_when_max_reconnection_wait_is_not_positive
+        [0, -1, "60", nil].each do |value|
+          error = assert_raises(ArgumentError) { HTTP.new(url: url, max_reconnection_wait: value) }
+
+          assert_equal("max_reconnection_wait must be a positive number", error.message)
+        end
+      end
+
       def test_send_request_raises_after_reconnection_attempts_are_exhausted
         request = {
           jsonrpc: "2.0",
@@ -2233,6 +2352,35 @@ module MCP
 
       def client
         @client ||= HTTP.new(url: url)
+      end
+
+      # The SEP-1699 reconnection exchange: a `tools/call` whose SSE stream carries a priming event
+      # and the given `retry:` before closing, and a GET that replays the result for `Last-Event-ID`.
+      def reconnection_request
+        {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "test_reconnection", arguments: {} },
+        }
+      end
+
+      def stub_reconnection_with_retry(retry_ms)
+        stub_request(:post, url).with(
+          body: reconnection_request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: #{retry_ms}\ndata:\n\n",
+        )
+
+        stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: %(data: {"jsonrpc":"2.0","id":"test_id","result":{"content":[]}}\n\n),
+        )
       end
     end
   end
