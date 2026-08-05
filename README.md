@@ -1,5 +1,7 @@
 # MCP Ruby SDK [![Gem Version](https://img.shields.io/gem/v/mcp)](https://rubygems.org/gems/mcp) [![Apache 2.0 licensed](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/LICENSE) [![CI](https://github.com/modelcontextprotocol/ruby-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/modelcontextprotocol/ruby-sdk/actions/workflows/ci.yml)
 
+[![MCP Toplist](https://mcptoplist.com/badge/github.com%2Fmodelcontextprotocol%2Fruby-sdk.svg)](https://mcptoplist.com/server/github.com%2Fmodelcontextprotocol%2Fruby-sdk)
+
 The official Ruby SDK for Model Context Protocol servers and clients.
 
 ## Installation
