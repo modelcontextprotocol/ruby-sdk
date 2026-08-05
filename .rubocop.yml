@@ -7,6 +7,7 @@ plugins:
 
 AllCops:
   TargetRubyVersion: 2.7
+  SuggestExtensions: false
 
 Gemspec/DevelopmentDependencies:
   Enabled: true
