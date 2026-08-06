@@ -884,7 +884,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_equal "Internal error calling tool tool_that_raises", response[:error][:data]
       assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
@@ -941,7 +941,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool tool_that_raises: /, response[:error][:data])
+      assert_equal "Internal error calling tool tool_that_raises", response[:error][:data]
       assert_instrumentation_data({ method: "tools/call", tool_name: "tool_that_raises", tool_arguments: { message: "test" }, error: :internal_error })
     end
 
@@ -972,7 +972,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool tool_with_faulty_schema: Unexpected schema error/, response[:error][:data])
+      assert_equal "Internal error calling tool tool_with_faulty_schema", response[:error][:data]
     end
 
     test "#handle tools/call returns JSON-RPC error for unknown tool" do
@@ -1727,7 +1727,7 @@ module MCP
 
       assert_equal(["tool failure", "around ensure boom"], reported)
       assert_equal(JsonRpcHandler::ErrorCode::INTERNAL_ERROR, response[:error][:code])
-      assert_equal("around ensure boom", response[:error][:data])
+      assert_nil(response[:error][:data])
     end
 
     test "#handle reports the same exception object reused across requests on every call" do
@@ -1779,7 +1779,7 @@ module MCP
       response = server.handle(request)
 
       assert_equal([frozen_error], reported)
-      assert_includes(response[:error][:data], "frozen failure")
+      assert_equal("Internal error calling tool frozen_tool", response[:error][:data])
     end
 
     test "#handle still reports via exception_reporter when around_request swallows the tool failure" do
@@ -2635,7 +2635,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool invalid_structured_content_tool: Invalid result:/, response[:error][:data])
+      assert_equal "Internal error calling tool invalid_structured_content_tool", response[:error][:data]
     end
 
     test "tools/call returns JSON-RPC error when output schema validation is enabled and structuredContent is missing" do
@@ -2664,7 +2664,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool missing_structured_content_tool: Invalid result:/, response[:error][:data])
+      assert_equal "Internal error calling tool missing_structured_content_tool", response[:error][:data]
     end
 
     test "tools/call skips output schema validation for error responses" do

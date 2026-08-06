@@ -310,7 +310,6 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32603,
         message: "Internal error",
-        data: "Something bad happened",
       }
       assert_equal 1, @response[:id]
       assert_nil @response[:result]
@@ -452,7 +451,6 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32603,
         message: "Internal error",
-        data: "Something bad happened",
       }
     end
 
