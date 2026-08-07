@@ -2346,8 +2346,11 @@ Per SEP-2549, list and read results can carry cache hints telling clients how lo
 `0` means do not cache) and whether shared intermediaries may cache it (`cacheScope`: `"public"` or `"private"`).
 
 Emission is opt-in: pass `ttl_ms:` and/or `cache_scope:` to `MCP::Server.new` and both fields are added to `tools/list`, `prompts/list`, `resources/list`,
-`resources/templates/list`, and `resources/read` results (a missing field is filled with the defaults `ttlMs: 0` / `cacheScope: "public"`).
+`resources/templates/list`, and `resources/read` results (a missing field is filled with the defaults `ttlMs: 0` / `cacheScope: "private"`,
+the scope that keeps a potentially user-dependent result out of shared caches).
 When neither is set, responses are serialized exactly as before.
+The 2026-07-28 revision makes both hints required on these results, so on requests carrying the modern `_meta` envelope
+the server always emits them, filling unset values with the same defaults; stable protocol versions keep the opt-in behavior.
 
 ```ruby
 server = MCP::Server.new(
