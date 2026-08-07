@@ -555,7 +555,7 @@ module MCP
         test "locks the legacy era on a successful initialize and rejects a later modern envelope" do
           responses = run_transport_session([
             initialize_request(id: 1),
-            modern_ping_request(id: 2),
+            modern_tools_list_request(id: 2),
           ])
 
           refute responses[0].key?(:error)
@@ -568,7 +568,7 @@ module MCP
           # the legacy handshake locks `:legacy`, so a later modern envelope is still rejected.
           responses = run_transport_session([
             initialize_request(id: 1, protocol_version: "2026-07-28"),
-            modern_ping_request(id: 2),
+            modern_tools_list_request(id: 2),
           ])
 
           assert_equal "2026-07-28", responses[0].dig(:result, :protocolVersion)
@@ -576,22 +576,23 @@ module MCP
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
         end
 
-        test "locks the modern era on a successful server/discover and rejects a later initialize with -32022" do
+        test "locks the modern era on a successful server/discover and rejects a later initialize with -32601" do
           responses = run_transport_session([
             { jsonrpc: "2.0", method: "server/discover", id: 1 },
             initialize_request(id: 2),
-            modern_ping_request(id: 3),
+            modern_tools_list_request(id: 3),
           ])
 
           assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, responses[0].dig(:result, :supportedVersions)
           assert_equal :modern, session_era
-          assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, responses[1].dig(:error, :code)
-          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, responses[1].dig(:error, :data, :supported)
+          # SEP-2575 removes `initialize` from the modern lifecycle, so a modern-locked connection
+          # answers it with Method not found.
+          assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, responses[1].dig(:error, :code)
           refute responses[2].key?(:error)
         end
 
         test "locks the modern era on a successful request carrying the modern envelope" do
-          responses = run_transport_session([modern_ping_request(id: 1)])
+          responses = run_transport_session([modern_tools_list_request(id: 1)])
 
           refute responses[0].key?(:error)
           assert_equal :modern, session_era
@@ -601,7 +602,7 @@ module MCP
           # An unsupported envelope version fails with -32022, so the connection stays unlocked
           # and a legacy initialize can still succeed afterwards.
           responses = run_transport_session([
-            modern_ping_request(id: 1, version: "2027-01-01"),
+            modern_tools_list_request(id: 1, version: "2027-01-01"),
             initialize_request(id: 2),
           ])
 
@@ -612,16 +613,29 @@ module MCP
 
         test "requires the modern envelope after a modern era lock" do
           responses = run_transport_session([
-            modern_ping_request(id: 1),
-            { jsonrpc: "2.0", method: "ping", id: 2 },
+            modern_tools_list_request(id: 1),
+            { jsonrpc: "2.0", method: "tools/list", id: 2 },
           ])
 
           refute responses[0].key?(:error)
           assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, responses[1].dig(:error, :code)
         end
 
+        test "answers removed lifecycle methods with -32601 after a modern era lock" do
+          removed_requests = Methods::MODERN_REMOVED_METHODS.each_with_index.map do |method, index|
+            { jsonrpc: "2.0", method: method, id: index + 2 }
+          end
+          responses = run_transport_session([modern_tools_list_request(id: 1)] + removed_requests)
+
+          refute responses[0].key?(:error)
+          responses[1..].each_with_index do |response, index|
+            method = Methods::MODERN_REMOVED_METHODS[index]
+            assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code), "expected -32601 for #{method}"
+          end
+        end
+
         test "#send_request raises on a modern-locked session" do
-          run_transport_session([modern_ping_request(id: 1)])
+          run_transport_session([modern_tools_list_request(id: 1)])
 
           error = assert_raises(RuntimeError) do
             @transport.send_request("roots/list")
@@ -643,10 +657,12 @@ module MCP
           }
         end
 
-        def modern_ping_request(id:, version: "2026-07-28")
+        # `tools/list` stands in as the era-distinctive modern request: `ping` cannot,
+        # because SEP-2575 removes it from the modern lifecycle (-32601 there).
+        def modern_tools_list_request(id:, version: "2026-07-28")
           {
             jsonrpc: "2.0",
-            method: "ping",
+            method: "tools/list",
             id: id,
             params: {
               _meta: {

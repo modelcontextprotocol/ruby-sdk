@@ -360,27 +360,32 @@ module MCP
       assert_includes response.dig(:error, :message), "io.modelcontextprotocol/protocolVersion"
     end
 
-    test "#handle rejects initialize on a modern-locked session with -32022" do
+    test "#handle rejects removed lifecycle methods on a modern-locked session with -32601" do
       session = ServerSession.new(server: @server, transport: mock, era: :modern)
 
-      response = @server.handle(
-        {
-          jsonrpc: "2.0",
-          method: "initialize",
-          id: 1,
-          params: { protocolVersion: "2025-11-25", clientInfo: { name: "c", version: "1" } },
-        },
-        session: session,
-      )
+      Methods::MODERN_REMOVED_METHODS.each_with_index do |method, index|
+        response = @server.handle(
+          { jsonrpc: "2.0", method: method, id: index + 1 },
+          session: session,
+        )
 
-      assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, response.dig(:error, :code)
-      assert_equal "2025-11-25", response.dig(:error, :data, :requested)
+        assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code), "expected -32601 for #{method}"
+        assert_equal index + 1, response[:id], "expected the request id to be preserved for #{method}"
+      end
     end
 
-    test "#handle server/discover succeeds without an envelope on a modern-locked session" do
+    test "#handle server/discover requires the envelope on a modern-locked session" do
+      # The 2026-07-28 conformance requirements reject an envelope-less `server/discover`
+      # on the modern era with -32602 (SEP-2575).
       session = ServerSession.new(server: @server, transport: mock, era: :modern)
 
       response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 }, session: session)
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
+    end
+
+    test "#handle server/discover succeeds without an envelope outside the modern era" do
+      response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
 
       refute_nil response[:result]
     end

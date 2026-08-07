@@ -21,6 +21,20 @@ module MCP
     TOOLS_CALL = "tools/call"
     TOOLS_LIST = "tools/list"
 
+    # RPC methods the stateless modern lifecycle removes (MCP 2026-07-28, SEP-2575):
+    # `initialize` is replaced by the per-request `_meta` envelope plus `server/discover`,
+    # `logging/setLevel` by the envelope's `logLevel` member, and `ping` and the resource
+    # subscription pair by the connectionless model, which leaves nothing to keep alive
+    # or subscribe on. A modern-era request naming one of these answers with `-32601`
+    # Method not found (HTTP 404 on Streamable HTTP).
+    MODERN_REMOVED_METHODS = [
+      INITIALIZE,
+      PING,
+      LOGGING_SET_LEVEL,
+      RESOURCES_SUBSCRIBE,
+      RESOURCES_UNSUBSCRIBE,
+    ].freeze
+
     ROOTS_LIST = "roots/list"
     SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
     ELICITATION_CREATE = "elicitation/create"

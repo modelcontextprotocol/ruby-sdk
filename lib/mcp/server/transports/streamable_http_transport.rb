@@ -1041,10 +1041,16 @@ module MCP
             !MCP::Configuration.modern_protocol_version?(version)
         end
 
-        # Era sniff for a sessionless POST under a dual-era header version: only an `initialize` body is legacy-distinctive.
-        #  Unparsable or non-object bodies go to the modern path, whose error responses cover them.
+        # Era sniff for a sessionless POST under a dual-era header version: only an `initialize` body
+        # WITHOUT the modern `_meta` envelope is legacy-distinctive. An `initialize` carrying
+        # the envelope comes from a modern client naming a method its lifecycle removed, so it stays
+        # on the modern path and answers with -32601/404 (SEP-2575).
+        # Unparsable or non-object bodies go to the modern path, whose error responses cover them.
         def legacy_handshake_body?(body_string)
-          initialize_request?(parse_request_body(body_string))
+          body = parse_request_body(body_string)
+          return false unless initialize_request?(body)
+
+          !RequestEnvelope.modern?(body[:params])
         rescue InvalidJsonError
           false
         end
