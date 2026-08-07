@@ -545,7 +545,7 @@ module MCP
       assert_nil response[:result]
       assert_equal(-32603, response[:error][:code])
       assert_equal "Internal error", response[:error][:message]
-      assert_match(/Internal error calling tool tool_with_required_context: /, response[:error][:data])
+      assert_equal "Internal error calling tool tool_with_required_context", response[:error][:data]
     end
 
     test "call_tool_with_args correctly detects server_context parameter presence" do

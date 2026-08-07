@@ -135,11 +135,12 @@ module JsonRpcHandler
       success_response(id: id, result: result)
     rescue MCP::Server::RequestHandlerError => e
       handle_request_error(e, id, id_validation_pattern)
-    rescue StandardError => e
+    rescue StandardError
+      # The exception message is deliberately not echoed into `data`: it can carry
+      # internals that must not reach untrusted clients (CWE-209).
       error_response(id: id, id_validation_pattern: id_validation_pattern, error: {
         code: ErrorCode::INTERNAL_ERROR,
         message: "Internal error",
-        data: e.message,
       })
     end
   end

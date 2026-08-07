@@ -560,7 +560,14 @@ module MCP
         return
       end
 
-      Methods.ensure_capability!(method, capabilities)
+      begin
+        Methods.ensure_capability!(method, capabilities)
+      rescue Methods::MissingRequiredCapabilityError => e
+        # Re-raise through RequestHandlerError, the one channel whose message is
+        # deliberately surfaced to clients: `JsonRpcHandler`'s blind `rescue StandardError`
+        # no longer echoes exception messages into the error `data` member (CWE-209).
+        raise RequestHandlerError.new(e.message, request, error_type: :internal_error, original_error: e)
+      end
 
       # `initialize` MUST NOT be cancelled (MCP spec 2025-11-25, cancellation item 2),
       # so do not track it in the in-flight registry.
@@ -864,8 +871,11 @@ module MCP
       # `JsonRpcHandler::NO_RESPONSE` per the MCP cancellation spec.
       raise
     rescue => e
+      # `e.message` is deliberately not included: it can carry internals (class, method
+      # and host names) that must not reach untrusted clients (CWE-209). The original
+      # exception still reaches `configuration.exception_reporter` via `original_error`.
       raise RequestHandlerError.new(
-        "Internal error calling tool #{tool_name}: #{e.message}",
+        "Internal error calling tool #{tool_name}",
         request,
         error_type: :internal_error,
         original_error: e,
