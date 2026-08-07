@@ -54,6 +54,14 @@ It implements the Model Context Protocol specification, handling model context r
   and the Streamable HTTP transport serves them on a sessionless single-exchange path. On the client, `MCP::Client#connect` negotiates
   the lifecycle automatically by default (probe `server/discover`, fall back to the `initialize` handshake), `connect(mode: :modern)` skips
   the handshake entirely, `connect(mode: :legacy)` forces the classic handshake, and `MCP::Client#discover` exposes the raw discovery result
+- Multi round-trip `input_required` results (MCP 2026-07-28, SEP-2322): a `tools/call`, `prompts/get`, or `resources/read` handler that
+  opts in to `server_context:` may return `MCP::Server::InputRequiredResult.new(input_requests:, request_state:)` to ask the client for
+  additional input (`elicitation/create`, `sampling/createMessage`, or `roots/list` shapes) instead of performing a server-initiated request,
+  which the modern lifecycle forbids. On the retried request the handler re-runs from the start and reads the answers via
+  `server_context.input_responses` / `server_context.input_response(key)` and the echoed opaque `server_context.request_state`
+  (deterministic replay; the server holds no memory between rounds). The SDK rejects issuance on legacy requests and returns `-32021`
+  when an embedded request needs a client capability the request did not declare. Note that the echoed `requestState` arrives as
+  client-controlled input; treat it accordingly
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas
