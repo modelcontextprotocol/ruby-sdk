@@ -584,6 +584,16 @@ module MCP
           exception_already_reported: ->(e) { reported_exception.equal?(e) },
         ) do
           envelope = lift_request_envelope(params, method: method, session: session)
+
+          # The envelope's `logLevel` member replaces `logging/setLevel` in the modern lifecycle:
+          # it authorizes `notifications/message` for this request only (SEP-2575). Without it,
+          # `ServerSession#notify_log_message` stays silent on modern-era sessions. An unrecognized level
+          # reads as absent, so delivery stays off (the safe direction), matching the Python SDK.
+          if envelope&.log_level && session.respond_to?(:configure_logging)
+            request_logging = LoggingMessageNotification.new(level: envelope.log_level)
+            session.configure_logging(request_logging) if request_logging.valid_level?
+          end
+
           result = case method
           when Methods::INITIALIZE
             init(params, session: session)

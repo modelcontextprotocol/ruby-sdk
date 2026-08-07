@@ -5418,6 +5418,168 @@ module MCP
           assert_equal({ "elicitation" => { "form" => {} } }, body.dig("error", "data", "requiredCapabilities"))
         end
 
+        test "modern POST streams handler notifications ahead of the final response" do
+          @server.define_tool(name: "progress_tool") do |server_context:|
+            server_context.report_progress(50, total: 100)
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 1,
+            params: {
+              name: "progress_tool",
+              arguments: {},
+              _meta: {
+                progressToken: "tok-1",
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["content-type"]
+          frames = response[2][0].split("\n\n").reject(&:empty?).map do |chunk|
+            JSON.parse(chunk.sub(/\Aevent: message\ndata: /, ""))
+          end
+          assert_equal "notifications/progress", frames.first["method"]
+          assert_equal "tok-1", frames.first.dig("params", "progressToken")
+          assert frames.last.key?("result"), "expected the final frame to carry the result"
+          assert_equal 1, frames.last["id"]
+        end
+
+        test "modern POST bounds the buffered notifications per request" do
+          # The sink holds notifications in memory until the handler returns, so a handler
+          # emitting in proportion to client input must not grow one request without bound.
+          overflow = 5
+          delivery_results = []
+          @server.define_tool(name: "flood_tool") do |server_context:|
+            (StreamableHTTPTransport::MAX_MODERN_REQUEST_NOTIFICATIONS + overflow).times do |i|
+              delivery_results << server_context.notify_log_message(data: "message #{i}", level: "info")
+            end
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 1,
+            params: {
+              name: "flood_tool",
+              arguments: {},
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/logLevel": "info",
+              },
+            },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["content-type"]
+          frames = response[2][0].split("\n\n").reject(&:empty?)
+          assert_equal StreamableHTTPTransport::MAX_MODERN_REQUEST_NOTIFICATIONS + 1, frames.size
+          assert_equal overflow, delivery_results.count { |result| result == false }
+        end
+
+        test "modern POST without handler notifications keeps the single JSON exchange" do
+          response = @transport.handle_request(modern_rack_request(modern_body("tools/list", {})))
+
+          assert_equal 200, response[0]
+          assert_equal "application/json", response[1]["content-type"]
+        end
+
+        test "modern POST suppresses log notifications without the envelope logLevel" do
+          # SEP-2575: log delivery is authorized per request via the `_meta` logLevel;
+          # the server-wide level does not apply to modern requests.
+          @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
+          @server.define_tool(name: "logging_tool") do |server_context:|
+            server_context.notify_log_message(data: "hi", level: "info")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("tools/call", { name: "logging_tool", arguments: {} }),
+          ))
+
+          assert_equal 200, response[0]
+          assert_equal "application/json", response[1]["content-type"]
+          refute_includes response[2][0], "notifications/message"
+        end
+
+        test "modern POST delivers log notifications when the envelope carries logLevel" do
+          @server.define_tool(name: "logging_tool") do |server_context:|
+            server_context.notify_log_message(data: "hi", level: "info")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 1,
+            params: {
+              name: "logging_tool",
+              arguments: {},
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/logLevel": "info",
+              },
+            },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["content-type"]
+          assert_includes response[2][0], "notifications/message"
+        end
+
+        test "modern POST treats an unrecognized envelope logLevel as absent" do
+          # Matching the Python SDK, an unrecognized level reads as absent:
+          # delivery stays off instead of erroring on every log call.
+          reported = []
+          configuration = MCP::Configuration.new(exception_reporter: ->(e, _ctx) { reported << e })
+          server = Server.new(name: "log_level_test", configuration: configuration)
+          transport = StreamableHTTPTransport.new(server, dns_rebinding_protection: false)
+          server.define_tool(name: "logging_tool") do |server_context:|
+            server_context.notify_log_message(data: "hi", level: "info")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 1,
+            params: {
+              name: "logging_tool",
+              arguments: {},
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/logLevel": "bogus",
+              },
+            },
+          }.to_json
+
+          response = transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          assert_equal "application/json", response[1]["content-type"]
+          refute_includes response[2][0], "notifications/message"
+          assert_empty reported
+        end
+
         test "modern POST serves server/discover without an envelope" do
           response = @transport.handle_request(modern_rack_request(
             { jsonrpc: "2.0", method: "server/discover", id: 1 }.to_json,

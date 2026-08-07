@@ -170,6 +170,31 @@ module MCP
       assert_empty mock_transport.notifications
     end
 
+    test "ServerSession#notify_log_message on a modern-era session ignores the server-wide level" do
+      # SEP-2575: on the modern lifecycle, log delivery is authorized per request via
+      # the envelope's logLevel; the server-wide level MUST NOT apply.
+      server = Server.new(name: "test_server", version: "1.0.0")
+      mock_transport = MockTransport.new(server)
+      server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
+      session = ServerSession.new(server: server, transport: mock_transport, era: :modern)
+
+      session.notify_log_message(data: { message: "test" }, level: "error")
+
+      assert_empty mock_transport.notifications
+    end
+
+    test "ServerSession#notify_log_message on a modern-era session honors a per-request level" do
+      server = Server.new(name: "test_server", version: "1.0.0")
+      mock_transport = MockTransport.new(server)
+      session = ServerSession.new(server: server, transport: mock_transport, era: :modern)
+      session.configure_logging(MCP::LoggingMessageNotification.new(level: "info"))
+
+      session.notify_log_message(data: { message: "test" }, level: "error")
+
+      assert_equal 1, mock_transport.notifications.length
+      assert_equal Methods::NOTIFICATIONS_MESSAGE, mock_transport.notifications.first[:method]
+    end
+
     test "#notify_log_message sends notification with logger through transport" do
       @server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
       @server.notify_log_message(data: { error: "Connection Failed" }, level: "error", logger: "DatabaseLogger")
