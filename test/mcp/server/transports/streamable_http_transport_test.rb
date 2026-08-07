@@ -5340,6 +5340,31 @@ module MCP
           assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
+        test "modern POST without the Mcp-Method header returns 400 with -32020" do
+          # The header is required on every modern POST; a missing required standard header is
+          # a validation failure, matching the TypeScript SDK's enforcement.
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}),
+            method_header: nil,
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32020, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "Mcp-Method"
+        end
+
+        test "modern POST without the Mcp-Name header on a name-bearing method returns 400 with -32020" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("tools/call", { name: "some_tool", arguments: {} }),
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32020, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "Mcp-Name"
+        end
+
         test "modern POST decodes the base64 Mcp-Name sentinel and enforces the match" do
           # `Mcp-Name` mirrors `params.uri` for `resources/read`; a non-ASCII value arrives
           # wrapped in the `=?base64?...?=` sentinel produced by `MCP::Client::HTTP`.
@@ -5410,6 +5435,7 @@ module MCP
 
           response = @transport.handle_request(modern_rack_request(
             modern_body("tools/call", { name: "guarded_tool", arguments: {} }),
+            headers: { "HTTP_MCP_NAME" => "guarded_tool" },
           ))
 
           assert_equal 400, response[0]
@@ -5600,13 +5626,24 @@ module MCP
         end
 
         # Builds a POST request routed to the modern path via the `MCP-Protocol-Version` header.
-        def modern_rack_request(body, version: "2026-07-28", headers: {})
-          create_rack_request(
-            "POST",
-            "/",
-            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => version }.merge(headers),
-            body,
-          )
+        # Mirrors what a conforming modern client sends: `Mcp-Method` is required on every modern POST,
+        # so it defaults to the body's method. Pass `method_header: nil` to omit it
+        # (for tests of the requirement itself) or a String to send a specific value.
+        def modern_rack_request(body, version: "2026-07-28", headers: {}, method_header: :from_body)
+          derived_method = if method_header == :from_body
+            begin
+              parsed = JSON.parse(body)
+              parsed["method"] if parsed.is_a?(Hash)
+            rescue JSON::ParserError
+              nil
+            end
+          else
+            method_header
+          end
+
+          base_headers = { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => version }
+          base_headers["HTTP_MCP_METHOD"] = derived_method if derived_method
+          create_rack_request("POST", "/", base_headers.merge(headers), body)
         end
 
         # Builds a JSON-RPC body carrying the SEP-2575 modern `_meta` envelope.
