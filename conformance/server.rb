@@ -577,7 +577,9 @@ module Conformance
             ).to_h,
           ]
         else
-          []
+          # Per SEP-2164, an unknown URI answers with -32602 carrying the URI in `error.data`;
+          # an empty `contents` array is forbidden.
+          raise MCP::Server::ResourceNotFoundError.new(uri, params)
         end
       end
     end
