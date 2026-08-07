@@ -617,7 +617,7 @@ module MCP
           ])
 
           refute responses[0].key?(:error)
-          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, responses[1].dig(:error, :code)
         end
 
         test "#send_request raises on a modern-locked session" do

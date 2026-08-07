@@ -5425,7 +5425,7 @@ module MCP
           ))
 
           assert_equal 400, response[0]
-          assert_equal(-32600, JSON.parse(response[2][0]).dig("error", "code"))
+          assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
         test "modern POST maps a missing client capability to 400 with -32021" do

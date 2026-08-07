@@ -689,10 +689,14 @@ module MCP
 
         RequestEnvelope.parse!(params, request: params)
       elsif era == :modern
+        # A claim-less request on a modern session is a malformed envelope, not a malformed request:
+        # the spec maps missing required envelope fields to Invalid params (`-32602`),
+        # and the reference SDKs answer it naming the missing keys.
         raise RequestHandlerError.new(
-          "Invalid Request: modern sessions require the SEP-2575 `_meta` envelope",
+          "Invalid params: missing or invalid `#{RequestEnvelope::REQUIRED_META_KEYS.join("`, `")}` in `_meta`",
           params,
-          error_type: :invalid_request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
         )
       end
     end

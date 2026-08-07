@@ -12,8 +12,9 @@ module MCP
       assert_equal "io.modelcontextprotocol/logLevel", RequestEnvelope::LOG_LEVEL_META_KEY
     end
 
-    test ".modern? returns true when the full required triple is present" do
+    test ".modern? returns true when the protocolVersion claim key is present" do
       assert RequestEnvelope.modern?(modern_params)
+      assert RequestEnvelope.modern?({ _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } })
     end
 
     test ".modern? returns true for string keys" do
@@ -28,11 +29,13 @@ module MCP
       assert RequestEnvelope.modern?(params)
     end
 
-    test ".modern? returns false for a partial triple" do
+    test ".modern? stays true for a claimed but incomplete envelope" do
+      # A claimed envelope must be validated by `parse!` (`-32602`), never silently served as legacy,
+      # matching the TypeScript and Python classifiers.
       params = modern_params
       params[:_meta].delete(:"io.modelcontextprotocol/clientCapabilities")
 
-      refute RequestEnvelope.modern?(params)
+      assert RequestEnvelope.modern?(params)
     end
 
     test ".modern? returns false for legacy _meta entries such as progressToken" do
@@ -75,18 +78,34 @@ module MCP
       assert_equal "2025-11-25", error.error_data[:requested]
     end
 
-    test ".parse! raises an invalid request error when the triple is incomplete" do
+    test ".parse! accepts an envelope without the optional clientInfo" do
+      # `clientInfo` became optional after the SEP was finalized (spec PR #3002);
+      # a conformant client configured not to identify itself must not be rejected.
       params = modern_params
       params[:_meta].delete(:"io.modelcontextprotocol/clientInfo")
+
+      envelope = RequestEnvelope.parse!(params)
+
+      assert_nil envelope.client_info
+      assert_equal "2026-07-28", envelope.protocol_version
+      assert_equal({ elicitation: {} }, envelope.client_capabilities)
+    end
+
+    test ".parse! raises Invalid params naming the missing key when clientCapabilities is absent" do
+      params = modern_params
+      params[:_meta].delete(:"io.modelcontextprotocol/clientCapabilities")
 
       error = assert_raises(Server::RequestHandlerError) do
         RequestEnvelope.parse!(params)
       end
 
-      assert_equal :invalid_request, error.error_type
+      assert_equal :invalid_params, error.error_type
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, error.error_code
+      assert_includes error.message, "io.modelcontextprotocol/clientCapabilities"
+      refute_includes error.message, "io.modelcontextprotocol/protocolVersion"
     end
 
-    test ".parse! raises an invalid request error when a triple member has the wrong type" do
+    test ".parse! raises Invalid params when a required field has the wrong type" do
       params = modern_params
       params[:_meta][:"io.modelcontextprotocol/clientCapabilities"] = "not-a-hash"
 
@@ -94,7 +113,20 @@ module MCP
         RequestEnvelope.parse!(params)
       end
 
-      assert_equal :invalid_request, error.error_type
+      assert_equal :invalid_params, error.error_type
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, error.error_code
+    end
+
+    test ".parse! raises Invalid params when the optional clientInfo has the wrong type" do
+      params = modern_params
+      params[:_meta][:"io.modelcontextprotocol/clientInfo"] = "not-a-hash"
+
+      error = assert_raises(Server::RequestHandlerError) do
+        RequestEnvelope.parse!(params)
+      end
+
+      assert_equal :invalid_params, error.error_type
+      assert_includes error.message, "io.modelcontextprotocol/clientInfo"
     end
 
     private
