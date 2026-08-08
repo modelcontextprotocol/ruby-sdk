@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require_relative "../../result_type"
 require_relative "../../transport"
 
 # This file is autoloaded only when `StreamableHTTPTransport` is referenced,
@@ -18,10 +19,16 @@ module MCP
       class StreamableHTTPTransport < Transport
         class InvalidJsonError < StandardError; end
 
+        # `x-accel-buffering: no` tells reverse proxies (nginx and friends) not to buffer the response,
+        # which the spec asks of every SSE stream: a buffering proxy holds events back instead of
+        # delivering them as they are written, and on a long-lived `subscriptions/listen` stream that
+        # also swallows the keepalive frames a dropped peer would otherwise be detected by.
+        # The TypeScript and Python SDKs send it on their SSE responses for the same reason.
         SSE_HEADERS = {
           "content-type" => "text/event-stream",
           "cache-control" => "no-cache",
           "connection" => "keep-alive",
+          "x-accel-buffering" => "no",
         }.freeze
 
         # Secure defaults for stateful mode. Without a finite idle timeout, sessions live until an explicit client DELETE,
@@ -34,6 +41,12 @@ module MCP
         # opt out of expiry and `max_sessions: nil` to opt out of the cap.
         DEFAULT_SESSION_IDLE_TIMEOUT = 1800
         DEFAULT_MAX_SESSIONS = 10_000
+
+        # Cap on concurrent `subscriptions/listen` streams (SEP-2575). Each stream holds an open SSE connection
+        # for its lifetime, so without a bound an unauthenticated client can retain unbounded connections,
+        # like the session-flood case `DEFAULT_MAX_SESSIONS` guards. A listen request past the cap is rejected with HTTP 503;
+        # pass `max_listen_subscriptions: nil` to opt out.
+        DEFAULT_MAX_LISTEN_SUBSCRIPTIONS = 1_000
 
         # Distinguishes "argument omitted, apply the secure default" from an explicit `nil` (opt out of expiry).
         UNSET_IDLE_TIMEOUT = Object.new.freeze
@@ -57,6 +70,13 @@ module MCP
         # Notifications past the cap are not delivered and the notify helpers report `false`,
         # the same non-delivery degradation they have on every other undeliverable path.
         MAX_MODERN_REQUEST_NOTIFICATIONS = 1_000
+
+        # Interval in seconds between SSE keepalive comment frames on a `subscriptions/listen` stream.
+        # Without them a silently dropped connection holds its slot until the next fan-out write fails,
+        # so on a quiet server a dead peer would occupy a `max_listen_subscriptions` slot indefinitely.
+        # The periodic write detects the dead peer and frees the slot. Matches the TypeScript SDK's
+        # 15-second default; pass `listen_keepalive_interval: nil` when an upstream proxy pings the stream.
+        DEFAULT_LISTEN_KEEPALIVE_INTERVAL = 15
 
         # Creates a Streamable HTTP transport that can be mounted as a Rack app.
         #
@@ -87,6 +107,13 @@ module MCP
         #   ownership is not enforced.
         # @param max_request_bytes [Integer] upper bound in bytes on a POST request body; larger
         #   requests are rejected with HTTP 413. Defaults to 4 MiB.
+        # @param max_listen_subscriptions [Integer, nil] cap on concurrent `subscriptions/listen`
+        #   streams; a listen request past the cap is rejected with HTTP 503, and `nil` disables
+        #   the cap.
+        # @param listen_keepalive_interval [Numeric, nil] seconds between SSE keepalive comment frames
+        #   on a `subscriptions/listen` stream; the periodic write frees the stream's slot when the peer
+        #   has gone away. Defaults to `DEFAULT_LISTEN_KEEPALIVE_INTERVAL` (15); pass `nil` to disable
+        #   when an upstream proxy already keeps the stream alive.
         def initialize(
           server,
           stateless: false,
@@ -97,7 +124,9 @@ module MCP
           allowed_hosts: nil,
           dns_rebinding_protection: true,
           session_request_validator: nil,
-          max_request_bytes: DEFAULT_MAX_REQUEST_BYTES
+          max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
+          max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
+          listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL
         )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
@@ -113,6 +142,11 @@ module MCP
           @allowed_hosts = (DEFAULT_LOOPBACK_HOSTS + Array(allowed_hosts)).map(&:downcase).freeze
           @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
+
+          # Maps a `subscriptions/listen` request id to `{ stream: stream_object, filter: honored_subscription_filter }` (SEP-2575).
+          # In-process only; a multi-worker deployment needs an external event bus to fan notifications out across processes,
+          # which is a follow-up.
+          @listen_subscriptions = {}
 
           # Maps a modern request's ephemeral session id to the Array collecting the notifications its handler emits;
           # `handle_modern` registers the sink and flushes it as SSE frames ahead of the final response (SEP-2575).
@@ -147,6 +181,18 @@ module MCP
 
           @max_request_bytes = max_request_bytes
 
+          if !max_listen_subscriptions.nil? && !(max_listen_subscriptions.is_a?(Integer) && max_listen_subscriptions > 0)
+            raise ArgumentError, "max_listen_subscriptions must be a positive Integer or nil"
+          end
+
+          @max_listen_subscriptions = max_listen_subscriptions
+
+          if !listen_keepalive_interval.nil? && !(listen_keepalive_interval.is_a?(Numeric) && listen_keepalive_interval > 0)
+            raise ArgumentError, "listen_keepalive_interval must be a positive number or nil"
+          end
+
+          @listen_keepalive_interval = listen_keepalive_interval
+
           start_reaper_thread if @session_idle_timeout
         end
 
@@ -163,6 +209,15 @@ module MCP
         # JSON-RPC methods whose target name is mirrored into the `Mcp-Name` header (SEP-2575).
         NAME_BEARING_METHODS = [Methods::TOOLS_CALL, Methods::RESOURCES_READ, Methods::PROMPTS_GET].freeze
 
+        # Maps broadcast notification methods to the `SubscriptionFilter` field that opts in to them on
+        # a `subscriptions/listen` stream (SEP-2575). `notifications/resources/updated` is matched by URI
+        # against `resourceSubscriptions` instead.
+        LISTEN_FILTER_FIELDS = {
+          Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED => :toolsListChanged,
+          Methods::NOTIFICATIONS_PROMPTS_LIST_CHANGED => :promptsListChanged,
+          Methods::NOTIFICATIONS_RESOURCES_LIST_CHANGED => :resourcesListChanged,
+        }.freeze
+
         # JSON-RPC error codes that surface as HTTP 400 on the modern path. `-32601` maps to 404
         # (disambiguating an unknown method from a legacy HTTP+SSE 404) and everything else, including internal errors,
         # stays 200, matching the Python SDK's status ladder.
@@ -178,6 +233,12 @@ module MCP
         # Rack app interface. This transport can be mounted as a Rack app.
         def call(env)
           handle_request(Rack::Request.new(env))
+        end
+
+        # The `subscriptions/listen` notification stream (SEP-2575) is served on the modern path,
+        # so `Server#discover` may advertise `listChanged`/`subscribe` capability flags.
+        def serves_subscriptions_listen?
+          true
         end
 
         def handle_request(request)
@@ -235,6 +296,8 @@ module MCP
           @reaper_thread&.kill
           @reaper_thread = nil
 
+          teardown_listen_subscriptions
+
           removed_sessions = @mutex.synchronize do
             @sessions.each_key.filter_map { |session_id| cleanup_session_unsafe(session_id) }
           end
@@ -246,6 +309,12 @@ module MCP
         end
 
         def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
+          # `subscriptions/listen` streams (SEP-2575) receive matching change notifications regardless of the delivery below:
+          # a resource updated by one session's tool call changed globally, so modern subscribers hear about it too.
+          # Runs before the per-request sink and the stateless guard because the listen registry does not depend on sessions,
+          # and a sink capturing the notification for its own response stream must not hide it from other subscriptions.
+          deliver_to_listen_subscriptions(method, params)
+
           notification = {
             jsonrpc: "2.0",
             method: method,
@@ -588,6 +657,10 @@ module MCP
           mismatch_error = validate_modern_headers(request, body, header_version)
           return mismatch_error if mismatch_error
 
+          # `subscriptions/listen` is a long-lived notification stream served at the transport layer;
+          # it never dispatches through `Server#handle`.
+          return handle_subscriptions_listen(body) if body[:method] == Methods::SUBSCRIPTIONS_LISTEN
+
           session = modern_session
           notifications = @mutex.synchronize { @modern_request_sinks[session.session_id] = [] }
           begin
@@ -675,6 +748,253 @@ module MCP
           end
 
           nil
+        end
+
+        # Serves `subscriptions/listen` (SEP-2575): opens a long-lived SSE stream whose first message is
+        # `notifications/subscriptions/acknowledged` with the subset of requested notification types
+        # the server agreed to honor. Notifications delivered on the stream carry `io.modelcontextprotocol/subscriptionId`
+        # (= the listen request id) in `_meta`. A graceful teardown (transport `close`) sends a `SubscriptionsListenResult`
+        # response; an abrupt disconnect sends nothing. A keepalive comment frame is written every
+        # `listen_keepalive_interval` seconds so a dropped connection frees its slot.
+        def handle_subscriptions_listen(body)
+          request_id = body[:id]
+          params = body[:params]
+
+          # A listen frame without an id could never receive stream teardown correlation.
+          unless request_id
+            return invalid_request_response("Invalid Request: subscriptions/listen requires an id")
+          end
+
+          begin
+            if RequestEnvelope.modern?(params)
+              RequestEnvelope.parse!(params, request: params)
+            else
+              return invalid_request_response("Invalid Request: modern requests require the SEP-2575 `_meta` envelope")
+            end
+          rescue Server::RequestHandlerError => e
+            return json_rpc_error_response(
+              status: 400,
+              code: e.error_code || JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+              message: e.message,
+              data: e.error_data,
+              id: request_id,
+            )
+          end
+
+          filter = params[:notifications]
+          unless filter.is_a?(Hash)
+            return json_rpc_error_response(
+              status: 400,
+              code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+              message: "Invalid params: subscriptions/listen requires a `notifications` filter object",
+              id: request_id,
+            )
+          end
+
+          # Best-effort cap check before committing to the SSE response; the registration inside
+          # `listen_sse_body` re-checks atomically for the race between two concurrent listens
+          # crossing the cap together.
+          if listen_subscriptions_full?
+            return too_many_listen_subscriptions_response(request_id)
+          end
+
+          [200, SSE_HEADERS.dup, listen_sse_body(request_id, honored_filter(filter))]
+        end
+
+        def listen_subscriptions_full?
+          return false unless @max_listen_subscriptions
+
+          @mutex.synchronize { @listen_subscriptions.size >= @max_listen_subscriptions }
+        end
+
+        def too_many_listen_subscriptions_response(request_id)
+          json_rpc_error_response(
+            status: 503,
+            code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+            message: "Service unavailable: maximum concurrent subscriptions/listen streams (#{@max_listen_subscriptions}) reached",
+            id: request_id,
+          )
+        end
+
+        # The proc registers the stream and returns, leaving the response open like
+        # the legacy GET stream (`create_sse_body`).
+        def listen_sse_body(request_id, honored)
+          proc do |stream|
+            rejected = false
+            @mutex.synchronize do
+              if @listen_subscriptions.key?(request_id) ||
+                  (@max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions)
+                rejected = true
+              else
+                @listen_subscriptions[request_id] = { stream: stream, filter: honored }
+              end
+            end
+
+            if rejected
+              close_stream_safely(stream)
+            else
+              acknowledgement = {
+                jsonrpc: "2.0",
+                method: Methods::NOTIFICATIONS_SUBSCRIPTIONS_ACKNOWLEDGED,
+                params: {
+                  notifications: honored,
+                  _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
+                },
+              }
+
+              begin
+                send_to_stream(stream, acknowledgement)
+                start_listen_keepalive_thread(request_id)
+              rescue *STREAM_WRITE_ERRORS
+                remove_listen_subscription(request_id)
+                close_stream_safely(stream)
+              end
+            end
+          end
+        end
+
+        # Periodically writes an SSE keepalive comment frame to a listen stream so a silently dropped
+        # connection is detected and its slot freed, rather than held until the next fan-out write.
+        # Mirrors the legacy GET stream's `start_keepalive_thread`; a comment frame (not a data frame)
+        # cannot corrupt an interleaved notification's JSON.
+        def start_listen_keepalive_thread(request_id)
+          return unless @listen_keepalive_interval
+
+          Thread.new do
+            while listen_subscription_active?(request_id)
+              sleep(@listen_keepalive_interval)
+              send_listen_keepalive_ping(request_id)
+            end
+          rescue *STREAM_WRITE_ERRORS
+            # The peer went away; the ensure frees the slot. A dropped listen stream is the normal
+            # way this loop ends, so it is not reported.
+          rescue StandardError => e
+            MCP.configuration.exception_reporter.call(e, { subscription_id: request_id })
+          ensure
+            stream = @mutex.synchronize do
+              subscription = @listen_subscriptions.delete(request_id)
+              subscription && subscription[:stream]
+            end
+            close_stream_safely(stream) if stream
+          end
+        end
+
+        def listen_subscription_active?(request_id)
+          @mutex.synchronize { @listen_subscriptions.key?(request_id) }
+        end
+
+        # Resolves the stream under the lock, then writes outside it so a stalled reader cannot block
+        # every other subscription on `@mutex`. A write error propagates to end the keepalive loop.
+        def send_listen_keepalive_ping(request_id)
+          stream = @mutex.synchronize do
+            subscription = @listen_subscriptions[request_id]
+            subscription && subscription[:stream]
+          end
+          return unless stream
+
+          send_ping_to_stream(stream)
+        end
+
+        # Per SEP-2575, the server MUST NOT send notification types the client has not requested,
+        # and the acknowledgement only includes types the server actually supports
+        # (derived from its declared capabilities).
+        def honored_filter(filter)
+          capabilities = @server.capabilities
+          honored = {}
+          honored[:toolsListChanged] = true if filter[:toolsListChanged] && capability_flag?(capabilities, :tools, :listChanged)
+          honored[:promptsListChanged] = true if filter[:promptsListChanged] && capability_flag?(capabilities, :prompts, :listChanged)
+          honored[:resourcesListChanged] = true if filter[:resourcesListChanged] && capability_flag?(capabilities, :resources, :listChanged)
+
+          subscriptions = filter[:resourceSubscriptions]
+          if capability_flag?(capabilities, :resources, :subscribe) && subscriptions.is_a?(Array) && !subscriptions.empty?
+            honored[:resourceSubscriptions] = subscriptions
+          end
+
+          honored
+        end
+
+        # Reads a nested capability flag tolerating both symbol and string keys, since user-supplied capability hashes arrive
+        # in either form. The flag that promises delivery (`listChanged` / `subscribe`) decides honoring, the same derivation
+        # `Server#discover` uses for its era-aware capability stripping; the mere presence of the primitive's capability is not enough.
+        def capability_flag?(capabilities, name, flag)
+          value = capabilities[name] || capabilities[name.to_s]
+          return false unless value.is_a?(Hash)
+
+          !!(value[flag] || value[flag.to_s])
+        end
+
+        # Fans a notification out to every `subscriptions/listen` stream whose honored filter opted in to it,
+        # stamping the correlating `subscriptionId` into `_meta`. Matching against the honored filter
+        # (not the requested one) enforces the MUST NOT-send-unrequested-types rule.
+        def deliver_to_listen_subscriptions(method, params)
+          field = LISTEN_FILTER_FIELDS[method]
+          return if field.nil? && method != Methods::NOTIFICATIONS_RESOURCES_UPDATED
+
+          # The matching snapshot is taken under `@mutex`, but stream writes happen outside it:
+          # a slow or stalled subscriber must not block the transport, matching the legacy delivery paths.
+          matched = @mutex.synchronize do
+            @listen_subscriptions.filter_map do |request_id, subscription|
+              hit = if field
+                subscription[:filter][field]
+              else
+                uris = subscription[:filter][:resourceSubscriptions]
+                uri = params.is_a?(Hash) ? params[:uri] || params["uri"] : nil
+                uris.is_a?(Array) && uris.include?(uri)
+              end
+
+              [request_id, subscription[:stream]] if hit
+            end
+          end
+
+          matched.each do |request_id, stream|
+            meta = { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id }
+            notification_params = (params || {}).merge(_meta: meta)
+            notification = { jsonrpc: "2.0", method: method, params: notification_params }
+
+            begin
+              send_to_stream(stream, notification)
+            rescue *STREAM_WRITE_ERRORS => e
+              MCP.configuration.exception_reporter.call(
+                e,
+                { subscription_id: request_id, error: "Failed to send notification" },
+              )
+              remove_listen_subscription(request_id)
+              close_stream_safely(stream)
+            end
+          end
+        end
+
+        def remove_listen_subscription(request_id)
+          @mutex.synchronize { @listen_subscriptions.delete(request_id) }
+        end
+
+        # Graceful teardown (SEP-2575): each open listen stream receives its `SubscriptionsListenResult` response
+        # before the stream closes.
+        def teardown_listen_subscriptions
+          removed = @mutex.synchronize do
+            subscriptions = @listen_subscriptions.dup
+            @listen_subscriptions.clear
+            subscriptions
+          end
+
+          removed.each do |request_id, subscription|
+            begin
+              send_to_stream(subscription[:stream], {
+                jsonrpc: "2.0",
+                id: request_id,
+                result: {
+                  # `SubscriptionsListenResult` is served at the transport layer and never
+                  # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
+                  # stamped at its construction site.
+                  resultType: ResultType::COMPLETE,
+                  _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
+                },
+              })
+            rescue *STREAM_WRITE_ERRORS
+              nil
+            end
+            close_stream_safely(subscription[:stream])
+          end
         end
 
         def header_mismatch_response(message, id)

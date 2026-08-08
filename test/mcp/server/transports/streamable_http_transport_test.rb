@@ -41,7 +41,9 @@ module MCP
             prompts: [],
             resources: [],
           )
-          @transport = StreamableHTTPTransport.new(@server)
+          # Disable the listen keepalive by default so opening a listen stream in a test does not
+          # spawn a background timer thread; the keepalive is exercised by its own dedicated tests.
+          @transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil)
         end
 
         teardown do
@@ -5772,6 +5774,248 @@ module MCP
           transport.close
         end
 
+        test "subscriptions/listen opens an SSE stream and acknowledges the honored subset first" do
+          # `resourceSubscriptions` honoring requires the `resources.subscribe` capability flag,
+          # which the server defaults do not declare.
+          server = Server.new(
+            name: "listen_test",
+            capabilities: { tools: { listChanged: true }, resources: { listChanged: true, subscribe: true } },
+          )
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { toolsListChanged: true, resourceSubscriptions: ["file:///a.txt"] },
+            transport: transport,
+          )
+
+          events = sse_events(io)
+          assert_equal(1, events.size)
+          ack = events[0]
+          assert_equal("notifications/subscriptions/acknowledged", ack["method"])
+          assert_equal(
+            { "toolsListChanged" => true, "resourceSubscriptions" => ["file:///a.txt"] },
+            ack.dig("params", "notifications"),
+          )
+          assert_equal("listen-1", ack.dig("params", "_meta", "io.modelcontextprotocol/subscriptionId"))
+        ensure
+          transport.close
+        end
+
+        test "SSE responses disable proxy buffering" do
+          # The spec asks servers to send `X-Accel-Buffering: no` on SSE streams so a reverse proxy
+          # delivers events as they are written; on a listen stream, buffering would also swallow
+          # the keepalive frames that detect a dropped peer.
+          listen = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+
+          session_id = initialize_test_session
+          get_stream = @transport.handle_request(create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+
+          assert_equal("no", listen[1]["x-accel-buffering"])
+          assert_equal("no", get_stream[1]["x-accel-buffering"])
+        end
+
+        test "subscriptions/listen acknowledgement omits notification types the server does not support" do
+          server = Server.new(name: "listen_test", capabilities: { tools: { listChanged: true } })
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { toolsListChanged: true, promptsListChanged: true, resourceSubscriptions: ["file:///a.txt"] },
+            transport: transport,
+          )
+
+          ack = sse_events(io)[0]
+          assert_equal({ "toolsListChanged" => true }, ack.dig("params", "notifications"))
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen requires a notifications filter object" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: {}),
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "subscriptions/listen requires the modern _meta envelope" do
+          response = @transport.handle_request(modern_rack_request(
+            { jsonrpc: "2.0", method: "subscriptions/listen", id: "listen-1", params: { notifications: {} } }.to_json,
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32600, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "subscriptions/listen delivers only opted-in notifications with the subscriptionId" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+
+          @server.notify_tools_list_changed
+          # Not opted in: MUST NOT be delivered.
+          @server.notify_prompts_list_changed
+
+          events = sse_events(io)
+          assert_equal 2, events.size
+          assert_equal "notifications/subscriptions/acknowledged", events[0]["method"]
+          assert_equal "notifications/tools/list_changed", events[1]["method"]
+          assert_equal "listen-1", events[1].dig("params", "_meta", "io.modelcontextprotocol/subscriptionId")
+        end
+
+        test "subscriptions/listen delivers resource updates only for subscribed URIs" do
+          server = Server.new(
+            name: "listen_test",
+            capabilities: { resources: { listChanged: true, subscribe: true } },
+          )
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { resourceSubscriptions: ["file:///subscribed.txt"] },
+            transport: transport,
+          )
+
+          # `**{}` keeps the params Hash positional on Ruby 2.7, matching the other `send_notification` tests.
+          transport.send_notification("notifications/resources/updated", { uri: "file:///subscribed.txt" }, **{})
+          transport.send_notification("notifications/resources/updated", { uri: "file:///other.txt" }, **{})
+
+          events = sse_events(io)
+          assert_equal(2, events.size)
+          assert_equal("notifications/resources/updated", events[1]["method"])
+          assert_equal("file:///subscribed.txt", events[1].dig("params", "uri"))
+          assert_equal("listen-1", events[1].dig("params", "_meta", "io.modelcontextprotocol/subscriptionId"))
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen streams for different subscriptions receive their own subscriptionId" do
+          first = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          second = open_listen_stream(id: "listen-2", notifications: { toolsListChanged: true })
+
+          @server.notify_tools_list_changed
+
+          first_events = sse_events(first)
+          second_events = sse_events(second)
+          assert_equal "listen-1", first_events[1].dig("params", "_meta", "io.modelcontextprotocol/subscriptionId")
+          assert_equal "listen-2", second_events[1].dig("params", "_meta", "io.modelcontextprotocol/subscriptionId")
+        end
+
+        test "subscriptions/listen closes gracefully with a SubscriptionsListenResult on transport close" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+
+          @transport.close
+
+          events = sse_events(io)
+          result = events.last
+          assert_equal "listen-1", result["id"]
+          assert_equal "listen-1", result.dig("result", "_meta", "io.modelcontextprotocol/subscriptionId")
+          # `SubscriptionsListenResult` is a 2026-07-28 result, so it carries the REQUIRED `resultType`.
+          assert_equal "complete", result.dig("result", "resultType")
+          assert_predicate io, :closed?
+
+          # The subscription is gone: further notifications are not delivered anywhere.
+          @server.notify_tools_list_changed
+          assert_equal events, sse_events(io)
+        end
+
+        test "subscriptions/listen honoring reads the capability flags, not capability presence" do
+          # A server declaring `tools` without `listChanged: true` promises no
+          # list-changed delivery, so the acknowledgement omits the type.
+          server = Server.new(name: "listen_test", capabilities: { tools: {}, resources: { listChanged: true } })
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { toolsListChanged: true, resourcesListChanged: true, resourceSubscriptions: ["file:///a.txt"] },
+            transport: transport,
+          )
+
+          ack = sse_events(io)[0]
+          assert_equal({ "resourcesListChanged" => true }, ack.dig("params", "notifications"))
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen past the concurrent stream cap is rejected with 503" do
+          transport = StreamableHTTPTransport.new(@server, max_listen_subscriptions: 1)
+          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-2", params: { notifications: { toolsListChanged: true } }),
+          ))
+
+          assert_equal(503, response[0])
+          body = JSON.parse(response[2][0])
+          assert_equal("listen-2", body["id"])
+          assert_includes(body.dig("error", "message"), "maximum concurrent subscriptions/listen streams")
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen rejects a duplicate subscription id by closing the new stream" do
+          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+
+          duplicate = StringIO.new
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+          response[2].call(duplicate)
+
+          assert_predicate duplicate, :closed?
+        end
+
+        test "listen keepalive writes a comment frame outside the mutex" do
+          # Register a subscription backed by a mutex-probing stream, then invoke the ping directly.
+          mutex = @transport.instance_variable_get(:@mutex)
+          writes = { total: 0, under_mutex: 0 }
+          ping = nil
+          stream = Object.new
+          stream.define_singleton_method(:write) do |data|
+            writes[:total] += 1
+            mutex.try_lock ? mutex.unlock : writes[:under_mutex] += 1
+            ping = data
+          end
+          stream.define_singleton_method(:flush) {}
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = { stream: stream, filter: {} }
+
+          @transport.send(:send_listen_keepalive_ping, "listen-1")
+
+          assert_equal 1, writes[:total]
+          assert_equal 0, writes[:under_mutex], "keepalive write must not hold @mutex"
+          assert_match(/\A: ping /, ping)
+        end
+
+        test "listen keepalive frees the slot and closes the stream when the peer is gone" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 0.01)
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          io.define_singleton_method(:write) { |_data| raise Errno::ECONNRESET }
+
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+          until transport.instance_variable_get(:@listen_subscriptions).empty?
+            flunk("keepalive did not free the slot for a dead peer") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.01)
+          end
+
+          assert_predicate io, :closed?
+        ensure
+          transport.close
+        end
+
+        test "listen keepalive is not started when the interval is nil" do
+          before = Thread.list.size
+          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+
+          assert_equal before, Thread.list.size, "a nil interval must not spawn a keepalive thread"
+        end
+
+        test "listen_keepalive_interval rejects a non-positive value" do
+          assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, listen_keepalive_interval: 0) }
+          assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, listen_keepalive_interval: -1) }
+        end
+
         private
 
         def initialize_test_session(id: "init")
@@ -5884,6 +6128,41 @@ module MCP
               },
             ),
           }.to_json
+        end
+
+        def modern_listen_body(id:, params:)
+          {
+            jsonrpc: "2.0",
+            method: "subscriptions/listen",
+            id: id,
+            params: params.merge(
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            ),
+          }.to_json
+        end
+
+        # Opens a `subscriptions/listen` stream on the modern path and returns the StringIO
+        # backing the SSE stream (already carrying the acknowledgement event).
+        def open_listen_stream(id:, notifications:, transport: @transport)
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: id, params: { notifications: notifications }),
+          ))
+
+          assert_equal(200, response[0])
+          assert_equal("text/event-stream", response[1]["content-type"])
+
+          io = StringIO.new
+          response[2].call(io)
+          io
+        end
+
+        # Parses every `data:` event written to an SSE StringIO.
+        def sse_events(io)
+          io.string.scan(/^data: (.+)$/).map { |match| JSON.parse(match[0]) }
         end
       end
     end
