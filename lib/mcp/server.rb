@@ -144,6 +144,18 @@ module MCP
     # Allowed values for the SEP-2549 `cacheScope` cache hint.
     CACHE_SCOPES = ["public", "private"].freeze
 
+    # Methods whose results are cacheable per SEP-2549.
+    # On the modern wire (2026-07-28) the `ttlMs`/`cacheScope` hints are REQUIRED on these results,
+    # so unset hints get the spec defaults there; on stable protocol versions emission stays opt-in
+    # via `apply_cache_metadata`.
+    CACHEABLE_RESULT_METHODS = [
+      Methods::TOOLS_LIST,
+      Methods::PROMPTS_LIST,
+      Methods::RESOURCES_LIST,
+      Methods::RESOURCES_TEMPLATES_LIST,
+      Methods::RESOURCES_READ,
+    ].freeze
+
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
     attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope
 
@@ -639,6 +651,18 @@ module MCP
             result = result.merge(resultType: ResultType::COMPLETE)
           end
 
+          # SEP-2549 makes the `ttlMs`/`cacheScope` hints REQUIRED on cacheable results at 2026-07-28,
+          # so unconfigured servers get `ttlMs: 0` (do not cache) and `cacheScope: "private"`:
+          # the spec names no default scope, and `"private"` is the side that cannot leak
+          # a user-dependent result through a shared cache, matching the TypeScript SDK's default
+          # and `server/discover`. Values already in the result win.
+          # Only complete results are cacheable: an SEP-2322 `input_required` round trip must not be stamped
+          # (the stamp above guarantees `resultType` is present on every modern Hash result by this point).
+          if envelope && result.is_a?(Hash) && CACHEABLE_RESULT_METHODS.include?(method) &&
+              result[:resultType] == ResultType::COMPLETE && !(result.key?(:ttlMs) && result.key?(:cacheScope))
+            result = { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "private" }.merge(result)
+          end
+
           result
         rescue CancelledError => e
           add_instrumentation_data(cancelled: true, cancellation_reason: e.reason)
@@ -1082,15 +1106,16 @@ module MCP
     end
 
     # Adds the SEP-2549 cache hints (`ttlMs`, `cacheScope`) to a result. Emission is opt-in: nothing is added
-    # unless the server was configured with `ttl_ms`/`cache_scope` or the result already carries one of the fields, in
-    # which case the missing one is filled with the spec defaults (`ttlMs: 0` = do not cache, `cacheScope: "public"`).
+    # unless the server was configured with `ttl_ms`/`cache_scope` or the result already carries one of the fields,
+    # in which case the missing one is filled with `ttlMs: 0` (do not cache) or `cacheScope: "private"`,
+    # the side that cannot leak a user-dependent result through a shared cache (the TypeScript SDK's default).
     # Values already in the result win, enabling per-result overrides.
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2549
     def apply_cache_metadata(result)
       explicit = result.key?(:ttlMs) || result.key?(:cacheScope)
       return result if @ttl_ms.nil? && @cache_scope.nil? && !explicit
 
-      { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "public" }.merge(result)
+      { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "private" }.merge(result)
     end
 
     def complete(params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
