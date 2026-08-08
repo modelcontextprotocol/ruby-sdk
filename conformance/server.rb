@@ -257,7 +257,9 @@ module Conformance
                 name: { type: "string", default: "John Doe" },
                 age: { type: "integer", default: 30 },
                 score: { type: "number", default: 95.5 },
-                status: { type: "string", enum: ["active", "inactive", "pending"], default: "active" },
+                status: MCP::Elicitation::EnumSchema.untitled_single_select(
+                  values: ["active", "inactive", "pending"], default: "active",
+                ).to_h,
                 verified: { type: "boolean", default: true },
               },
             },
@@ -273,45 +275,37 @@ module Conformance
 
       class << self
         def call(server_context:, **_args)
+          # Built with the SEP-1330 builders so the conformance run exercises the same schemas
+          # the SDK produces for users.
           result = server_context.create_form_elicitation(
             message: "Please select options",
             requested_schema: {
               type: "object",
               properties: {
-                untitledSingle: {
-                  type: "string",
-                  enum: ["option1", "option2", "option3"],
-                },
-                titledSingle: {
-                  type: "string",
-                  oneOf: [
-                    { const: "value1", title: "First Option" },
-                    { const: "value2", title: "Second Option" },
-                    { const: "value3", title: "Third Option" },
+                untitledSingle: MCP::Elicitation::EnumSchema.untitled_single_select(
+                  values: ["option1", "option2", "option3"],
+                ).to_h,
+                titledSingle: MCP::Elicitation::EnumSchema.titled_single_select(
+                  options: [
+                    { value: "value1", title: "First Option" },
+                    { value: "value2", title: "Second Option" },
+                    { value: "value3", title: "Third Option" },
                   ],
-                },
-                legacyEnum: {
-                  type: "string",
-                  enum: ["opt1", "opt2", "opt3"],
-                  enumNames: ["Option One", "Option Two", "Option Three"],
-                },
-                untitledMulti: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                    enum: ["option1", "option2", "option3"],
-                  },
-                },
-                titledMulti: {
-                  type: "array",
-                  items: {
-                    anyOf: [
-                      { const: "value1", title: "First Choice" },
-                      { const: "value2", title: "Second Choice" },
-                      { const: "value3", title: "Third Choice" },
-                    ],
-                  },
-                },
+                ).to_h,
+                legacyEnum: MCP::Elicitation::EnumSchema.legacy_titled(
+                  values: ["opt1", "opt2", "opt3"],
+                  value_titles: ["Option One", "Option Two", "Option Three"],
+                ).to_h,
+                untitledMulti: MCP::Elicitation::EnumSchema.untitled_multi_select(
+                  values: ["option1", "option2", "option3"],
+                ).to_h,
+                titledMulti: MCP::Elicitation::EnumSchema.titled_multi_select(
+                  options: [
+                    { value: "value1", title: "First Choice" },
+                    { value: "value2", title: "Second Choice" },
+                    { value: "value3", title: "Third Choice" },
+                  ],
+                ).to_h,
               },
             },
           )

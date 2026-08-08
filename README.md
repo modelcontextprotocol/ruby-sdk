@@ -1984,6 +1984,64 @@ server.define_tool(name: "configure_deploy", description: "Configure a deploymen
 end
 ```
 
+#### Enum Schemas
+
+For enumerated choices, use `MCP::Elicitation::EnumSchema` to construct the canonical schema shapes per
+[SEP-1330](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1330) instead of building
+the underlying Hash by hand. The five class methods cover titled and untitled, single-select and multi-select,
+plus the legacy `enumNames` form retained for backward compatibility:
+
+```ruby
+size_schema = MCP::Elicitation::EnumSchema.titled_single_select(
+  options: [
+    { value: "s", title: "Small" },
+    { value: "m", title: "Medium" },
+    { value: "l", title: "Large" },
+  ],
+  default: "m",
+)
+
+tags_schema = MCP::Elicitation::EnumSchema.untitled_multi_select(
+  values: ["urgent", "billing", "feedback"],
+)
+
+result = server_context.create_form_elicitation(
+  message: "Tell us about your order",
+  requested_schema: {
+    type: "object",
+    properties: {
+      size: size_schema.to_h,
+      tags: tags_schema.to_h,
+    },
+    required: ["size"],
+  },
+)
+```
+
+The available builders are `untitled_single_select`, `titled_single_select`, `untitled_multi_select`, `titled_multi_select`,
+and `legacy_titled`. Each accepts optional `default:`, `title:`, and `description:`.
+
+The same builders produce the `requestedSchema` of an `elicitation/create` request embedded in a SEP-2322 `input_required` result,
+which is how elicitation reaches clients on the stateless 2026-07-28 lifecycle:
+
+```ruby
+MCP::Server::InputRequiredResult.new(
+  input_requests: {
+    "size" => {
+      method: "elicitation/create",
+      params: {
+        message: "Pick a size",
+        requestedSchema: {
+          type: "object",
+          properties: { size: size_schema.to_h },
+          required: ["size"],
+        },
+      },
+    },
+  },
+)
+```
+
 #### URL Mode
 
 URL mode directs the user to an external URL for out-of-band interactions such as OAuth flows:
