@@ -5357,6 +5357,7 @@ module MCP
         test "modern POST without the Mcp-Name header on a name-bearing method returns 400 with -32020" do
           response = @transport.handle_request(modern_rack_request(
             modern_body("tools/call", { name: "some_tool", arguments: {} }),
+            name_header: nil,
           ))
 
           assert_equal 400, response[0]
@@ -5788,23 +5789,31 @@ module MCP
         end
 
         # Builds a POST request routed to the modern path via the `MCP-Protocol-Version` header.
-        # Mirrors what a conforming modern client sends: `Mcp-Method` is required on every modern POST,
-        # so it defaults to the body's method. Pass `method_header: nil` to omit it
+        # Mirrors what a conforming modern client sends: `Mcp-Method` is required on every modern POST
+        # and `Mcp-Name` on a name-bearing method whose body carries a target name, so both default to
+        # the body's values. Pass `method_header: nil` / `name_header: nil` to omit one
         # (for tests of the requirement itself) or a String to send a specific value.
-        def modern_rack_request(body, version: "2026-07-28", headers: {}, method_header: :from_body)
-          derived_method = if method_header == :from_body
-            begin
-              parsed = JSON.parse(body)
-              parsed["method"] if parsed.is_a?(Hash)
-            rescue JSON::ParserError
-              nil
+        def modern_rack_request(body, version: "2026-07-28", headers: {}, method_header: :from_body,
+          name_header: :from_body)
+          parsed = begin
+            JSON.parse(body)
+          rescue JSON::ParserError
+            nil
+          end
+          parsed = nil unless parsed.is_a?(Hash)
+
+          derived_method = method_header == :from_body ? parsed&.dig("method") : method_header
+          derived_name = if name_header == :from_body
+            if StreamableHTTPTransport::NAME_BEARING_METHODS.include?(parsed&.dig("method"))
+              parsed.dig("params", "name") || parsed.dig("params", "uri")
             end
           else
-            method_header
+            name_header
           end
 
           base_headers = { "CONTENT_TYPE" => "application/json", "HTTP_MCP_PROTOCOL_VERSION" => version }
           base_headers["HTTP_MCP_METHOD"] = derived_method if derived_method
+          base_headers["HTTP_MCP_NAME"] = derived_name if derived_name
           create_rack_request("POST", "/", base_headers.merge(headers), body)
         end
 
