@@ -4142,6 +4142,42 @@ module MCP
       refute Apps.client_supports?(server.client_capabilities)
     end
 
+    # SEP-2322 makes `resultType` REQUIRED on every result of a 2026-07-28 server;
+    # `"complete"` is the standard shape, and legacy results stay unstamped.
+    test "modern results carry resultType complete" do
+      server = Server.new(name: "result_type_test", tools: [result_type_tool])
+
+      [
+        modern_request(Methods::TOOLS_LIST, {}),
+        modern_request(Methods::PING, {}),
+        modern_request(Methods::TOOLS_CALL, { name: "result_type_tool", arguments: {} }),
+      ].each do |request|
+        response = server.handle(request)
+        assert_equal "complete", response.dig(:result, :resultType), "expected stamp for #{request[:method]}"
+      end
+    end
+
+    test "legacy results carry no resultType" do
+      server = Server.new(name: "result_type_test", tools: [result_type_tool])
+
+      [
+        { jsonrpc: "2.0", method: Methods::TOOLS_LIST, id: 1 },
+        { jsonrpc: "2.0", method: Methods::PING, id: 2 },
+        { jsonrpc: "2.0", method: Methods::TOOLS_CALL, id: 3, params: { name: "result_type_tool", arguments: {} } },
+      ].each do |request|
+        response = server.handle(request)
+        refute response[:result].key?(:resultType), "expected no stamp for #{request[:method]}"
+      end
+    end
+
+    test "server/discover carries resultType complete" do
+      server = Server.new(name: "result_type_test", tools: [result_type_tool])
+
+      response = server.handle({ jsonrpc: "2.0", method: Methods::SERVER_DISCOVER, id: 1 })
+
+      assert_equal "complete", response.dig(:result, :resultType)
+    end
+
     private
 
     # Builds a request carrying the SEP-2575 modern `_meta` envelope.
@@ -4158,6 +4194,12 @@ module MCP
           },
         ),
       }
+    end
+
+    def result_type_tool
+      @result_type_tool ||= Tool.define(name: "result_type_tool") do |**|
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
     end
   end
 end

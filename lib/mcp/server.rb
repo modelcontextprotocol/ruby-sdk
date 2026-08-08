@@ -621,6 +621,14 @@ module MCP
             result = serialize_input_required_result(result, envelope: envelope, request: params)
           end
 
+          # SEP-2322 makes `resultType` REQUIRED on every result a 2026-07-28 server returns;
+          # a missing value is only tolerated FROM earlier protocol versions. Results that already carry
+          # a discriminator keep it; everything else on the modern wire is the standard shape,
+          # `"complete"`. Legacy results stay unstamped: pre-2026 clients do not know the field.
+          if envelope && result.is_a?(Hash) && !result.key?(:resultType)
+            result = result.merge(resultType: ResultType::COMPLETE)
+          end
+
           result
         rescue CancelledError => e
           add_instrumentation_data(cancelled: true, cancellation_reason: e.reason)
@@ -837,7 +845,13 @@ module MCP
         capabilities: capabilities,
         instructions: instructions,
         _meta: { RequestEnvelope::SERVER_INFO_META_KEY => server_info },
-      }.compact.merge(ttlMs: ttl_ms || 0, cacheScope: cache_scope || "private")
+      }.compact.merge(
+        ttlMs: ttl_ms || 0,
+        cacheScope: cache_scope || "private",
+        # `server/discover` is exempt from the `_meta` envelope, so the central modern-result stamping does not see it;
+        # `DiscoverResult` is still a 2026-07-28 result and carries the REQUIRED `resultType` directly.
+        resultType: ResultType::COMPLETE,
+      )
     end
 
     def configure_logging_level(request, session: nil)
