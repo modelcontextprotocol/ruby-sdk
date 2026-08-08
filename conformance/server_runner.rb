@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Starts the conformance server and runs `npx @modelcontextprotocol/conformance` against it.
+# Starts the conformance server and runs `npx @modelcontextprotocol/conformance@alpha` against it.
 require "English"
 require "net/http"
 require_relative "server"
@@ -31,7 +31,7 @@ module Conformance
     def build_command
       expected_failures_yml = File.expand_path("expected_failures.yml", __dir__)
 
-      npx_command = ["npx", "--yes", "@modelcontextprotocol/conformance", "server", "--url", "http://localhost:#{@port}/mcp"]
+      npx_command = ["npx", "--yes", "@modelcontextprotocol/conformance@alpha", "server", "--url", "http://localhost:#{@port}/mcp"]
       npx_command += ["--scenario", @scenario] if @scenario
       npx_command += ["--spec-version", @spec_version] if @spec_version
       npx_command += ["--verbose"] if @verbose
