@@ -10,6 +10,7 @@ require_relative "progress"
 require_relative "protocol_deprecations"
 require_relative "server_context"
 require_relative "server/capabilities"
+require_relative "server/input_required_result"
 require_relative "server/pagination"
 require_relative "server/transports"
 
@@ -587,7 +588,10 @@ module MCP
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
-            build_read_resource_result(read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope))
+            contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+
+            # An SEP-2322 `input_required` result must not be wrapped as `contents` or stamped with SEP-2549 cache hints.
+            contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
             validate_resource_subscription_params!(params)
             dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
@@ -609,6 +613,12 @@ module MCP
           if cancellation&.cancelled?
             add_instrumentation_data(cancelled: true, cancellation_reason: cancellation.reason)
             next JsonRpcHandler::NO_RESPONSE
+          end
+
+          # Runs after the cancellation check so a cancelled request stays suppressed
+          # instead of turning into a gate error response.
+          if result.is_a?(InputRequiredResult)
+            result = serialize_input_required_result(result, envelope: envelope, request: params)
           end
 
           result
@@ -667,6 +677,40 @@ module MCP
           error_type: :invalid_request,
         )
       end
+    end
+
+    # Central gate and serializer for SEP-2322 `input_required` results, run once in the dispatch lambda for
+    # whichever handler produced one. The result type exists only in the 2026-07-28 stateless lifecycle,
+    # so a legacy request (no envelope) must not receive it: pre-2026 clients treat an unknown `resultType` as
+    # a final result. The capability gate enforces the SEP-2575 rule that servers MUST NOT rely on
+    # (or embed requests for) capabilities the client did not declare, and reports every missing capability at
+    # once so the client sees the full set.
+    def serialize_input_required_result(result, envelope:, request:)
+      if envelope.nil?
+        raise RequestHandlerError.new(
+          "input_required results require the 2026-07-28 stateless lifecycle (SEP-2322)",
+          request,
+          error_type: :internal_error,
+        )
+      end
+
+      missing = result.missing_client_capabilities(envelope.client_capabilities)
+      raise MissingRequiredClientCapabilityError.new(missing, request) unless missing.empty?
+
+      add_instrumentation_data(input_required: true)
+      result.to_h
+    end
+
+    # Extracts the SEP-2322 retry fields a client sends when re-issuing a request:
+    # `inputResponses` (answers keyed like the earlier `inputRequests`) and the echoed opaque `requestState`.
+    # They are params-top-level siblings of `name`/`arguments`/ `uri`, not `_meta` entries.
+    def mrtr_retry_fields(params)
+      return { input_responses: nil, request_state: nil } unless params.is_a?(Hash)
+
+      {
+        input_responses: params[:inputResponses] || params["inputResponses"],
+        request_state: params[:requestState] || params["requestState"],
+      }
     end
 
     def handle_cancelled_notification(params, session: nil)
@@ -864,8 +908,21 @@ module MCP
       progress_token = request.dig(:_meta, :progressToken)
 
       response = call_tool_with_args(
-        tool, arguments, server_context_with_meta(request), progress_token: progress_token, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope
+        tool,
+        arguments,
+        server_context_with_meta(request),
+        progress_token: progress_token,
+        session: session,
+        related_request_id: related_request_id,
+        cancellation: cancellation,
+        envelope: envelope,
+        retry_fields: mrtr_retry_fields(request),
       )
+      # An SEP-2322 `input_required` result is not a tool result: output schema
+      # validation would run against a `nil` `structuredContent` and the structured
+      # content fallback does not apply. The dispatch lambda serializes it.
+      return response if response.is_a?(InputRequiredResult)
+
       result = response.to_h
       validate_tool_call_result!(tool, result)
       serialize_structured_content_fallback(
@@ -1078,6 +1135,7 @@ module MCP
       meta_source = request.is_a?(Hash) ? request : {}
       progress_token = meta_source.dig(:_meta, :progressToken)
       progress = Progress.new(notification_target: session, progress_token: progress_token, related_request_id: related_request_id)
+      retry_fields = mrtr_retry_fields(meta_source)
       ServerContext.new(
         server_context_with_meta(meta_source),
         progress: progress,
@@ -1085,6 +1143,8 @@ module MCP
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        input_responses: retry_fields[:input_responses],
+        request_state: retry_fields[:request_state],
       )
     end
 
@@ -1144,7 +1204,7 @@ module MCP
       end
     end
 
-    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, retry_fields: nil)
       # Transports parse incoming JSON with `symbolize_names: true`, so `arguments` already arrives symbolized
       # at every nesting level. This top-level transform only guards callers that hand in string-keyed top-level arguments;
       # it does not recurse, and nested object keys remain symbols. Tools therefore receive symbol keys all the way down.
@@ -1160,6 +1220,8 @@ module MCP
           related_request_id: related_request_id,
           cancellation: cancellation,
           envelope: envelope,
+          input_responses: retry_fields&.fetch(:input_responses, nil),
+          request_state: retry_fields&.fetch(:request_state, nil),
         )
         tool.call(**args, server_context: server_context)
       else
@@ -1168,11 +1230,13 @@ module MCP
     end
 
     def call_prompt_template_with_args(prompt, args, server_context)
-      if accepts_server_context?(prompt.method(:template))
-        prompt.template(args, server_context: server_context).to_h
+      raw_result = if accepts_server_context?(prompt.method(:template))
+        prompt.template(args, server_context: server_context)
       else
-        prompt.template(args).to_h
+        prompt.template(args)
       end
+
+      raw_result.is_a?(InputRequiredResult) ? raw_result : raw_result.to_h
     end
 
     def server_context_with_meta(request)

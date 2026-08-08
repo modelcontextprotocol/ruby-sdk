@@ -376,6 +376,136 @@ module MCP
       )
     end
 
+    test "#handle tools/call serializes an input_required result on a modern request" do
+      server = Server.new(name: "mrtr_test", tools: [])
+      server.define_tool(name: "mrtr_tool") do |server_context:|
+        if server_context.input_responses
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { region: { method: "elicitation/create", params: { message: "Which region?" } } },
+            request_state: "state-1",
+          )
+        end
+      end
+
+      response = server.handle(
+        modern_request("tools/call", { name: "mrtr_tool" }, capabilities: { elicitation: { form: {} } }),
+      )
+      result = response[:result]
+
+      assert_equal "input_required", result[:resultType]
+      assert_equal "state-1", result[:requestState]
+      assert_equal(
+        { method: "elicitation/create", params: { message: "Which region?" } },
+        result.dig(:inputRequests, "region"),
+      )
+    end
+
+    test "#handle tools/call retry leg exposes input responses and request state to the handler" do
+      server = Server.new(name: "mrtr_test", tools: [])
+      seen = nil
+      server.define_tool(name: "mrtr_tool") do |server_context:|
+        seen = {
+          input_responses: server_context.input_responses,
+          request_state: server_context.request_state,
+          region: server_context.input_response(:region),
+        }
+        Tool::Response.new([{ type: "text", text: "done" }])
+      end
+
+      request = modern_request("tools/call", {
+        name: "mrtr_tool",
+        arguments: {},
+        inputResponses: { region: { action: "accept", content: { value: "us-east-1" } } },
+        requestState: "state-1",
+      })
+      response = server.handle(request)
+
+      refute_nil response[:result]
+      assert_equal "state-1", seen[:request_state]
+      assert_equal({ action: "accept", content: { value: "us-east-1" } }, seen[:region])
+      assert_equal seen[:region], seen[:input_responses][:region]
+    end
+
+    test "#handle rejects an input_required result on a legacy request with an internal error" do
+      # The result type exists only in the 2026-07-28 lifecycle: pre-2026 clients treat
+      # an unknown resultType as a final result, so it must never reach them.
+      server = Server.new(name: "mrtr_test", tools: [])
+      server.define_tool(name: "mrtr_tool") do
+        Server::InputRequiredResult.new(request_state: "state-1")
+      end
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "mrtr_tool" },
+      })
+
+      assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, response.dig(:error, :code)
+    end
+
+    test "#handle rejects an input_required result whose embedded requests exceed declared capabilities" do
+      server = Server.new(name: "mrtr_test", tools: [])
+      server.define_tool(name: "mrtr_tool") do
+        Server::InputRequiredResult.new(input_requests: {
+          region: { method: "elicitation/create", params: { message: "?" } },
+          roots: { method: "roots/list" },
+        })
+      end
+
+      response = server.handle(modern_request("tools/call", { name: "mrtr_tool" }, capabilities: {}))
+
+      assert_equal ErrorCodes::MISSING_REQUIRED_CLIENT_CAPABILITY, response.dig(:error, :code)
+      assert_equal(
+        { elicitation: { form: {} }, roots: {} },
+        response.dig(:error, :data, :requiredCapabilities),
+      )
+    end
+
+    test "#handle tools/call input_required bypasses output schema validation" do
+      configuration = Configuration.new(validate_tool_call_results: true)
+      server = Server.new(name: "mrtr_test", tools: [], configuration: configuration)
+      server.define_tool(name: "mrtr_tool", output_schema: { properties: { value: { type: "string" } }, required: ["value"] }) do
+        Server::InputRequiredResult.new(request_state: "state-1")
+      end
+
+      response = server.handle(modern_request("tools/call", { name: "mrtr_tool" }))
+
+      assert_equal "input_required", response.dig(:result, :resultType)
+    end
+
+    test "#handle prompts/get serializes an input_required result on a modern request" do
+      server = Server.new(name: "mrtr_test")
+      server.define_prompt(name: "mrtr_prompt", arguments: []) do |_args, server_context:|
+        server_context.request_state # participates via server_context:
+        Server::InputRequiredResult.new(request_state: "prompt-state")
+      end
+
+      response = server.handle(modern_request("prompts/get", { name: "mrtr_prompt", arguments: {} }))
+
+      assert_equal "input_required", response.dig(:result, :resultType)
+      assert_equal "prompt-state", response.dig(:result, :requestState)
+    end
+
+    test "#handle resources/read passes an input_required result through unwrapped and without cache hints" do
+      server = Server.new(name: "mrtr_test", ttl_ms: 5000, cache_scope: "public")
+      server.resources_read_handler do |_params, server_context:|
+        server_context.request_state
+        Server::InputRequiredResult.new(request_state: "resource-state")
+      end
+
+      response = server.handle(modern_request("resources/read", { uri: "file:///pending.txt" }))
+      result = response[:result]
+
+      assert_equal "input_required", result[:resultType]
+      assert_equal "resource-state", result[:requestState]
+      refute result.key?(:contents)
+      refute result.key?(:ttlMs)
+      refute result.key?(:cacheScope)
+    end
+
     test "ServerSession locks the legacy era on mark_initialized! and refuses to flip eras" do
       session = ServerSession.new(server: @server, transport: mock)
 

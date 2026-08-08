@@ -8,13 +8,31 @@ module MCP
     # `nil` on legacy requests.
     attr_reader :envelope
 
-    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil, envelope: nil)
+    # SEP-2322 multi round-trip retry fields, present when the client re-issued the request after
+    # an `input_required` result: `input_responses` maps the keys of the earlier `inputRequests` to
+    # the client's answers, and `request_state` is the opaque continuation string echoed back byte-exactly.
+    # Both are `nil` on a first-round request. Only handlers that opt in to `server_context:` can read them
+    # (the same access model as the envelope readers).
+    attr_reader :input_responses, :request_state
+
+    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil, envelope: nil,
+      input_responses: nil, request_state: nil)
       @context = context
       @progress = progress
       @notification_target = notification_target
       @related_request_id = related_request_id
       @cancellation = cancellation
       @envelope = envelope
+      @input_responses = input_responses
+      @request_state = request_state
+    end
+
+    # Reads one entry of {#input_responses} by its `inputRequests` key, tolerating symbol or string keys.
+    def input_response(key)
+      return unless @input_responses.is_a?(Hash)
+
+      value = @input_responses[key.to_sym]
+      value.nil? ? @input_responses[key.to_s] : value
     end
 
     def cancelled?

@@ -2,6 +2,7 @@
 
 require "rackup"
 require "json"
+require "securerandom"
 require "set"
 require "uri"
 require_relative "../lib/mcp"
@@ -12,6 +13,43 @@ module Conformance
 
   # Minimal WAV file (matches TypeScript SDK and Python SDK)
   BASE64_MINIMAL_WAV = "UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAA="
+
+  # SEP-2322 MRTR fixture helpers. A retried request re-runs its handler from the start,
+  # so every round reads the client's earlier answers back through these.
+  module Mrtr
+    module_function
+
+    # The transport parses JSON with symbolized keys, but retries may also arrive through
+    # `Server#handle` with string keys; tolerate both like the SDK's own readers.
+    def read(hash, key)
+      return unless hash.is_a?(Hash)
+
+      value = hash[key.to_sym]
+      value.nil? ? hash[key.to_s] : value
+    end
+
+    # The `content` of an accepted `elicitation/create` response, or `nil` for a declined,
+    # malformed, or missing one (a `nil` return re-requests the input).
+    def accepted_content(response)
+      content = read(response, :content)
+      content if read(response, :action) == "accept" && content.is_a?(Hash)
+    end
+
+    # The `text` of a `sampling/createMessage` response, or `nil` when malformed.
+    def sampled_text(response)
+      text = read(read(response, :content), :text)
+      text if text.is_a?(String)
+    end
+
+    def parse_state(request_state)
+      return unless request_state.is_a?(String)
+
+      parsed = JSON.parse(request_state)
+      parsed.is_a?(Hash) ? parsed : nil
+    rescue JSON::ParserError
+      nil
+    end
+  end
 
   module Tools
     class TestSimpleText < MCP::Tool
@@ -292,6 +330,285 @@ module Conformance
         end
       end
     end
+
+    class TestMissingCapability < MCP::Tool
+      tool_name "test_missing_capability"
+      description "A tool that requires the sampling client capability (SEP-2575)"
+
+      class << self
+        def call(server_context:, **_args)
+          server_context.require_client_capability!(:sampling)
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Sampling capability is declared").to_h])
+        end
+      end
+    end
+
+    class TestInputRequiredResultElicitation < MCP::Tool
+      tool_name "test_input_required_result_elicitation"
+      description "A tool that asks for the user's name through an input_required result (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          content = Mrtr.accepted_content(server_context.input_response("user_name"))
+          name = content && Mrtr.read(content, :name)
+
+          unless name.is_a?(String)
+            return MCP::Server::InputRequiredResult.new(
+              input_requests: {
+                user_name: {
+                  method: "elicitation/create",
+                  params: {
+                    message: "What is your name?",
+                    requestedSchema: {
+                      type: "object",
+                      properties: { name: { type: "string" } },
+                      required: ["name"],
+                    },
+                  },
+                },
+              },
+            )
+          end
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Hello, #{name}!").to_h])
+        end
+      end
+    end
+
+    class TestInputRequiredResultSampling < MCP::Tool
+      tool_name "test_input_required_result_sampling"
+      description "A tool that asks for an LLM completion through an input_required result (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          text = Mrtr.sampled_text(server_context.input_response("sample_request"))
+
+          unless text
+            return MCP::Server::InputRequiredResult.new(
+              input_requests: {
+                sample_request: {
+                  method: "sampling/createMessage",
+                  params: {
+                    messages: [{ role: "user", content: { type: "text", text: "What is the capital of France?" } }],
+                    maxTokens: 100,
+                  },
+                },
+              },
+            )
+          end
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Sampled: #{text}").to_h])
+        end
+      end
+    end
+
+    class TestInputRequiredResultListRoots < MCP::Tool
+      tool_name "test_input_required_result_list_roots"
+      description "A tool that asks for the client's roots through an input_required result (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          roots = Mrtr.read(server_context.input_response("roots_request"), :roots)
+
+          unless roots.is_a?(Array)
+            return MCP::Server::InputRequiredResult.new(
+              input_requests: { roots_request: { method: "roots/list" } },
+            )
+          end
+
+          uris = roots.filter_map { |root| Mrtr.read(root, :uri) }
+          MCP::Tool::Response.new([MCP::Content::Text.new("Roots: #{uris.join(", ")}").to_h])
+        end
+      end
+    end
+
+    class TestInputRequiredResultRequestState < MCP::Tool
+      tool_name "test_input_required_result_request_state"
+      description "A tool whose input_required result carries an opaque requestState (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          state = Mrtr.parse_state(server_context.request_state)
+          confirmed = Mrtr.accepted_content(server_context.input_response("confirm"))
+
+          if state && state["kind"] == "request-state" && confirmed
+            return MCP::Tool::Response.new([MCP::Content::Text.new("state-ok: requestState validated").to_h])
+          end
+
+          MCP::Server::InputRequiredResult.new(
+            input_requests: {
+              confirm: {
+                method: "elicitation/create",
+                params: {
+                  message: "Confirm to continue",
+                  requestedSchema: {
+                    type: "object",
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            request_state: JSON.generate({ kind: "request-state", nonce: SecureRandom.hex(8) }),
+          )
+        end
+      end
+    end
+
+    class TestInputRequiredResultMultipleInputs < MCP::Tool
+      tool_name "test_input_required_result_multiple_inputs"
+      description "A tool that embeds elicitation, sampling, and roots/list inputs in one input_required result (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          content = Mrtr.accepted_content(server_context.input_response("user_name"))
+          name = content && Mrtr.read(content, :name)
+          greeting = Mrtr.sampled_text(server_context.input_response("greeting"))
+          roots = Mrtr.read(server_context.input_response("client_roots"), :roots)
+
+          if name.is_a?(String) && greeting && roots.is_a?(Array)
+            return MCP::Tool::Response.new(
+              [MCP::Content::Text.new("#{greeting} #{name} (#{roots.length} roots)").to_h],
+            )
+          end
+
+          MCP::Server::InputRequiredResult.new(
+            input_requests: {
+              user_name: {
+                method: "elicitation/create",
+                params: {
+                  message: "What is your name?",
+                  requestedSchema: {
+                    type: "object",
+                    properties: { name: { type: "string" } },
+                    required: ["name"],
+                  },
+                },
+              },
+              greeting: {
+                method: "sampling/createMessage",
+                params: {
+                  messages: [{ role: "user", content: { type: "text", text: "Write a one-word greeting" } }],
+                  maxTokens: 50,
+                },
+              },
+              client_roots: { method: "roots/list" },
+            },
+            request_state: JSON.generate({ kind: "multiple-inputs" }),
+          )
+        end
+      end
+    end
+
+    class TestInputRequiredResultMultiRound < MCP::Tool
+      tool_name "test_input_required_result_multi_round"
+      description "A tool that needs two elicitation rounds before completing (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          state = Mrtr.parse_state(server_context.request_state)
+
+          case state && state["round"]
+          when 1
+            content = Mrtr.accepted_content(server_context.input_response("user_name"))
+            name = content && Mrtr.read(content, :name)
+            return second_round(name) if name.is_a?(String)
+          when 2
+            content = Mrtr.accepted_content(server_context.input_response("favorite_color"))
+            color = content && Mrtr.read(content, :color)
+            if color.is_a?(String)
+              return MCP::Tool::Response.new([MCP::Content::Text.new("#{state["name"]} likes #{color}").to_h])
+            end
+          end
+
+          first_round
+        end
+
+        private
+
+        def first_round
+          MCP::Server::InputRequiredResult.new(
+            input_requests: {
+              user_name: {
+                method: "elicitation/create",
+                params: {
+                  message: "What is your name?",
+                  requestedSchema: {
+                    type: "object",
+                    properties: { name: { type: "string" } },
+                    required: ["name"],
+                  },
+                },
+              },
+            },
+            request_state: JSON.generate({ round: 1 }),
+          )
+        end
+
+        def second_round(name)
+          MCP::Server::InputRequiredResult.new(
+            input_requests: {
+              favorite_color: {
+                method: "elicitation/create",
+                params: {
+                  message: "What is your favorite color?",
+                  requestedSchema: {
+                    type: "object",
+                    properties: { color: { type: "string" } },
+                    required: ["color"],
+                  },
+                },
+              },
+            },
+            request_state: JSON.generate({ round: 2, name: name }),
+          )
+        end
+      end
+    end
+
+    class TestInputRequiredResultCapabilities < MCP::Tool
+      tool_name "test_input_required_result_capabilities"
+      description "A tool that only embeds input requests the client's declared capabilities can fulfill (SEP-2322)"
+
+      class << self
+        def call(server_context:, **_args)
+          capabilities = server_context.client_capabilities || {}
+          elicited = Mrtr.accepted_content(server_context.input_response("elicit_input"))
+          sampled = Mrtr.sampled_text(server_context.input_response("sample_input"))
+
+          requests = {}
+          if Mrtr.read(capabilities, :elicitation) && !elicited
+            requests[:elicit_input] = {
+              method: "elicitation/create",
+              params: {
+                message: "Provide a value",
+                requestedSchema: {
+                  type: "object",
+                  properties: { value: { type: "string" } },
+                },
+              },
+            }
+          end
+          if Mrtr.read(capabilities, :sampling) && !sampled
+            requests[:sample_input] = {
+              method: "sampling/createMessage",
+              params: {
+                messages: [{ role: "user", content: { type: "text", text: "Say hello" } }],
+                maxTokens: 50,
+              },
+            }
+          end
+
+          if requests.empty?
+            MCP::Tool::Response.new(
+              [MCP::Content::Text.new("Inputs: elicit=#{!elicited.nil?}, sample=#{!sampled.nil?}").to_h],
+            )
+          else
+            MCP::Server::InputRequiredResult.new(input_requests: requests)
+          end
+        end
+      end
+    end
   end
 
   module Prompts
@@ -390,6 +707,45 @@ module Conformance
         end
       end
     end
+
+    class TestInputRequiredResultPrompt < MCP::Prompt
+      prompt_name "test_input_required_result_prompt"
+      description "A prompt that asks for user context through an input_required result (SEP-2322)"
+
+      class << self
+        def template(_args, server_context: nil)
+          content = server_context && Mrtr.accepted_content(server_context.input_response("user_context"))
+          context = content && Mrtr.read(content, :context)
+
+          unless context.is_a?(String)
+            return MCP::Server::InputRequiredResult.new(
+              input_requests: {
+                user_context: {
+                  method: "elicitation/create",
+                  params: {
+                    message: "Provide context for the prompt",
+                    requestedSchema: {
+                      type: "object",
+                      properties: { context: { type: "string" } },
+                      required: ["context"],
+                    },
+                  },
+                },
+              },
+            )
+          end
+
+          MCP::Prompt::Result.new(
+            messages: [
+              MCP::Prompt::Message.new(
+                role: "user",
+                content: MCP::Content::Text.new("Context: #{context}"),
+              ),
+            ],
+          )
+        end
+      end
+    end
   end
 
   class Server
@@ -482,12 +838,21 @@ module Conformance
           Tools::TestElicitationSep1034Defaults,
           Tools::TestElicitationSep1330Enums,
           Tools::TestReconnection,
+          Tools::TestMissingCapability,
+          Tools::TestInputRequiredResultElicitation,
+          Tools::TestInputRequiredResultSampling,
+          Tools::TestInputRequiredResultListRoots,
+          Tools::TestInputRequiredResultRequestState,
+          Tools::TestInputRequiredResultMultipleInputs,
+          Tools::TestInputRequiredResultMultiRound,
+          Tools::TestInputRequiredResultCapabilities,
         ],
         prompts: [
           Prompts::TestSimplePrompt,
           Prompts::TestPromptWithArguments,
           Prompts::TestPromptWithEmbeddedResource,
           Prompts::TestPromptWithImage,
+          Prompts::TestInputRequiredResultPrompt,
         ],
         resources: resources,
         resource_templates: resource_templates,
