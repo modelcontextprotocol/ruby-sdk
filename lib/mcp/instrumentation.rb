@@ -7,6 +7,12 @@ module MCP
       begin
         @instrumentation_data = {}
         add_instrumentation_data(method: method)
+        # `self.` is required: the `server_context:` keyword above shadows the
+        # reader, and the value we want here is the user-defined hash passed to
+        # `Server.new`, not the per-call reporter context.
+        if configuration.instrument_server_context? && respond_to?(:server_context)
+          add_instrumentation_data(server_context: self.server_context)
+        end
 
         result = configuration.around_request.call(@instrumentation_data, &block)
 

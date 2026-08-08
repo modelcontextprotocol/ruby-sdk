@@ -145,6 +145,35 @@ module MCP
       refute merged.validate_tool_call_arguments
     end
 
+    test "defaults instrument_server_context to false" do
+      config = Configuration.new
+
+      refute_predicate config, :instrument_server_context?
+    end
+
+    test "accepts instrument_server_context in the constructor" do
+      config = Configuration.new(instrument_server_context: true)
+
+      assert_predicate config, :instrument_server_context?
+    end
+
+    test "raises ArgumentError when instrument_server_context is not a boolean value" do
+      config = Configuration.new
+
+      exception = assert_raises(ArgumentError) do
+        config.instrument_server_context = "true"
+      end
+      assert_equal("instrument_server_context must be a boolean", exception.message)
+    end
+
+    test "merge carries instrument_server_context from the other configuration" do
+      base = Configuration.new(instrument_server_context: true)
+      other = Configuration.new(instrument_server_context: false)
+
+      refute_predicate base.merge(other), :instrument_server_context?
+      assert_predicate other.merge(base), :instrument_server_context?
+    end
+
     test "defaults validate_tool_call_results to false" do
       config = Configuration.new
       refute config.validate_tool_call_results

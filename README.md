@@ -360,7 +360,8 @@ server = MCP::Server.new(
 ```
 
 This hash is then passed as the `server_context` keyword argument to tool and prompt calls.
-Note that exception and instrumentation callbacks do not receive this user-defined hash.
+Note that the exception reporter does not receive this user-defined hash, and instrumentation
+callbacks omit it unless you opt in with `instrument_server_context`.
 See the relevant sections below for the arguments they receive.
 
 #### Request-specific `_meta` Parameter
@@ -474,9 +475,30 @@ around_request = ->(data, &request_handler) { request_handler.call }
 
 **`data` availability by timing:**
 
-- Before `request_handler.call`: `method`
+- Before `request_handler.call`: `method`, and `server_context` when `instrument_server_context` is enabled
 - After `request_handler.call`: `tool_name`, `tool_arguments`, `prompt_name`, `resource_uri`, `error`, `client`
 - Not available inside `around_request`: `duration` (added after `around_request` returns)
+
+**Exposing the user-defined `server_context` (opt in):**
+
+`data` omits the user-defined `server_context` by default, because that hash is
+application-supplied and may hold values a tracing backend should not receive.
+Enable it when you need to tag spans with the request's subject:
+
+```ruby
+MCP.configure do |config|
+  config.instrument_server_context = true
+
+  config.around_request = ->(data, &request_handler) {
+    Sentry.set_user(id: data.dig(:server_context, :user_id))
+    request_handler.call
+  }
+end
+```
+
+`data[:server_context]` is the hash passed to `Server.new` — `nil` when the host
+set none. It is not the exception reporter's context argument, which describes
+where a failure occurred rather than who made the request.
 
 > [!NOTE]
 > `tool_name`, `prompt_name` and `resource_uri` may only be populated for the corresponding request methods
@@ -529,6 +551,8 @@ It receives a hash with the following possible keys:
 - `error`: (String, optional) Error code if a lookup failed
 - `duration`: (Float) Duration of the call in seconds
 - `client`: (Hash, optional) Client information with `name` and `version` keys, from the initialize request
+- `server_context`: (Any, optional) The user-defined hash passed to `Server.new`, present only when
+  `instrument_server_context` is enabled
 
 **Signature:**
 

@@ -40,6 +40,79 @@ module MCP
       end
     end
 
+    # Mirrors `MCP::Server`, which exposes the user-defined hash through
+    # `attr_accessor :server_context`.
+    class SubjectWithServerContext < Subject
+      attr_accessor :server_context
+
+      def initialize(server_context)
+        super()
+        @server_context = server_context
+      end
+    end
+
+    test "#instrument_call omits the user-defined server_context by default" do
+      subject = SubjectWithServerContext.new({ user_id: 42 })
+
+      subject.instrumented_method
+
+      refute_includes subject.instrumentation_data_received.keys, :server_context
+    end
+
+    test "#instrument_call exposes the user-defined server_context when instrument_server_context is enabled" do
+      subject = SubjectWithServerContext.new({ user_id: 42 })
+      subject.configuration.instrument_server_context = true
+
+      subject.instrumented_method
+
+      assert_equal({ user_id: 42 }, subject.instrumentation_data_received[:server_context])
+    end
+
+    test "#instrument_call exposes the user-defined server_context to around_request" do
+      subject = SubjectWithServerContext.new({ user_id: 42 })
+      subject.configuration.instrument_server_context = true
+      seen = nil
+      subject.configuration.around_request = ->(data, &handler) {
+        seen = data[:server_context]
+        handler.call
+      }
+
+      subject.instrumented_method
+
+      assert_equal({ user_id: 42 }, seen)
+    end
+
+    test "#instrument_call reports the user-defined server_context as nil when the host does not set one" do
+      subject = SubjectWithServerContext.new(nil)
+      subject.configuration.instrument_server_context = true
+
+      subject.instrumented_method
+
+      assert_includes subject.instrumentation_data_received.keys, :server_context
+      assert_nil subject.instrumentation_data_received[:server_context]
+    end
+
+    test "#instrument_call does not confuse the reporter context with the user-defined server_context" do
+      # `instrument_call(server_context:)` is the exception-reporter context, a
+      # different value from the user-defined hash. Enabling the flag must
+      # surface the latter, not the former.
+      subject = SubjectWithServerContext.new({ user_id: 42 })
+      subject.configuration.instrument_server_context = true
+
+      subject.instrumented_method_with_server_context({ request: "reporter-context" })
+
+      assert_equal({ user_id: 42 }, subject.instrumentation_data_received[:server_context])
+    end
+
+    test "#instrument_call skips server_context for hosts without the reader even when enabled" do
+      subject = Subject.new
+      subject.configuration.instrument_server_context = true
+
+      subject.instrumented_method
+
+      refute_includes subject.instrumentation_data_received.keys, :server_context
+    end
+
     test "#instrument_call adds the method name to the instrumentation data" do
       subject = Subject.new
 
