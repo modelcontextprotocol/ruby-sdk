@@ -295,7 +295,30 @@ module MCP
       assert_equal "2027-01-01", response.dig(:error, :data, :requested)
     end
 
-    test "#handle treats a partial modern triple as a legacy request" do
+    test "#handle rejects a claimed but incomplete envelope with -32602 naming the missing key" do
+      # A request carrying the `protocolVersion` claim key must be validated, never silently served as legacy:
+      # the spec maps missing required envelope fields to Invalid params, and the TypeScript and Python classifiers
+      # answer the same way.
+      server = Server.new(name: "modern_test", tools: [])
+      server.define_tool(name: "modern_tool") { Tool::Response.new([{ type: "text", text: "ok" }]) }
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: {
+          name: "modern_tool",
+          arguments: {},
+          _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+        },
+      })
+
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
+      assert_includes response.dig(:error, :message), "io.modelcontextprotocol/clientCapabilities"
+    end
+
+    test "#handle serves an envelope without the optional clientInfo" do
+      # `clientInfo` became optional after the SEP was finalized (spec PR #3002).
       server = Server.new(name: "modern_test", tools: [])
       received_context = nil
       server.define_tool(name: "modern_tool") do |server_context:|
@@ -310,12 +333,17 @@ module MCP
         params: {
           name: "modern_tool",
           arguments: {},
-          _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": { elicitation: {} },
+          },
         },
       })
 
       refute_nil response[:result]
-      refute_predicate received_context, :modern?
+      assert_predicate received_context, :modern?
+      assert_nil received_context.client_info
+      assert_equal({ elicitation: {} }, received_context.client_capabilities)
     end
 
     test "#handle requires the envelope for requests on a modern-locked session" do
@@ -328,7 +356,8 @@ module MCP
         session: session,
       )
 
-      assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, response.dig(:error, :code)
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
+      assert_includes response.dig(:error, :message), "io.modelcontextprotocol/protocolVersion"
     end
 
     test "#handle rejects initialize on a modern-locked session with -32022" do
