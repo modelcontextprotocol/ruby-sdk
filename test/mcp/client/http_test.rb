@@ -821,6 +821,107 @@ module MCP
         assert_equal({ "result" => { "tools" => [] } }, response)
       end
 
+      def test_send_request_mirrors_x_mcp_header_params_into_mcp_param_headers
+        # SEP-2243: on a modern connection, `tools/list` teaches the transport the `x-mcp-header`
+        # declarations, and the following `tools/call` mirrors the annotated arguments into
+        # `Mcp-Param-*` headers.
+        call_headers = nil
+        client = mcp_param_test_client(
+          tools: [mcp_param_annotated_tool],
+          on_call: ->(headers) { call_headers = headers },
+        )
+        client.connect(mode: :modern)
+
+        client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        client.send_request(request: {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "test_custom_headers",
+            arguments: { region: "us-west1", priority: 42, non_ascii_val: "Hello, 世界", null_val: nil },
+          },
+        })
+
+        assert_equal("us-west1", call_headers["Mcp-Param-Region"])
+        assert_equal("42", call_headers["Mcp-Param-Priority"])
+        assert_equal("=?base64?#{["Hello, 世界"].pack("m0")}?=", call_headers["Mcp-Param-NonAsciiVal"])
+        refute(call_headers.key?("Mcp-Param-NullVal"), "a null argument must omit its header")
+      end
+
+      def test_send_request_mirrors_nothing_for_a_tool_with_an_invalid_x_mcp_header_declaration
+        # An invalid tool definition (here a case-insensitive duplicate) mirrors nothing rather than
+        # emitting a partial or malformed header set.
+        invalid_tool = {
+          name: "invalid_duplicate",
+          inputSchema: {
+            type: "object",
+            properties: {
+              one: { type: "string", "x-mcp-header": "Region" },
+              two: { type: "string", "x-mcp-header": "REGION" },
+            },
+          },
+        }
+        call_headers = nil
+        client = mcp_param_test_client(tools: [invalid_tool], on_call: ->(headers) { call_headers = headers })
+        client.connect(mode: :modern)
+
+        client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        client.send_request(request: {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "invalid_duplicate", arguments: { one: "a", two: "b" } },
+        })
+
+        refute(call_headers.keys.any? { |key| key.start_with?("Mcp-Param-") })
+        assert_equal("tools/call", call_headers["Mcp-Method"])
+      end
+
+      def test_send_request_mirrors_nothing_on_a_legacy_connection
+        # The custom headers exist on the modern lifecycle only (SEP-2243), matching
+        # the TypeScript and Python SDKs: without modern adoption nothing is learned or mirrored.
+        call_headers = nil
+        client = mcp_param_test_client(
+          tools: [mcp_param_annotated_tool],
+          on_call: ->(headers) { call_headers = headers },
+        )
+
+        client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        client.send_request(request: {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "test_custom_headers", arguments: { region: "us-west1" } },
+        })
+
+        refute(call_headers.keys.any? { |key| key.start_with?("Mcp-Param-") })
+        assert_equal("tools/call", call_headers["Mcp-Method"])
+      end
+
+      def test_send_request_prunes_declarations_dropped_by_a_complete_listing
+        # A complete (uncursored, `nextCursor`-less) listing is the full tool universe,
+        # so declarations of unlisted tools are stale and stop mirroring.
+        call_headers = nil
+        listings = [[mcp_param_annotated_tool], []]
+        client = mcp_param_test_client(
+          tools: -> { listings.shift || [] },
+          on_call: ->(headers) { call_headers = headers },
+        )
+        client.connect(mode: :modern)
+
+        client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        client.send_request(request: { jsonrpc: "2.0", id: 2, method: "tools/list" })
+        client.send_request(request: {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "test_custom_headers", arguments: { region: "us-west1" } },
+        })
+
+        refute(call_headers.keys.any? { |key| key.start_with?("Mcp-Param-") })
+      end
+
       def test_send_request_parses_sse_response_when_adapter_does_not_stream
         sse_body = "event: message\n" \
           'data: {"jsonrpc":"2.0","id":"test_id","result":{"tools":[]}}' \
@@ -2086,6 +2187,44 @@ module MCP
 
       def requested?(stub)
         WebMock::RequestRegistry.instance.times_executed(stub.request_pattern).positive?
+      end
+
+      # Builds an `HTTP` client over the Faraday test adapter for the SEP-2243 mirroring tests:
+      # the stub serves `server/discover` (so `connect(mode: :modern)` works), answers `tools/list`
+      # with `tools` (an Array, or a Proc returning the listing per request), and captures
+      # the request headers of any other POST via `on_call`.
+      def mcp_param_test_client(tools:, on_call:)
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do |env|
+            case JSON.parse(env.request_body)["method"]
+            when "server/discover"
+              discover = { supportedVersions: ["2026-07-28"], capabilities: { tools: {} }, ttlMs: 0, cacheScope: "private" }
+              [200, { "Content-Type" => "application/json" }, { result: discover }.to_json]
+            when "tools/list"
+              listing = tools.respond_to?(:call) ? tools.call : tools
+              [200, { "Content-Type" => "application/json" }, { result: { tools: listing } }.to_json]
+            else
+              on_call.call(env.request_headers)
+              [200, { "Content-Type" => "application/json" }, { result: { content: [] } }.to_json]
+            end
+          end
+        end
+        HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+      end
+
+      def mcp_param_annotated_tool
+        {
+          name: "test_custom_headers",
+          inputSchema: {
+            type: "object",
+            properties: {
+              region: { type: "string", "x-mcp-header": "Region" },
+              priority: { type: "integer", "x-mcp-header": "Priority" },
+              non_ascii_val: { type: "string", "x-mcp-header": "NonAsciiVal" },
+              null_val: { type: "string", "x-mcp-header": "NullVal" },
+            },
+          },
+        }
       end
 
       def url

@@ -375,6 +375,54 @@ module MCP
       assert_equal([], tools)
     end
 
+    def test_tools_excludes_invalid_x_mcp_header_definitions_on_a_modern_connection
+      # SEP-2243: on the modern lifecycle a tool definition violating the `x-mcp-header`
+      # constraints MUST be excluded from `tools/list` results, with a warning naming the tool.
+      transport = mock
+      transport.stubs(:modern?).returns(true)
+      mock_response = { "result" => { "tools" => [
+        { "name" => "valid_tool", "inputSchema" => { "type" => "object" } },
+        {
+          "name" => "invalid_tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
+          },
+        },
+      ] } }
+      transport.expects(:send_request).returns(mock_response).once
+      client = Client.new(transport: transport)
+
+      # `rake` runs the suite with `-W0`, which silences `Kernel#warn`; restore warnings
+      # locally so the SHOULD-level warning is observable.
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+      tools = nil
+      _out, warning = capture_io { tools = client.tools }
+      $VERBOSE = original_verbose
+
+      assert_equal(["valid_tool"], tools.map(&:name))
+      assert_includes(warning, "invalid_tool")
+    end
+
+    def test_tools_keeps_invalid_x_mcp_header_definitions_on_a_legacy_connection
+      transport = mock
+      transport.stubs(:modern?).returns(false)
+      mock_response = { "result" => { "tools" => [
+        {
+          "name" => "invalid_tool",
+          "inputSchema" => {
+            "type" => "object",
+            "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
+          },
+        },
+      ] } }
+      transport.expects(:send_request).returns(mock_response).once
+      client = Client.new(transport: transport)
+
+      assert_equal(["invalid_tool"], client.tools.map(&:name))
+    end
+
     def test_call_tool_sends_request_to_transport_and_returns_content
       transport = mock
       tool = MCP::Client::Tool.new(name: "tool1", description: "tool1", input_schema: {})
