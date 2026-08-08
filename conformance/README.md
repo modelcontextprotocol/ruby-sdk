@@ -47,10 +47,10 @@ bundle exec rake conformance_server PORT=3000
 bundle exec rake conformance_server
 
 # Terminal 2: run all scenarios
-npx @modelcontextprotocol/conformance server --url http://localhost:9292/mcp
+npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp
 
 # Terminal 2: run a single scenario
-npx @modelcontextprotocol/conformance server --url http://localhost:9292/mcp --scenario ping
+npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp --scenario ping
 ```
 
 Keeps the server alive between test runs, which avoids the startup overhead when iterating

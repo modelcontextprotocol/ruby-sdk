@@ -1,6 +1,19 @@
 server: []
 client:
-  # TODO: The conformance framework's client-initialization check pins the expected requested version to 2025-11-25,
-  # while this SDK's latest protocol version is 2026-07-28. Remove once the @modelcontextprotocol/conformance package
-  # accepts 2026-07-28.
-  - initialize
+  # Pending client-side support for the 2026-07-28 stateless lifecycle: the conformance client
+  # still connects through the legacy handshake and has no SEP-2322 MRTR driver yet.
+  - request-metadata
+  - sep-2322-client-request-state
+  # SEP-2243 client-side custom-header mirroring and invalid-tool header gating
+  # are not implemented in `MCP::Client::HTTP` yet.
+  - http-custom-headers
+  - http-invalid-tool-headers
+  # Client-side JSON Schema preservation gaps: `$ref` values must reach the caller unresolved.
+  - json-schema-ref-no-deref
+  - json-schema-2020-12-preservation
+  # Unimplemented authorization extensions.
+  - auth/dpop
+  - auth/dpop-nonce
+  - auth/wif-jwt-bearer
+  # Fails one check added to the suite after the 0.2.0-alpha.10 requirements anchor.
+  - auth/authorization-server-migration

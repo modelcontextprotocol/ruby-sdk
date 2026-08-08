@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Runs `npx @modelcontextprotocol/conformance client` against the conformance client script.
+# Runs `npx @modelcontextprotocol/conformance@alpha client` against the conformance client script.
 require "English"
 
 module Conformance
@@ -29,7 +29,7 @@ module Conformance
       npx_command = [
         "npx",
         "--yes",
-        "@modelcontextprotocol/conformance",
+        "@modelcontextprotocol/conformance@alpha",
         "client",
         "--command",
         "bundle exec ruby #{client_script}",
