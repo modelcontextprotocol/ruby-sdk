@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "client/elicitation"
+require_relative "client/mcp_param_headers"
 require_relative "client/modern_envelope"
 require_relative "client/oauth"
 require_relative "client/stdio"
@@ -248,7 +249,9 @@ module MCP
       response = request(method: "tools/list", params: params, meta: meta, cancellation: cancellation)
       result = response["result"] || {}
 
-      tools = (result["tools"] || []).map do |tool|
+      tools = (result["tools"] || []).filter_map do |tool|
+        next if exclude_invalid_x_mcp_header?(tool)
+
         Tool.new(
           name: tool["name"],
           description: tool["description"],
@@ -572,6 +575,20 @@ module MCP
     end
 
     private
+
+    # SEP-2243: on the modern lifecycle, a tool definition whose `x-mcp-header` annotations violate
+    # the spec constraints MUST be excluded from `tools/list` results, so one malformed definition
+    # does not block the valid tools. The TypeScript and Python SDKs filter their listings the same way.
+    # Legacy connections, and transports without a lifecycle notion, list everything as before.
+    def exclude_invalid_x_mcp_header?(tool)
+      return false unless transport.respond_to?(:modern?) && transport.modern?
+
+      scan = McpParamHeaders.scan(tool["inputSchema"])
+      return false if scan[:valid]
+
+      warn("MCP::Client: excluding tool #{tool["name"].inspect} from tools/list: #{scan[:reason]}")
+      true
+    end
 
     # Resolves the effective SEP-2575 lifecycle mode for `connect`:
     #

@@ -6,6 +6,7 @@ require_relative "../configuration"
 require_relative "../methods"
 require_relative "../protocol_deprecations"
 require_relative "../version"
+require_relative "mcp_param_headers"
 require_relative "modern_envelope"
 
 module MCP
@@ -38,6 +39,12 @@ module MCP
       # the buffer indefinitely. Matches the 4 MiB default of `MCP::Client::Stdio::MAX_LINE_BYTES`
       # and the server transports' request cap.
       MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+
+      # Upper bound on the tools whose `x-mcp-header` declarations are retained for
+      # `Mcp-Param-*` mirroring (SEP-2243). Past the cap, newly listed tools mirror nothing
+      # (the spec's guidance to send without custom headers), so a server rotating tool names across
+      # `tools/list` responses cannot grow the registry without bound.
+      MAX_MCP_PARAM_TOOLS = 1000
 
       # Raised when an `oauth:` provider is paired with an MCP URL that is neither HTTPS nor
       # a loopback `http://` URL, since a bearer token sent over plain HTTP to a remote host
@@ -255,6 +262,7 @@ module MCP
         @listener_thread = nil
         @modern_client_info = nil
         @modern_capabilities = nil
+        @mcp_param_declarations = {}
       end
 
       # Registers a handler for a server-to-client request (e.g. `elicitation/create`) delivered on an SSE stream.
@@ -380,6 +388,7 @@ module MCP
           body = resolve_response_body(stream, response, method, params)
 
           capture_session_info(method, response, body) if response
+          capture_mcp_param_declarations(method, params, body)
 
           body
         rescue MessageTooLargeError => e
@@ -712,9 +721,54 @@ module MCP
           name = params[:name] || params["name"]
           name = params[:uri] || params["uri"] unless name.is_a?(String)
           metadata_headers[NAME_HEADER] = encode_header_value(name) if name.is_a?(String)
+
+          if method == MCP::Methods::TOOLS_CALL && (declarations = @mcp_param_declarations[params[:name] || params["name"]])
+            arguments = params[:arguments] || params["arguments"]
+
+            metadata_headers.merge!(McpParamHeaders.build(declarations, arguments))
+          end
         end
 
         metadata_headers
+      end
+
+      # Learns the `x-mcp-header` declarations of the tools a `tools/list` response advertises,
+      # so later `tools/call` requests can mirror the annotated arguments into `Mcp-Param-*` headers (SEP-2243).
+      # The custom headers exist on the modern lifecycle only, matching the TypeScript and Python SDKs,
+      # so legacy connections learn nothing. Only a valid, non-empty declaration set is kept:
+      # an invalid tool definition mirrors nothing,
+      # following the spec's guidance to send without custom headers when no reliable declarations are available.
+      def capture_mcp_param_declarations(method, params, body)
+        return unless modern?
+        return unless method.to_s == MCP::Methods::TOOLS_LIST && body.is_a?(Hash)
+
+        tools = body.dig("result", "tools")
+        return unless tools.is_a?(Array)
+
+        # An uncursored request answered without `nextCursor` is the complete tool universe,
+        # so knowledge about unlisted tools is stale; the registry is rebuilt from this listing,
+        # the same pruning the Python SDK applies to complete listings.
+        cursor = params.is_a?(Hash) && (params[:cursor] || params["cursor"])
+        complete = !cursor && body.dig("result", "nextCursor").nil?
+        registry = complete ? {} : @mcp_param_declarations
+
+        tools.each do |tool|
+          next unless tool.is_a?(Hash)
+
+          name = tool["name"]
+          next unless name.is_a?(String)
+
+          scan = McpParamHeaders.scan(tool["inputSchema"])
+          if scan[:valid] && !scan[:declarations].empty?
+            next if !registry.key?(name) && registry.size >= MAX_MCP_PARAM_TOOLS
+
+            registry[name] = scan[:declarations]
+          else
+            registry.delete(name)
+          end
+        end
+
+        @mcp_param_declarations = registry if complete
       end
 
       # A header value that is not safe to transmit as-is - non-ASCII, control characters (including CR/LF,
