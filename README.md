@@ -54,6 +54,11 @@ It implements the Model Context Protocol specification, handling model context r
   and the Streamable HTTP transport serves them on a sessionless single-exchange path. On the client, `MCP::Client#connect` negotiates
   the lifecycle automatically by default (probe `server/discover`, fall back to the `initialize` handshake), `connect(mode: :modern)` skips
   the handshake entirely, `connect(mode: :legacy)` forces the classic handshake, and `MCP::Client#discover` exposes the raw discovery result
+- `subscriptions/listen` - Long-lived notification subscription stream (MCP 2026-07-28, SEP-2575), replacing the legacy HTTP GET listening stream:
+  the client opts in via the `notifications` filter (`toolsListChanged` / `promptsListChanged` / `resourcesListChanged` / `resourceSubscriptions`),
+  the server acknowledges the honored subset with `notifications/subscriptions/acknowledged` as the first stream message,
+  and every delivered notification carries the correlating `io.modelcontextprotocol/subscriptionId` in `_meta`. Served on the Streamable HTTP modern path;
+  stdio answers `-32601`
 - Multi round-trip `input_required` results (MCP 2026-07-28, SEP-2322): a `tools/call`, `prompts/get`, or `resources/read` handler that
   opts in to `server_context:` may return `MCP::Server::InputRequiredResult.new(input_requests:, request_state:)` to ask the client for
   additional input (`elicitation/create`, `sampling/createMessage`, or `roots/list` shapes) instead of performing a server-initiated request,

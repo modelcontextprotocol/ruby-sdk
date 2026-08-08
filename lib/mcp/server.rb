@@ -856,7 +856,7 @@ module MCP
     def discover(_request)
       {
         supportedVersions: Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
-        capabilities: capabilities,
+        capabilities: discover_capabilities,
         instructions: instructions,
         _meta: { RequestEnvelope::SERVER_INFO_META_KEY => server_info },
       }.compact.merge(
@@ -866,6 +866,21 @@ module MCP
         # `DiscoverResult` is still a 2026-07-28 result and carries the REQUIRED `resultType` directly.
         resultType: ResultType::COMPLETE,
       )
+    end
+
+    # Capabilities as advertised by `server/discover`. In the modern lifecycle, `listChanged` and `subscribe` flags
+    # promise delivery over `subscriptions/listen` streams, so they are stripped when the transport does not serve that RPC
+    # (e.g. stdio), matching the Python SDK's era-aware capability derivation.
+    def discover_capabilities
+      return capabilities if @transport.respond_to?(:serves_subscriptions_listen?) && @transport.serves_subscriptions_listen?
+
+      capabilities.each_with_object({}) do |(name, value), stripped|
+        stripped[name] = if value.is_a?(Hash)
+          value.reject { |flag, _| ["listChanged", "subscribe"].include?(flag.to_s) }
+        else
+          value
+        end
+      end
     end
 
     def configure_logging_level(request, session: nil)

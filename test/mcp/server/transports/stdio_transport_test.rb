@@ -620,6 +620,27 @@ module MCP
           assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, responses[1].dig(:error, :code)
         end
 
+        test "subscriptions/listen is not served over stdio and answers -32601" do
+          # Like the Python SDK, the stream-pair transport does not serve the SEP-2575 notification subscription stream.
+          listen = {
+            jsonrpc: "2.0",
+            method: "subscriptions/listen",
+            id: "listen-1",
+            params: {
+              notifications: { toolsListChanged: true },
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }
+
+          responses = run_transport_session([listen])
+
+          assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, responses[0].dig(:error, :code)
+        end
+
         test "#send_request raises on a modern-locked session" do
           run_transport_session([modern_ping_request(id: 1)])
 
