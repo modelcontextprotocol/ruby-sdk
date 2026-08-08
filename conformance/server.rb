@@ -575,6 +575,40 @@ module Conformance
       end
     end
 
+    class TestInputRequiredResultTamperedState < MCP::Tool
+      tool_name "test_input_required_result_tampered_state"
+      description "A tool whose sealed requestState rejects tampered echoes (SEP-2322)"
+
+      class << self
+        # A tampered `requestState` never reaches this handler: the server-level unsealing rejects it with -32602
+        # before dispatch, so the tool body is a plain MRTR flow.
+        def call(server_context:, **_args)
+          state = Mrtr.parse_state(server_context.request_state)
+          confirmed = Mrtr.accepted_content(server_context.input_response("confirm"))
+
+          if state && state["kind"] == "tamper-check" && confirmed
+            return MCP::Tool::Response.new([MCP::Content::Text.new("requestState integrity verified").to_h])
+          end
+
+          MCP::Server::InputRequiredResult.new(
+            input_requests: {
+              confirm: {
+                method: "elicitation/create",
+                params: {
+                  message: "Confirm to continue",
+                  requestedSchema: {
+                    type: "object",
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            request_state: JSON.generate({ kind: "tamper-check", nonce: SecureRandom.hex(8) }),
+          )
+        end
+      end
+    end
+
     class TestInputRequiredResultCapabilities < MCP::Tool
       tool_name "test_input_required_result_capabilities"
       description "A tool that only embeds input requests the client's declared capabilities can fulfill (SEP-2322)"
@@ -869,6 +903,7 @@ module Conformance
           Tools::TestInputRequiredResultRequestState,
           Tools::TestInputRequiredResultMultipleInputs,
           Tools::TestInputRequiredResultMultiRound,
+          Tools::TestInputRequiredResultTamperedState,
           Tools::TestInputRequiredResultCapabilities,
           Tools::TestStreamingElicitation,
           Tools::TestLoggingTool,
@@ -882,6 +917,10 @@ module Conformance
         ],
         resources: resources,
         resource_templates: resource_templates,
+        # A per-boot random key is enough for conformance: every MRTR round trip completes
+        # within one server process, and sealing keeps the fixture's `requestState` values
+        # tamper-evident without any tool-level verification code.
+        request_state_security: MCP::Server::RequestStateSecurity.new(key: SecureRandom.bytes(32)),
         capabilities: {
           tools: { listChanged: true },
           prompts: { listChanged: true },

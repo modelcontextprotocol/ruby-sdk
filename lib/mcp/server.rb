@@ -12,6 +12,7 @@ require_relative "server_context"
 require_relative "server/capabilities"
 require_relative "server/input_required_result"
 require_relative "server/pagination"
+require_relative "server/request_state_security"
 require_relative "server/transports"
 
 module MCP
@@ -145,7 +146,7 @@ module MCP
     CACHE_SCOPES = ["public", "private"].freeze
 
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope
+    attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
 
     def initialize(
       description: nil,
@@ -165,6 +166,7 @@ module MCP
       page_size: nil,
       ttl_ms: nil,
       cache_scope: nil,
+      request_state_security: nil,
       transport: nil
     )
       @description = description
@@ -184,6 +186,7 @@ module MCP
       self.page_size = page_size
       self.ttl_ms = ttl_ms
       self.cache_scope = cache_scope
+      @request_state_security = request_state_security
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
       @client_protocol_version = nil
@@ -594,6 +597,8 @@ module MCP
             session.configure_logging(request_logging) if request_logging.valid_level?
           end
 
+          params = unseal_request_state(params, method: method) if @request_state_security
+
           result = case method
           when Methods::INITIALIZE
             init(params, session: session)
@@ -628,7 +633,7 @@ module MCP
           # Runs after the cancellation check so a cancelled request stays suppressed
           # instead of turning into a gate error response.
           if result.is_a?(InputRequiredResult)
-            result = serialize_input_required_result(result, envelope: envelope, request: params)
+            result = serialize_input_required_result(result, envelope: envelope, request: params, method: method)
           end
 
           # SEP-2322 makes `resultType` REQUIRED on every result a 2026-07-28 server returns;
@@ -707,7 +712,7 @@ module MCP
     # a final result. The capability gate enforces the SEP-2575 rule that servers MUST NOT rely on
     # (or embed requests for) capabilities the client did not declare, and reports every missing capability at
     # once so the client sees the full set.
-    def serialize_input_required_result(result, envelope:, request:)
+    def serialize_input_required_result(result, envelope:, request:, method:)
       if envelope.nil?
         raise RequestHandlerError.new(
           "input_required results require the 2026-07-28 stateless lifecycle (SEP-2322)",
@@ -720,7 +725,76 @@ module MCP
       raise MissingRequiredClientCapabilityError.new(missing, request) unless missing.empty?
 
       add_instrumentation_data(input_required: true)
-      result.to_h
+      serialized = result.to_h
+
+      if @request_state_security && serialized[:requestState]
+        serialized = serialized.merge(requestState: @request_state_security.seal(
+          serialized[:requestState],
+          method: method,
+          target: mrtr_target(request),
+          arguments_digest: mrtr_arguments_digest(request),
+        ))
+      end
+
+      serialized
+    end
+
+    # Methods whose results may be `input_required` and whose retried requests carry
+    # `inputResponses`/`requestState` (SEP-2322).
+    MRTR_METHODS = [Methods::TOOLS_CALL, Methods::PROMPTS_GET, Methods::RESOURCES_READ].freeze
+
+    # Replaces a sealed client-echoed `requestState` with its verified plaintext before dispatch,
+    # so handlers always read the state they wrote. A tampered, expired, or cross-request token is
+    # rejected as invalid params, matching the Python SDK's "Invalid or expired requestState" behavior.
+    def unseal_request_state(params, method:)
+      return params unless MRTR_METHODS.include?(method)
+      return params unless params.is_a?(Hash)
+
+      sealed = params[:requestState] || params["requestState"]
+      return params unless sealed
+
+      plaintext = @request_state_security.unseal(
+        sealed,
+        method: method,
+        target: mrtr_target(params),
+        arguments_digest: mrtr_arguments_digest(params),
+      )
+      key = params.key?("requestState") ? "requestState" : :requestState
+      params.merge(key => plaintext)
+    rescue RequestStateSecurity::InvalidStateError => e
+      raise RequestHandlerError.new(
+        "Invalid or expired requestState",
+        params,
+        error_type: :invalid_params,
+        error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+        original_error: e,
+      )
+    end
+
+    def mrtr_target(params)
+      return "" unless params.is_a?(Hash)
+
+      params[:name] || params["name"] || params[:uri] || params["uri"] || ""
+    end
+
+    # Digest of the originating arguments, binding a sealed state to retries of
+    # the same call with the same inputs. Keys are stringified and sorted recursively
+    # so symbol/string parses of identical JSON digest identically.
+    def mrtr_arguments_digest(params)
+      arguments = params.is_a?(Hash) ? params[:arguments] || params["arguments"] : nil
+      OpenSSL::Digest::SHA256.hexdigest(canonical_json(arguments || {}))
+    end
+
+    def canonical_json(value)
+      case value
+      when Hash
+        pairs = value.map { |key, nested| [key.to_s, nested] }.sort_by(&:first)
+        "{#{pairs.map { |key, nested| "#{key.to_json}:#{canonical_json(nested)}" }.join(",")}}"
+      when Array
+        "[#{value.map { |element| canonical_json(element) }.join(",")}]"
+      else
+        value.to_json
+      end
     end
 
     # Extracts the SEP-2322 retry fields a client sends when re-issuing a request:
