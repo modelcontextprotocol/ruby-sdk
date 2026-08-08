@@ -16,6 +16,10 @@ module MCP
     # Optional per-request log level, replacing the `logging/setLevel` RPC in the modern lifecycle.
     # Deprecated as of 2026-07-28 (SEP-2577) but still part of the wire format.
     LOG_LEVEL_META_KEY = "io.modelcontextprotocol/logLevel"
+    # Notification-side reserved key (SEP-2575): correlates a notification delivered on
+    # a `subscriptions/listen` stream (and the stream's closing result) with the JSON-RPC id of
+    # the `subscriptions/listen` request that opened it. Not part of the request envelope triple.
+    SUBSCRIPTION_ID_META_KEY = "io.modelcontextprotocol/subscriptionId"
 
     # Result-side counterpart of the request envelope: the server's identity rides in
     # the result's `_meta` as an optional stamp, not as a top-level field, since the SEP was

@@ -50,6 +50,13 @@ module MCP
       raise NotImplementedError, "Subclasses must implement send_request"
     end
 
+    # Whether the transport serves the `subscriptions/listen` notification stream (MCP 2026-07-28, SEP-2575).
+    # `Server#discover` strips the `listChanged`/`subscribe` capability flags when the transport cannot deliver
+    # those notifications in the modern lifecycle.
+    def serves_subscriptions_listen?
+      false
+    end
+
     private
 
     def generate_request_id
