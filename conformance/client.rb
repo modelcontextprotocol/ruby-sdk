@@ -171,9 +171,12 @@ capabilities = scenario == "elicitation-sep1034-client-defaults" ? { elicitation
 # free of noise, while letting any unexpected error (a real SDK bug) still raise with a full backtrace
 # and a failing exit status.
 begin
+  # The conformance referee validates the legacy `initialize` handshake, so pin the legacy lifecycle:
+  # the default `:auto` negotiation would prepend a `server/discover` probe the scenario servers do not expect.
   client.connect(
     client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION },
     capabilities: capabilities,
+    mode: :legacy,
   )
 
   case scenario

@@ -46,8 +46,14 @@ It implements the Model Context Protocol specification, handling model context r
 ### Supported Methods
 
 - `initialize` - Initializes the protocol and returns server capabilities
-- `server/discover` - Sessionless capability discovery (MCP 2026-07-28 draft, SEP-2575): returns `supportedVersions`, `capabilities`, `serverInfo`,
-  and `instructions`, and responds before `initialize` and without an `Mcp-Session-Id`
+- `server/discover` - Sessionless capability discovery (MCP 2026-07-28, SEP-2575): returns the modern `supportedVersions`,
+  `capabilities`, `instructions`, the required `ttlMs`/`cacheScope` cache hints, and the server identity as the optional
+  `io.modelcontextprotocol/serverInfo` stamp in the result `_meta`, and responds before `initialize`
+  and without an `Mcp-Session-Id`. The server also serves the full stateless modern lifecycle: requests carrying the SEP-2575 `_meta` envelope
+  (`io.modelcontextprotocol/protocolVersion`, `clientInfo`, and `clientCapabilities`) are validated per request,
+  and the Streamable HTTP transport serves them on a sessionless single-exchange path. On the client, `MCP::Client#connect` negotiates
+  the lifecycle automatically by default (probe `server/discover`, fall back to the `initialize` handshake), `connect(mode: :modern)` skips
+  the handshake entirely, `connect(mode: :legacy)` forces the classic handshake, and `MCP::Client#discover` exposes the raw discovery result
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas
@@ -2375,6 +2381,41 @@ This class supports:
 
 Clients are initialized with a transport layer instance that handles the low-level communication mechanics.
 Authorization is handled by the transport layer.
+
+### Lifecycle Negotiation (SEP-2575)
+
+`MCP::Client#connect` selects the protocol lifecycle automatically by default: on the bundled
+`MCP::Client::HTTP` and `MCP::Client::Stdio` transports it probes `server/discover` first and adopts
+the stateless modern lifecycle (MCP 2026-07-28) when the server serves it, falling back to
+the classic `initialize` handshake otherwise. Custom transports whose `connect` does not declare
+a `mode:` keyword always receive the classic call shape, unchanged.
+
+```ruby
+client.connect                                 # negotiate automatically (default)
+client.connect(mode: :legacy)                  # force the classic initialize handshake
+client.connect(mode: :modern)                  # require the modern lifecycle; fails on legacy-only servers
+client.connect(protocol_version: "2025-11-25") # an explicit legacy version pins the handshake, no probe
+```
+
+Prefer `mode: :legacy` for spawn-per-invocation CLI tools (the probe adds a round trip per process)
+and when using server-initiated requests (`on_elicitation` / `on_sampling`), which exist only on
+the legacy lifecycle.
+
+Because the raw `connect` return value and `MCP::Client#server_info` mirror the wire result,
+their shape depends on the negotiated lifecycle: `InitializeResult` (`protocolVersion`,
+top-level `serverInfo`) on legacy, `DiscoverResult` (`supportedVersions`, `ttlMs`/`cacheScope`)
+on modern. Code that should work against both lifecycles can use the era-independent readers instead:
+
+```ruby
+client.protocol_version      # negotiated or adopted version, either lifecycle
+client.server_capabilities   # capabilities Hash, either lifecycle
+client.instructions          # instructions text, either lifecycle
+client.server_implementation # server name/version; nil when a modern server does not identify itself
+```
+
+Troubleshooting: if `server_info["protocolVersion"]` starts returning `nil` after a server you connect to was upgraded,
+the server now serves the modern lifecycle and the automatic negotiation adopted it.
+Pass `mode: :legacy` for an immediate return to the previous behavior, or switch to the readers above for a permanent fix.
 
 ## Transport Layer Interface
 

@@ -660,7 +660,7 @@ module MCP
 
           assert_equal 200, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
           refute response[1].key?("mcp-session-id")
         end
 
@@ -678,7 +678,7 @@ module MCP
 
           assert_equal 200, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
         end
 
         test "rejects duplicate SSE connection with 409" do
@@ -5426,7 +5426,7 @@ module MCP
           assert_equal 200, response[0]
           refute response[1].key?("mcp-session-id")
           body = JSON.parse(response[2][0])
-          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
         end
 
         test "legacy POST rejects a modern envelope body without the modern header as -32020" do

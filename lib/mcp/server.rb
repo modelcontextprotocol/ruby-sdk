@@ -774,20 +774,26 @@ module MCP
       end
     end
 
-    # Handles `server/discover` (MCP 2026-07-28 draft, SEP-2575): sessionless capability discovery.
+    # Handles `server/discover` (MCP 2026-07-28, SEP-2575): sessionless capability discovery.
     # Unlike `init`, this is state-free and idempotent: it stores no client info, does not mark
     # the session initialized, and responds regardless of capability declarations or initialization state,
-    # so clients can probe a server before (or instead of) `initialize`. `serverInfo` is returned unfiltered
-    # because discovery happens before version negotiation. The draft's `ttlMs`/`cacheScope` cache hints
-    # are not included here yet.
+    # so clients can probe a server before (or instead of) `initialize`.
+    #
+    # `supportedVersions` advertises modern versions only, matching the TypeScript and Python SDKs:
+    # legacy versions are negotiated via `initialize`, not selected from discovery. The `ttlMs`/`cacheScope`
+    # cache hints are REQUIRED on `DiscoverResult` (unlike the opt-in SEP-2549 hints on list/read results),
+    # so the spec defaults (`0` = immediately stale, `"private"` = per-authorization-context caching only)
+    # fill in when the server was not configured with `ttl_ms`/`cache_scope`. The server identity rides
+    # in the result `_meta` as the optional `io.modelcontextprotocol/serverInfo` stamp per the finalized
+    # spec (PR #3002), unfiltered because discovery happens before version negotiation.
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
     def discover(_request)
       {
-        supportedVersions: Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS,
+        supportedVersions: Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
         capabilities: capabilities,
-        serverInfo: server_info,
         instructions: instructions,
-      }.compact
+        _meta: { RequestEnvelope::SERVER_INFO_META_KEY => server_info },
+      }.compact.merge(ttlMs: ttl_ms || 0, cacheScope: cache_scope || "private")
     end
 
     def configure_logging_level(request, session: nil)

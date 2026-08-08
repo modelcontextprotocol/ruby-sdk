@@ -85,6 +85,218 @@ module MCP
       assert_includes(error.message, "does not support server-to-client requests")
     end
 
+    # A transport that declares `mode:` on `connect`, recording what it received.
+    # The `:not_forwarded` sentinel distinguishes "Client did not forward mode" from
+    # "Client forwarded mode: :legacy".
+    class ModeAwareTransport
+      attr_reader :received
+
+      def connect(client_info: nil, protocol_version: nil, capabilities: {}, mode: :not_forwarded)
+        @received = {
+          client_info: client_info,
+          protocol_version: protocol_version,
+          capabilities: capabilities,
+          mode: mode,
+        }
+        { "supportedVersions" => ["2026-07-28"] }
+      end
+    end
+
+    def test_connect_defaults_to_auto_on_transports_declaring_mode
+      transport = ModeAwareTransport.new
+
+      Client.new(transport: transport).connect
+
+      assert_equal(:auto, transport.received[:mode])
+    end
+
+    def test_connect_keeps_the_legacy_call_shape_for_transports_without_mode
+      # Custom transports whose `connect` does not declare `mode:` keep receiving
+      # the historical call shape, so the `:auto` default cannot break them.
+      transport = mock
+      transport.expects(:connect).with(
+        client_info: nil, protocol_version: nil, capabilities: {},
+      ).returns({ "protocolVersion" => "2025-11-25" }).once
+
+      Client.new(transport: transport).connect
+    end
+
+    def test_connect_routes_explicit_legacy_through_the_legacy_call_shape
+      transport = ModeAwareTransport.new
+
+      Client.new(transport: transport).connect(mode: :legacy)
+
+      assert_equal(:not_forwarded, transport.received[:mode])
+    end
+
+    def test_connect_pins_legacy_for_an_explicit_stable_protocol_version
+      # An explicitly requested legacy-generation version must never be overridden
+      # by the default negotiation adopting the modern lifecycle.
+      transport = ModeAwareTransport.new
+
+      Client.new(transport: transport).connect(protocol_version: "2025-11-25")
+
+      assert_equal(:not_forwarded, transport.received[:mode])
+      assert_equal("2025-11-25", transport.received[:protocol_version])
+    end
+
+    def test_connect_negotiates_automatically_for_an_explicit_modern_protocol_version
+      transport = ModeAwareTransport.new
+
+      Client.new(transport: transport).connect(protocol_version: "2026-07-28")
+
+      assert_equal(:auto, transport.received[:mode])
+    end
+
+    def test_connect_raises_for_explicit_non_legacy_mode_on_a_transport_without_mode
+      transport = mock
+      transport.expects(:connect).never
+
+      error = assert_raises(ArgumentError) do
+        Client.new(transport: transport).connect(mode: :modern)
+      end
+
+      assert_includes(error.message, "does not support mode:")
+    end
+
+    def test_connect_rejects_unknown_modes
+      transport = ModeAwareTransport.new
+
+      assert_raises(ArgumentError) do
+        Client.new(transport: transport).connect(mode: :bogus)
+      end
+    end
+
+    def test_discover_returns_a_discover_result
+      transport = mock
+      transport.expects(:send_request).with do |args|
+        args[:request][:method] == "server/discover"
+      end.returns({
+        "result" => {
+          "supportedVersions" => ["2026-07-28"],
+          "capabilities" => { "tools" => {} },
+          "_meta" => { "io.modelcontextprotocol/serverInfo" => { "name" => "test-server", "version" => "1.0" } },
+          "instructions" => "Optional instructions",
+          "ttlMs" => 3_600_000,
+          "cacheScope" => "public",
+        },
+      }).once
+
+      result = Client.new(transport: transport).discover
+
+      assert_equal(["2026-07-28"], result.supported_versions)
+      assert_equal({ "tools" => {} }, result.capabilities)
+      assert_equal({ "name" => "test-server", "version" => "1.0" }, result.server_info)
+      assert_equal("Optional instructions", result.instructions)
+      assert_equal(3_600_000, result.ttl_ms)
+      assert_equal("public", result.cache_scope)
+    end
+
+    def test_discover_maps_a_top_level_server_info_as_a_fallback
+      # Servers built against the frozen SEP text still stamp `serverInfo` at the top level;
+      # the finalized spec moved it into the result `_meta`.
+      transport = mock
+      transport.expects(:send_request).returns({
+        "result" => {
+          "supportedVersions" => ["2026-07-28"],
+          "serverInfo" => { "name" => "sep-era-server", "version" => "1.0" },
+        },
+      }).once
+
+      result = Client.new(transport: transport).discover
+
+      assert_equal({ "name" => "sep-era-server", "version" => "1.0" }, result.server_info)
+    end
+
+    def test_discover_raises_validation_error_on_missing_result
+      transport = mock
+      transport.expects(:send_request).returns({}).once
+
+      assert_raises(Client::ValidationError) do
+        Client.new(transport: transport).discover
+      end
+    end
+
+    def test_discover_raises_server_error_on_jsonrpc_error
+      transport = mock
+      transport.expects(:send_request).returns({
+        "error" => { "code" => -32601, "message" => "Method not found" },
+      }).once
+
+      error = assert_raises(Client::ServerError) do
+        Client.new(transport: transport).discover
+      end
+
+      assert_equal(-32601, error.code)
+    end
+
+    def test_era_independent_readers_on_a_legacy_result
+      transport = mock
+      transport.stubs(:server_info).returns({
+        "protocolVersion" => "2025-11-25",
+        "capabilities" => { "tools" => {} },
+        "serverInfo" => { "name" => "legacy-server", "version" => "1.0" },
+        "instructions" => "Be helpful",
+      })
+
+      client = Client.new(transport: transport)
+
+      assert_equal("2025-11-25", client.protocol_version)
+      assert_equal({ "tools" => {} }, client.server_capabilities)
+      assert_equal("Be helpful", client.instructions)
+      assert_equal({ "name" => "legacy-server", "version" => "1.0" }, client.server_implementation)
+    end
+
+    def test_era_independent_readers_on_a_modern_result
+      # A modern `DiscoverResult` has no `protocolVersion`; the adopted version comes
+      # from the transport. `serverInfo` sits in the result `_meta` per the final spec.
+      transport = mock
+      transport.stubs(:protocol_version).returns("2026-07-28")
+      transport.stubs(:server_info).returns({
+        "supportedVersions" => ["2026-07-28"],
+        "capabilities" => { "tools" => {} },
+        "instructions" => "Be helpful",
+        "_meta" => { "io.modelcontextprotocol/serverInfo" => { "name" => "modern-server", "version" => "2.0" } },
+        "ttlMs" => 0,
+        "cacheScope" => "private",
+      })
+
+      client = Client.new(transport: transport)
+
+      assert_equal("2026-07-28", client.protocol_version)
+      assert_equal({ "tools" => {} }, client.server_capabilities)
+      assert_equal("Be helpful", client.instructions)
+      assert_equal({ "name" => "modern-server", "version" => "2.0" }, client.server_implementation)
+    end
+
+    def test_server_implementation_falls_back_to_the_top_level_and_tolerates_absence
+      transport = mock
+      transport.stubs(:server_info).returns({
+        "supportedVersions" => ["2026-07-28"],
+        "serverInfo" => { "name" => "top-level", "version" => "1.0" },
+      })
+
+      assert_equal({ "name" => "top-level", "version" => "1.0" }, Client.new(transport: transport).server_implementation)
+
+      anonymous = mock
+      anonymous.stubs(:server_info).returns({ "supportedVersions" => ["2026-07-28"] })
+
+      assert_nil(Client.new(transport: anonymous).server_implementation)
+    end
+
+    def test_era_independent_readers_return_nil_before_connect
+      transport = mock
+      transport.stubs(:respond_to?).with(:server_info).returns(false)
+      transport.stubs(:respond_to?).with(:protocol_version).returns(false)
+
+      client = Client.new(transport: transport)
+
+      assert_nil(client.protocol_version)
+      assert_nil(client.server_capabilities)
+      assert_nil(client.instructions)
+      assert_nil(client.server_implementation)
+    end
+
     def test_connected_delegates_to_transport_when_supported
       transport = mock
       transport.expects(:connected?).returns(true)

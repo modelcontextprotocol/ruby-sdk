@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "client/elicitation"
+require_relative "client/modern_envelope"
 require_relative "client/oauth"
 require_relative "client/stdio"
 require_relative "client/http"
@@ -79,6 +80,18 @@ module MCP
       end
     end
 
+    # The server's `DiscoverResult` (MCP 2026-07-28, SEP-2575): the modern protocol versions it serves,
+    # its capabilities and identity, optional instructions, and the REQUIRED `ttlMs`/`cacheScope` cache hints.
+    DiscoverResult = Struct.new(
+      :supported_versions,
+      :capabilities,
+      :server_info,
+      :instructions,
+      :ttl_ms,
+      :cache_scope,
+      keyword_init: true,
+    )
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
@@ -95,12 +108,41 @@ module MCP
     # So keeping it public
     attr_reader :transport
 
-    # The server's `InitializeResult` (protocol version, capabilities, server info,
-    # instructions), as reported by the transport after a successful `connect`.
-    # Returns `nil` before `connect`, after `close`, or when the transport does
-    # not expose a cached handshake result.
+    # The raw handshake result exactly as the server returned it, so its shape depends on the connection's era (SEP-2575):
+    # after the legacy handshake it is an `InitializeResult` (`protocolVersion`, top-level `serverInfo`), after modern adoption
+    # it is a `DiscoverResult` (`supportedVersions`, `ttlMs`/`cacheScope`, `serverInfo` optionally under `_meta`).
+    # Code that must work against both eras should prefer the era-independent readers {#protocol_version}, {#server_capabilities},
+    # {#instructions}, and {#server_implementation}; this raw form remains the window to everything they do not cover
+    # (`supportedVersions`, cache hints, `_meta`, extension data). Returns `nil` before `connect`, after `close`,
+    # or when the transport does not expose a cached handshake result.
     def server_info
       transport.server_info if transport.respond_to?(:server_info)
+    end
+
+    # The protocol version in use on this connection, independent of its era:
+    # the version negotiated by `initialize` (legacy) or adopted via `server/discover` (modern).
+    # Returns `nil` before `connect`.
+    def protocol_version
+      return transport.protocol_version if transport.respond_to?(:protocol_version)
+
+      server_info&.dig("protocolVersion")
+    end
+
+    # The server's capabilities Hash, present in both eras. Returns `nil` before `connect`.
+    def server_capabilities
+      server_info&.dig("capabilities")
+    end
+
+    # The server's instructions text, present in both eras when provided.
+    def instructions
+      server_info&.dig("instructions")
+    end
+
+    # The server's identity (`name`/`version`), independent of where the era puts it: top-level `serverInfo`
+    # on legacy results, the optional `_meta` `io.modelcontextprotocol/serverInfo` stamp on modern results.
+    # Returns `nil` when a modern server does not identify itself.
+    def server_implementation
+      server_info&.dig("_meta", RequestEnvelope::SERVER_INFO_META_KEY) || server_info&.dig("serverInfo")
     end
 
     # Performs the MCP `initialize` handshake by delegating to the transport
@@ -115,16 +157,62 @@ module MCP
     # @param capabilities [Hash] Capabilities advertised by the client. May include
     #   an `extensions` member per SEP-2133, keyed by reverse-DNS extension identifiers,
     #   e.g. `{ extensions: { "com.example/feature" => {} } }`.
-    # @return [Hash, nil] The server's `InitializeResult`, or `nil` when the transport
-    #   does not expose an explicit handshake.
+    # @param mode [Symbol, nil] Lifecycle selection (SEP-2575). When omitted, transports whose
+    #   `connect` declares `mode:` (the bundled `MCP::Client::HTTP` and `MCP::Client::Stdio`)
+    #   negotiate with `:auto`: probe `server/discover` first and fall back to the legacy handshake
+    #   when the server does not serve a mutually supported modern version. Transports without `mode:`
+    #   keep receiving the historical legacy call shape. `:legacy` forces the `initialize` handshake
+    #   exactly as before; `:modern` requires the modern lifecycle and fails without a mutual modern version.
+    #   Passing an explicit `protocol_version` from a legacy generation (e.g. `"2025-11-25"`) pins
+    #   the legacy handshake without a probe, so an explicitly requested version is never overridden
+    #   by the default negotiation.
+    # @return [Hash, nil] The server's `InitializeResult` (legacy) or `DiscoverResult` (modern),
+    #   or `nil` when the transport does not expose an explicit handshake.
+    #   Prefer the era-independent readers over inspecting this Hash directly.
     # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
-    def connect(client_info: nil, protocol_version: nil, capabilities: {})
+    def connect(client_info: nil, protocol_version: nil, capabilities: {}, mode: nil)
       return unless transport.respond_to?(:connect)
 
-      transport.connect(
-        client_info: client_info,
-        protocol_version: protocol_version,
-        capabilities: capabilities,
+      effective_mode = resolve_connect_mode(mode, protocol_version)
+
+      if effective_mode == :legacy
+        transport.connect(
+          client_info: client_info,
+          protocol_version: protocol_version,
+          capabilities: capabilities,
+        )
+      else
+        transport.connect(
+          client_info: client_info,
+          protocol_version: protocol_version,
+          capabilities: capabilities,
+          mode: effective_mode,
+        )
+      end
+    end
+
+    # Sends `server/discover` (MCP 2026-07-28, SEP-2575): sessionless capability discovery
+    # that works before (or instead of) `connect`.
+    #
+    # @param meta [Hash, nil] Additional `_meta` entries to send with the request.
+    # @param cancellation [MCP::Cancellation, nil] Optional cancellation token.
+    # @return [MCP::Client::DiscoverResult]
+    # @raise [ServerError] If the server returns a JSON-RPC error.
+    # @raise [ValidationError] If the response `result` is missing or not a Hash.
+    def discover(meta: nil, cancellation: nil)
+      response = request(method: Methods::SERVER_DISCOVER, meta: meta, cancellation: cancellation)
+      result = response.is_a?(Hash) ? response["result"] : nil
+      raise ValidationError, "Response validation failed: missing or invalid `result`" unless result.is_a?(Hash)
+
+      DiscoverResult.new(
+        supported_versions: result["supportedVersions"],
+        capabilities: result["capabilities"],
+        # The finalized spec (PR #3002) stamps the server identity into the result `_meta`;
+        # the top-level fallback tolerates servers built against the frozen SEP text.
+        server_info: result.dig("_meta", RequestEnvelope::SERVER_INFO_META_KEY) || result["serverInfo"],
+        instructions: result["instructions"],
+        ttl_ms: result["ttlMs"],
+        cache_scope: result["cacheScope"],
       )
     end
 
@@ -484,6 +572,46 @@ module MCP
     end
 
     private
+
+    # Resolves the effective SEP-2575 lifecycle mode for `connect`:
+    #
+    # - An explicit `protocol_version` from a legacy generation pins the legacy handshake without a probe,
+    #   so the default negotiation can never override a version the caller asked for.
+    # - Absent an explicit mode, transports declaring `mode:` negotiate with `:auto`; other transports keep
+    #   the historical legacy call shape.
+    # - An explicit `:modern`/`:auto` on a transport without `mode:` raises, rather than silently downgrading to
+    #   a lifecycle the caller did not ask for.
+    def resolve_connect_mode(mode, protocol_version)
+      unless [nil, :legacy, :modern, :auto].include?(mode)
+        raise ArgumentError, "mode must be :legacy, :modern, or :auto"
+      end
+
+      return :legacy if mode == :legacy
+      return :legacy if mode.nil? && protocol_version && !Configuration.modern_protocol_version?(protocol_version)
+
+      if transport_connect_accepts_mode?
+        mode || :auto
+      elsif mode.nil?
+        :legacy
+      else
+        raise ArgumentError, "transport does not support mode: #{mode.inspect}"
+      end
+    end
+
+    # `mode:` is forwarded only when the transport's `connect` declares it as a keyword.
+    # A bare `**kwargs` deliberately does not count, so wrappers and test doubles that
+    # absorb arbitrary keywords keep the historical legacy call shape. Objects that
+    # dispatch `connect` through `method_missing` (e.g. mocks) may not support `method`,
+    # which reads as not declaring `mode:`.
+    def transport_connect_accepts_mode?
+      connect_method = begin
+        transport.method(:connect)
+      rescue NameError
+        return false
+      end
+
+      connect_method.parameters.any? { |type, name| [:key, :keyreq].include?(type) && name == :mode }
+    end
 
     # Walks every page of a list endpoint, following `next_cursor`, and returns
     # the page results. The `seen` set guards against a server that repeats or

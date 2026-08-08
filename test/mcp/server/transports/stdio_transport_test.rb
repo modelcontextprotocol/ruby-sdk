@@ -583,7 +583,7 @@ module MCP
             modern_ping_request(id: 3),
           ])
 
-          assert_equal Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS, responses[0].dig(:result, :supportedVersions)
+          assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, responses[0].dig(:result, :supportedVersions)
           assert_equal :modern, session_era
           assert_equal ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, responses[1].dig(:error, :code)
           assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, responses[1].dig(:error, :data, :supported)
