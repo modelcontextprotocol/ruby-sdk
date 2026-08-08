@@ -344,6 +344,21 @@ module Conformance
       end
     end
 
+    class TestStreamingElicitation < MCP::Tool
+      tool_name "test_streaming_elicitation"
+      description "A tool whose response stream carries only notifications, never independent requests (SEP-2575)"
+
+      class << self
+        def call(server_context:, **_args)
+          # No independent server-to-client request is ever written to the response stream;
+          # the progress notification only goes out when the request carried a progressToken.
+          server_context.report_progress(50, total: 100)
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Streaming complete").to_h])
+        end
+      end
+    end
+
     class TestInputRequiredResultElicitation < MCP::Tool
       tool_name "test_input_required_result_elicitation"
       description "A tool that asks for the user's name through an input_required result (SEP-2322)"
@@ -609,6 +624,21 @@ module Conformance
         end
       end
     end
+
+    class TestLoggingTool < MCP::Tool
+      tool_name "test_logging_tool"
+      description "A tool that logs only for requests opting in via the _meta logLevel (SEP-2575)"
+
+      class << self
+        def call(server_context:, **_args)
+          # On modern requests the notification is dropped unless `io.modelcontextprotocol/logLevel` authorized it,
+          # so the call itself is unconditional.
+          server_context.notify_log_message(data: "Log level honored", level: "info", logger: "conformance")
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Logging evaluated").to_h])
+        end
+      end
+    end
   end
 
   module Prompts
@@ -846,6 +876,8 @@ module Conformance
           Tools::TestInputRequiredResultMultipleInputs,
           Tools::TestInputRequiredResultMultiRound,
           Tools::TestInputRequiredResultCapabilities,
+          Tools::TestStreamingElicitation,
+          Tools::TestLoggingTool,
         ],
         prompts: [
           Prompts::TestSimplePrompt,

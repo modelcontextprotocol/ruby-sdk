@@ -51,6 +51,13 @@ module MCP
         # the stack or amplify parse cost (complements the byte cap).
         MAX_JSON_NESTING = 64
 
+        # Cap on the notifications buffered for one modern request (SEP-2575). The sink holds them
+        # in memory until the handler returns, so a handler that emits notifications in proportion to
+        # client-supplied input would otherwise let one request grow memory without bound.
+        # Notifications past the cap are not delivered and the notify helpers report `false`,
+        # the same non-delivery degradation they have on every other undeliverable path.
+        MAX_MODERN_REQUEST_NOTIFICATIONS = 1_000
+
         # Creates a Streamable HTTP transport that can be mounted as a Rack app.
         #
         # @param server [MCP::Server] the server whose requests this transport dispatches.
@@ -106,6 +113,10 @@ module MCP
           @allowed_hosts = (DEFAULT_LOOPBACK_HOSTS + Array(allowed_hosts)).map(&:downcase).freeze
           @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
+
+          # Maps a modern request's ephemeral session id to the Array collecting the notifications its handler emits;
+          # `handle_modern` registers the sink and flushes it as SSE frames ahead of the final response (SEP-2575).
+          @modern_request_sinks = {}
 
           # Resolve the idle timeout: an explicit value (including `nil` to opt out) wins; otherwise apply the secure default,
           # which does not apply to stateless mode since it retains no sessions.
@@ -235,16 +246,29 @@ module MCP
         end
 
         def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
-          # Stateless mode has no streams to deliver notifications on. Report non-delivery instead of raising
-          # so the ephemeral per-request session's notify_* helpers (e.g. progress or log notifications from
-          # a tool handler) degrade gracefully rather than spamming the exception reporter on every call.
-          return false if @stateless
-
           notification = {
             jsonrpc: "2.0",
             method: method,
           }
           notification[:params] = params if params
+
+          # A modern request's notifications ride its own response stream (SEP-2575): `handle_modern` registers
+          # a per-request sink for its ephemeral session and flushes it as SSE frames ahead of the final response.
+          # Checked before the stateless guard, since modern requests are served in stateless deployments too.
+          # The sink is bounded; past `MAX_MODERN_REQUEST_NOTIFICATIONS` the notification is dropped as
+          # non-delivery (`false`), never handed to the legacy paths below.
+          sink = @mutex.synchronize { session_id && @modern_request_sinks[session_id] }
+          if sink
+            return false if sink.size >= MAX_MODERN_REQUEST_NOTIFICATIONS
+
+            sink << notification
+            return true
+          end
+
+          # Stateless mode has no streams to deliver notifications on. Report non-delivery instead of raising
+          # so the ephemeral per-request session's notify_* helpers (e.g. progress or log notifications from
+          # a tool handler) degrade gracefully rather than spamming the exception reporter on every call.
+          return false if @stateless
 
           if session_id
             deliver_targeted_notification(notification, session_id, related_request_id)
@@ -564,12 +588,29 @@ module MCP
           mismatch_error = validate_modern_headers(request, body, header_version)
           return mismatch_error if mismatch_error
 
-          response = @server.handle(body, session: modern_session)
+          session = modern_session
+          notifications = @mutex.synchronize { @modern_request_sinks[session.session_id] = [] }
+          begin
+            response = @server.handle(body, session: session)
+          ensure
+            @mutex.synchronize { @modern_request_sinks.delete(session.session_id) }
+          end
 
           # `nil` covers notifications and cancellation-suppressed responses; ack with 202 like the legacy notification path.
           return handle_accepted if response.nil?
 
-          [modern_http_status(response), { "content-type" => "application/json" }, [response.to_json]]
+          # Notifications a handler emitted during the request ride the request's own response stream as SSE frames ahead of
+          # the final response (SEP-2575); a request that emitted none keeps the single JSON exchange and its HTTP status ladder.
+          # Delivery is buffered: frames flush after the handler returns, preserving order but not real-time interleaving
+          # (the TypeScript and Python SDKs stream live), and the sink grows with the handler's notification count.
+          # Live streaming can follow without changing the wire shape.
+          if notifications.empty?
+            [modern_http_status(response), { "content-type" => "application/json" }, [response.to_json]]
+          else
+            frames = notifications + [response]
+            sse_body = frames.map { |frame| "event: message\ndata: #{frame.to_json}\n\n" }.join
+            [200, SSE_HEADERS.dup, [sse_body]]
+          end
         rescue StandardError => e
           MCP.configuration.exception_reporter.call(e, { request: body_string })
           json_rpc_error_response(

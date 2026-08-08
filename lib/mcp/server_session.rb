@@ -252,7 +252,15 @@ module MCP
     def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
       @server.send(:warn_if_deprecated_protocol_feature, :logging, session: self, uplevel: 2)
 
-      effective_logging = @logging_message_notification || @server.logging_message_notification
+      # In the modern lifecycle, log delivery is authorized per request through the `_meta` envelope's `logLevel` member
+      # (applied via `configure_logging`); without it no `notifications/message` is sent, and the server-wide level
+      # does not apply (SEP-2575).
+      effective_logging = if @era == :modern
+        @logging_message_notification
+      else
+        @logging_message_notification || @server.logging_message_notification
+      end
+
       return unless effective_logging&.should_notify?(level)
 
       params = { "data" => data, "level" => level }
