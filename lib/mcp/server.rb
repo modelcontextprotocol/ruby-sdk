@@ -561,6 +561,18 @@ module MCP
         return
       end
 
+      # SEP-2575 removes these RPCs from the modern lifecycle, so they answer with Method not found
+      # there regardless of the envelope or the server's declared capabilities: in this era the method
+      # does not exist at all, which is why the check precedes `ensure_capability!`.
+      if session.respond_to?(:era) && session.era == :modern && Methods::MODERN_REMOVED_METHODS.include?(method)
+        raise RequestHandlerError.new(
+          "Method not found: #{method} is not part of the modern lifecycle (SEP-2575)",
+          request,
+          error_type: :method_not_found,
+          error_code: JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND,
+        )
+      end
+
       begin
         Methods.ensure_capability!(method, capabilities)
       rescue Methods::MissingRequiredCapabilityError => e
@@ -669,14 +681,13 @@ module MCP
     # an invalid request because a connection can never change eras.
     def lift_request_envelope(params, method:, session:)
       return if Methods.notification?(method)
-      return if method == Methods::SERVER_DISCOVER
 
       era = session.respond_to?(:era) ? session.era : nil
 
-      if era == :modern && method == Methods::INITIALIZE
-        requested = params.is_a?(Hash) ? params[:protocolVersion] || params["protocolVersion"] : nil
-        raise UnsupportedProtocolVersionError.new(requested, params)
-      end
+      # Outside the modern era, `server/discover` stays envelope-exempt so legacy connections can probe capabilities
+      # before any negotiation. Under the modern era every request carries the envelope, discovery included:
+      # the conformance suite's 2026-07-28 requirements reject an envelope-less `server/discover` with `-32602` (SEP-2575).
+      return if method == Methods::SERVER_DISCOVER && era != :modern
 
       if RequestEnvelope.modern?(params)
         if era == :legacy
