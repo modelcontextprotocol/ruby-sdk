@@ -5421,11 +5421,55 @@ module MCP
 
         test "modern POST requires the _meta envelope" do
           response = @transport.handle_request(modern_rack_request(
-            { jsonrpc: "2.0", method: "ping", id: 1 }.to_json,
+            { jsonrpc: "2.0", method: "tools/list", id: 1 }.to_json,
           ))
 
           assert_equal 400, response[0]
           assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST rejects an envelope missing clientCapabilities with 400 and -32602" do
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/list",
+            id: 1,
+            params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 400, response[0]
+          assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST serves an envelope without the optional clientInfo" do
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/list",
+            id: 1,
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          assert JSON.parse(response[2][0]).key?("result")
+        end
+
+        test "modern POST answers removed lifecycle methods with 404 and -32601" do
+          MCP::Methods::MODERN_REMOVED_METHODS.each do |method|
+            response = @transport.handle_request(modern_rack_request(modern_body(method, {})))
+
+            assert_equal 404, response[0], "expected 404 for #{method}"
+            body = JSON.parse(response[2][0])
+            assert_equal(-32601, body.dig("error", "code"), "expected -32601 for #{method}")
+            assert_equal 1, body["id"], "expected the request id to be preserved for #{method}"
+          end
         end
 
         test "modern POST maps a missing client capability to 400 with -32021" do
@@ -5607,15 +5651,24 @@ module MCP
           assert_empty reported
         end
 
-        test "modern POST serves server/discover without an envelope" do
-          response = @transport.handle_request(modern_rack_request(
-            { jsonrpc: "2.0", method: "server/discover", id: 1 }.to_json,
-          ))
+        test "modern POST serves server/discover carrying the envelope" do
+          response = @transport.handle_request(modern_rack_request(modern_body("server/discover", {})))
 
           assert_equal 200, response[0]
           refute response[1].key?("mcp-session-id")
           body = JSON.parse(response[2][0])
           assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, body.dig("result", "supportedVersions")
+        end
+
+        test "modern POST rejects an envelope-less server/discover with 400 and -32602" do
+          # The 2026-07-28 conformance requirements validate the `_meta` envelope on `server/discover` like
+          # on every other modern request (SEP-2575).
+          response = @transport.handle_request(modern_rack_request(
+            { jsonrpc: "2.0", method: "server/discover", id: 1 }.to_json,
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
         test "legacy POST rejects a modern envelope body without the modern header as -32020" do
