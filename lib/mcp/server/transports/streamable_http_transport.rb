@@ -634,23 +634,43 @@ module MCP
             )
           end
 
+          # `Mcp-Method` is required on every modern POST and `Mcp-Name` on the name-bearing methods:
+          # the spec lists a missing required standard header among the validation failures that MUST be rejected,
+          # and the TypeScript SDK enforces presence the same way. Absence cannot be treated as "nothing to compare":
+          # the headers exist so intermediaries can route without parsing bodies, and a client that omits them
+          # defeats that contract silently.
           method_header = request.env["HTTP_MCP_METHOD"]
-          if method_header && method_header != body[:method]
+          if method_header.to_s.empty?
+            return header_mismatch_response(
+              "Mcp-Method header is required on the modern path",
+              body[:id],
+            )
+          end
+          if method_header != body[:method]
             return header_mismatch_response(
               "Mcp-Method header value '#{method_header}' does not match body value '#{body[:method]}'",
               body[:id],
             )
           end
 
-          name_header = request.env["HTTP_MCP_NAME"]
-          if name_header && NAME_BEARING_METHODS.include?(body[:method])
+          if NAME_BEARING_METHODS.include?(body[:method])
             body_name = params.is_a?(Hash) ? params[:name] || params[:uri] : nil
-            decoded_name = decode_header_value(name_header)
-            if body_name && decoded_name != body_name
-              return header_mismatch_response(
-                "Mcp-Name header value '#{decoded_name}' does not match body value '#{body_name}'",
-                body[:id],
-              )
+            name_header = request.env["HTTP_MCP_NAME"]
+            if body_name
+              if name_header.to_s.empty?
+                return header_mismatch_response(
+                  "Mcp-Name header is required for `#{body[:method]}`",
+                  body[:id],
+                )
+              end
+
+              decoded_name = decode_header_value(name_header)
+              if decoded_name != body_name
+                return header_mismatch_response(
+                  "Mcp-Name header value '#{decoded_name}' does not match body value '#{body_name}'",
+                  body[:id],
+                )
+              end
             end
           end
 
