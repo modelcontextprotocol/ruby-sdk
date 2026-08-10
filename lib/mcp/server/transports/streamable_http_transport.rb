@@ -479,6 +479,16 @@ module MCP
         # so a client that never answers cannot park the calling thread for good. On expiry the peer is
         # sent `notifications/cancelled` and `MCP::Server::RequestTimeoutError` is raised.
         def send_request(method, params = nil, session_id: nil, related_request_id: nil, parent_cancellation: nil, server_session: nil, timeout: nil)
+          # The modern lifecycle (SEP-2575) forbids server-initiated JSON-RPC requests;
+          # multi round-trip `input_required` results (SEP-2322) replace them. A modern session has never reached
+          # the rest of this method anyway, since `handle_modern` mints its session without registering it in `@sessions`,
+          # but that is incidental: without the rule stated here a modern handler that reaches for elicitation
+          # or sampling is told "Session not found: <uuid>", which points at everything except the actual reason.
+          # `StdioTransport#send_request` refuses the same way.
+          if server_session&.era == :modern
+            raise "Server-initiated requests are not available in the modern lifecycle (SEP-2575)."
+          end
+
           if @stateless
             raise "Stateless mode does not support server-to-client requests."
           end
