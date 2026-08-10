@@ -1409,6 +1409,22 @@ Roots define the boundaries of where a server can operate, providing a list of d
 > automatically and routes the request onto the originating POST stream on the Streamable HTTP transport. Calling the corresponding
 > `ServerSession` methods without `related_request_id:` still works but emits a deprecation warning.
 
+**Timeouts:** every server-to-client request is bounded, so a client that never answers cannot park the handler's thread indefinitely.
+`MCP::Server::Transports::StreamableHTTPTransport` waits `server_to_client_request_timeout:` seconds (600 by default), then tells
+the client the request was abandoned and raises `MCP::Server::RequestTimeoutError`. Individual calls override the deadline with `timeout:`,
+which is the knob to reach for when a prompt legitimately waits on a person:
+
+```ruby
+server_context.create_form_elicitation(
+  message: "Approve this deployment?",
+  requested_schema: { type: "object", properties: { approved: { type: "boolean" } } },
+  timeout: 3600, # This one waits up to an hour.
+)
+```
+
+`StdioTransport` is not bounded and ignores `timeout:`: it owns the client process, so a client that stops answering
+surfaces as end-of-file rather than as a wait that never ends.
+
 **Using Roots in Tools:**
 
 Tools that accept a `server_context:` parameter can call `list_roots` on it.

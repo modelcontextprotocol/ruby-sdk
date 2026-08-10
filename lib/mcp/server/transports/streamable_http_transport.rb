@@ -52,6 +52,21 @@ module MCP
         UNSET_IDLE_TIMEOUT = Object.new.freeze
         private_constant :UNSET_IDLE_TIMEOUT
 
+        # Default deadline in seconds for a server-to-client request (sampling, elicitation, `roots/list`, `ping`).
+        # The spec asks implementations to bound every sent request so a peer that never answers cannot exhaust
+        # the sender's resources; without one, a client that opens a session and simply never replies parks
+        # a worker thread for good.
+        #
+        # Ten minutes matches the TypeScript SDK, which raises its uniform 60-second request default to 600 seconds
+        # for the legs of its legacy `input_required` shim because they are "human-paced, so the 60s protocol default
+        # is wrong". Every request this transport can send is that kind of leg: someone answering an elicitation
+        # prompt, or the client's own model producing a sample. (The Python SDK leaves the deadline unset and bounds
+        # nothing by default.) Deployments that want a tighter bound pass a smaller value here; a single handler
+        # that legitimately waits longer passes `timeout:`.
+        #
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#timeouts
+        DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT = 600
+
         # Default upper bound on the JSON-RPC request body. `handle_post` reads the whole
         # body into memory and parses it, so without a cap a single unauthenticated POST
         # can allocate gigabytes and OOM the worker. 4 MiB comfortably
@@ -114,6 +129,9 @@ module MCP
         #   on a `subscriptions/listen` stream; the periodic write frees the stream's slot when the peer
         #   has gone away. Defaults to `DEFAULT_LISTEN_KEEPALIVE_INTERVAL` (15); pass `nil` to disable
         #   when an upstream proxy already keeps the stream alive.
+        # @param server_to_client_request_timeout [Numeric] seconds a server-to-client request waits for its
+        #   response before the transport stops waiting and raises `MCP::Server::RequestTimeoutError`.
+        #   Defaults to `DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT` (600); individual calls override it with `timeout:`.
         def initialize(
           server,
           stateless: false,
@@ -126,7 +144,8 @@ module MCP
           session_request_validator: nil,
           max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
           max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
-          listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL
+          listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
+          server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT
         )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
@@ -192,6 +211,12 @@ module MCP
           end
 
           @listen_keepalive_interval = listen_keepalive_interval
+
+          unless server_to_client_request_timeout.is_a?(Numeric) && server_to_client_request_timeout.positive?
+            raise ArgumentError, "server_to_client_request_timeout must be a positive number"
+          end
+
+          @server_to_client_request_timeout = server_to_client_request_timeout
 
           start_reaper_thread if @session_idle_timeout
         end
@@ -442,14 +467,18 @@ module MCP
           end
         end
 
-        # Sends a server-to-client JSON-RPC request (e.g., `sampling/createMessage`) and
-        # blocks until the client responds.
+        # Sends a server-to-client JSON-RPC request (e.g., `sampling/createMessage`) and blocks until
+        # the client responds.
         #
-        # Uses a `Queue` for cross-thread synchronization. This method creates a `Queue`,
-        # sends the request via SSE stream, then blocks on `queue.pop`.
-        # When the client POSTs a response, `handle_response` matches it by `request_id`
-        # and pushes the result onto the queue, unblocking this thread.
-        def send_request(method, params = nil, session_id: nil, related_request_id: nil, parent_cancellation: nil, server_session: nil)
+        # Uses a `PendingResponse` for cross-thread synchronization: this method registers one,
+        # sends the request via SSE stream, then waits on it. When the client POSTs a response,
+        # `handle_response` matches it by `request_id` and resolves the pending response,
+        # unblocking this thread. A cancellation and session teardown resolve it the same way.
+        #
+        # The wait is bounded by `timeout` (defaulting to the transport's `server_to_client_request_timeout`),
+        # so a client that never answers cannot park the calling thread for good. On expiry the peer is
+        # sent `notifications/cancelled` and `MCP::Server::RequestTimeoutError` is raised.
+        def send_request(method, params = nil, session_id: nil, related_request_id: nil, parent_cancellation: nil, server_session: nil, timeout: nil)
           if @stateless
             raise "Stateless mode does not support server-to-client requests."
           end
@@ -463,7 +492,8 @@ module MCP
           end
 
           request_id = generate_request_id
-          queue = Queue.new
+          pending_response = PendingResponse.new
+          wait_timeout = timeout || @server_to_client_request_timeout
           cancel_hook = nil
 
           request = { jsonrpc: "2.0", id: request_id, method: method }
@@ -476,7 +506,7 @@ module MCP
               raise "Session not found: #{session_id}."
             end
 
-            @pending_responses[request_id] = { queue: queue, session_id: session_id }
+            @pending_responses[request_id] = { queue: pending_response, session_id: session_id }
 
             active_stream(session, related_request_id: related_request_id)
           end
@@ -512,7 +542,27 @@ module MCP
             end
           end
 
-          response = queue.pop
+          response = pending_response.pop(timeout: wait_timeout) do
+            # Expiry cancels as well as stops waiting, so a client that answers late does not act on
+            # a request the server has abandoned. Only connections speaking 2025-11-25 or earlier get here:
+            # the modern lifecycle forbids server-to-client requests outright, and its sessionless requests
+            # never register the session this method looks up. Those revisions ask the sender to "issue
+            # a cancellation notification for that request and stop waiting", letting either side send one.
+            # (The 2026-07-28 rule reserving `notifications/cancelled` for `subscriptions/listen` teardown
+            # governs the era that has no such requests to cancel.) Both reference SDKs send this same
+            # courtesy cancel on timeout.
+            server_session&.send_peer_cancellation(
+              nested_request_id: request_id,
+              related_request_id: related_request_id,
+              reason: "Timed out after #{wait_timeout} seconds",
+            )
+
+            raise RequestTimeoutError.new(
+              "#{method} request timed out after #{wait_timeout} seconds",
+              request_id: request_id,
+              timeout: wait_timeout,
+            )
+          end
 
           if response.is_a?(Hash) && response.key?(:error)
             raise StandardError, "Client returned an error for #{method} request (code: #{response[:error][:code]}): #{response[:error][:message]}"

@@ -12,6 +12,7 @@ require_relative "server_context"
 require_relative "server/capabilities"
 require_relative "server/input_required_result"
 require_relative "server/pagination"
+require_relative "server/pending_response"
 require_relative "server/request_state_security"
 require_relative "server/transports"
 
@@ -122,6 +123,27 @@ module MCP
           error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
           error_data: { uri: uri },
         )
+      end
+    end
+
+    # Raised when a server-to-client request (sampling, elicitation, `roots/list`, `ping`) goes unanswered past its timeout.
+    # The spec asks implementations to bound every sent request so a peer that never answers cannot exhaust the sender's resources,
+    # and to cancel the request on expiry; the transport sends `notifications/cancelled` before raising this.
+    # These requests exist only on connections speaking 2025-11-25 or earlier, since the modern lifecycle forbids them.
+    #
+    # Left uncaught in a handler, this answers the client's originating request with `-32001` rather than a generic
+    # internal error, so the peer that failed to answer can tell a timeout apart from a server fault. The code is not
+    # spec-allocated: it sits in the implementation-defined server range and is the value the Python SDK reports for
+    # this condition, so a client that already recognizes it there reads the same meaning here.
+    #
+    # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#timeouts
+    class RequestTimeoutError < RequestHandlerError
+      attr_reader :request_id, :timeout
+
+      def initialize(message, request_id:, timeout:)
+        super(message, nil, error_type: :request_timeout, error_code: -32001)
+        @request_id = request_id
+        @timeout = timeout
       end
     end
 
