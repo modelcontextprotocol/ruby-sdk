@@ -2510,6 +2510,20 @@ Troubleshooting: if `server_info["protocolVersion"]` starts returning `nil` afte
 the server now serves the modern lifecycle and the automatic negotiation adopted it.
 Pass `mode: :legacy` for an immediate return to the previous behavior, or switch to the readers above for a permanent fix.
 
+### Custom Headers from Tool Parameters (SEP-2243)
+
+On a modern `MCP::Client::HTTP` connection, `tools/call` mirrors arguments whose `inputSchema` property carries
+an `x-mcp-header` annotation into `Mcp-Param-{Name}` request headers, so intermediaries can route
+on the values without parsing bodies. The declarations are learned from `tools/list` responses:
+list the tools before calling one to enable the mirroring. Values that cannot ride as plain ASCII header values
+(non-ASCII, control characters, edge whitespace, empty strings) are wrapped as `=?base64?...?=`,
+and a `null` or absent argument omits its header.
+
+Per the specification, a tool definition whose `x-mcp-header` annotations are invalid (empty or non-token names,
+duplicate names, non-primitive properties, annotations outside a chain of `properties` keys) is excluded from
+`tools/list` results on modern connections, with a warning naming the tool.
+Legacy connections are unaffected: nothing is learned, mirrored, or excluded.
+
 ## Transport Layer Interface
 
 If the transport layer you need is not included in the gem, you can build and pass your own instances so long as they conform to the following interface:
