@@ -60,8 +60,11 @@ It implements the Model Context Protocol specification, handling model context r
   which the modern lifecycle forbids. On the retried request the handler re-runs from the start and reads the answers via
   `server_context.input_responses` / `server_context.input_response(key)` and the echoed opaque `server_context.request_state`
   (deterministic replay; the server holds no memory between rounds). The SDK rejects issuance on legacy requests and returns `-32021`
-  when an embedded request needs a client capability the request did not declare. Note that the echoed `requestState` arrives as
-  client-controlled input; treat it accordingly
+  when an embedded request needs a client capability the request did not declare. The echoed `requestState` arrives as
+  client-controlled input: pass `MCP::Server::RequestStateSecurity.new(key:)` (a 32-byte key) via `Server.new(request_state_security:)` to
+  have it sealed with AES-256-GCM and bound to a TTL plus the originating method, target, and arguments, all transparently to handlers.
+  Multi-process deployments must share the key across workers; without `request_state_security:` the state crosses the wire exactly as
+  the handler wrote it and protecting it is the handler author's responsibility
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas
