@@ -182,6 +182,14 @@ begin
   case scenario
   when "initialize"
     client.tools
+  when "json-schema-2020-12-preservation"
+    # SEP-1613/SEP-2106: echo the focal tool's observed inputSchema verbatim so the harness
+    # can diff what the client preserved. Preservation holds because `Client::Tool#input_schema`
+    # is the parsed response untouched.
+    tools = client.tools
+    focal = tools.find { |t| t.name == "json_schema_2020_12_tool" }
+    abort("Tool json_schema_2020_12_tool not found") unless focal
+    client.call_tool(name: "json_schema_echo", arguments: { "schema" => focal.input_schema })
   when "tools_call"
     tools = client.tools
     add_numbers = tools.find { |t| t.name == "add_numbers" }
