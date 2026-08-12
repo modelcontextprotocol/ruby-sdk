@@ -182,6 +182,7 @@ module MCP
       @resources = resources
       @resource_templates = resource_templates
       @resource_index = index_resources_by_uri(resources)
+      @resources_list_handler = nil
       @server_context = server_context
       self.page_size = page_size
       self.ttl_ms = ttl_ms
@@ -385,6 +386,22 @@ module MCP
       warn_if_deprecated_protocol_feature(:roots, uplevel: 1)
 
       @handlers[Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED] = block
+    end
+
+    # Sets a custom handler for `resources/list` requests, letting the visible list depend on request context such as
+    # the authenticated principal or granted scope. The block returns the resource collection to serve;
+    # the framework paginates it and stamps SEP-2549 cache hints exactly as it does for the constructor-provided resources,
+    # so the block returns only the array, not the paginated result.
+    # A block that declares a `server_context:` keyword receives an `MCP::ServerContext`. When no handler is set,
+    # the constructor-provided `resources` array is served unchanged.
+    #
+    # The block is invoked once per page, so it must return a stable ordering across the pages of one logical query;
+    # the cursor is a positional offset into the returned collection.
+    #
+    # @yield [params, server_context:] The request params, and an `MCP::ServerContext` when declared.
+    # @yieldreturn [Array<MCP::Resource>] The resources to paginate.
+    def resources_list_handler(&block)
+      @resources_list_handler = block
     end
 
     # Sets a custom handler for `resources/read` requests.
@@ -1088,10 +1105,26 @@ module MCP
       call_prompt_template_with_args(prompt, prompt_args, server_context)
     end
 
-    def list_resources(request)
-      page = paginate(@resources, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+    def list_resources(request, server_context: nil)
+      resources = if @resources_list_handler
+        invoke_resources_list_handler(request, server_context)
+      else
+        @resources
+      end
+
+      page = paginate(resources, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
       apply_cache_metadata({ resources: page[:items], nextCursor: page[:next_cursor] }.compact)
+    end
+
+    # Calls the `resources_list_handler` block, forwarding `server_context:` only when the block opts in
+    # by declaring the keyword (the same rule `dispatch_optional_context_handler` applies).
+    def invoke_resources_list_handler(request, server_context)
+      if handler_declares_server_context?(@resources_list_handler)
+        @resources_list_handler.call(request, server_context: server_context)
+      else
+        @resources_list_handler.call(request)
+      end
     end
 
     # Default `resources/read` handler: routes to class-based resources and resource templates.
