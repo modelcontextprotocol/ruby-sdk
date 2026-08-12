@@ -374,6 +374,56 @@ module MCP
       end
     end
 
+    test "#handle rejects removed lifecycle methods carrying the envelope before the era locks" do
+      # `StdioTransport` locks the era only after a response succeeds, so the first request of a connection
+      # arrives with `era == nil`. The envelope on the request is what identifies it as modern there.
+      Methods::MODERN_REMOVED_METHODS.each do |method|
+        session = ServerSession.new(server: @server, transport: mock)
+
+        response = @server.handle(modern_request(method, {}), session: session)
+
+        assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, response.dig(:error, :code), "expected -32601 for #{method}"
+      end
+    end
+
+    test "#handle does not let an enveloped initialize lock the era before it is settled" do
+      # Serving it would negotiate the legacy lifecycle for a request that declared the modern one,
+      # pinning the connection to the wrong era for its whole lifetime.
+      session = ServerSession.new(server: @server, transport: mock)
+
+      @server.handle(modern_request("initialize", initialize_params), session: session)
+
+      assert_nil session.era
+      refute_predicate session, :initialized?
+    end
+
+    test "#handle serves an enveloped method the modern lifecycle keeps before the era locks" do
+      session = ServerSession.new(server: @server, transport: mock)
+
+      response = @server.handle(modern_request("tools/list", {}), session: session)
+
+      refute_nil response[:result]
+    end
+
+    test "#handle keeps serving a legacy initialize that negotiates a dual-era version" do
+      # Negotiating 2026-07-28 through the legacy handshake is not the same as carrying the modern envelope:
+      # the handshake still belongs to the legacy lifecycle and locks that era.
+      session = ServerSession.new(server: @server, transport: mock)
+
+      response = @server.handle(
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: initialize_params(protocolVersion: "2026-07-28"),
+        },
+        session: session,
+      )
+
+      assert_equal "2026-07-28", response.dig(:result, :protocolVersion)
+      assert_equal :legacy, session.era
+    end
+
     test "#handle server/discover requires the envelope on a modern-locked session" do
       # The 2026-07-28 conformance requirements reject an envelope-less `server/discover`
       # on the modern era with -32602 (SEP-2575).
@@ -4255,9 +4305,11 @@ module MCP
     test "modern results carry resultType complete" do
       server = Server.new(name: "result_type_test", tools: [result_type_tool])
 
+      # Every method here has to be one the modern lifecycle still has. `ping` does not qualify:
+      # SEP-2575 removed it, so a modern request naming it is answered with -32601, not a stamped result.
       [
         modern_request(Methods::TOOLS_LIST, {}),
-        modern_request(Methods::PING, {}),
+        modern_request(Methods::PROMPTS_LIST, {}),
         modern_request(Methods::TOOLS_CALL, { name: "result_type_tool", arguments: {} }),
       ].each do |request|
         response = server.handle(request)

@@ -598,6 +598,29 @@ module MCP
           assert_equal :modern, session_era
         end
 
+        test "rejects a removed lifecycle method carrying the envelope as the connection's first frame" do
+          # The era locks only after a response succeeds, so this frame reaches the server unlocked.
+          # SEP-2575 removed `resources/subscribe`, and the envelope is what identifies the request as modern.
+          responses = run_transport_session([
+            {
+              jsonrpc: "2.0",
+              method: "resources/subscribe",
+              id: 1,
+              params: {
+                uri: "https://example.invalid/resource",
+                _meta: {
+                  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                  "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                  "io.modelcontextprotocol/clientCapabilities": {},
+                },
+              },
+            },
+          ])
+
+          assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, responses[0].dig(:error, :code)
+          refute_equal :legacy, session_era
+        end
+
         test "does not lock an era when the era-distinctive request fails" do
           # An unsupported envelope version fails with -32022, so the connection stays unlocked
           # and a legacy initialize can still succeed afterwards.

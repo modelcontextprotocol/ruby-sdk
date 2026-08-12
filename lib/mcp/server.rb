@@ -565,9 +565,9 @@ module MCP
       end
 
       # SEP-2575 removes these RPCs from the modern lifecycle, so they answer with Method not found
-      # there regardless of the envelope or the server's declared capabilities: in this era the method
-      # does not exist at all, which is why the check precedes `ensure_capability!`.
-      if session.respond_to?(:era) && session.era == :modern && Methods::MODERN_REMOVED_METHODS.include?(method)
+      # there regardless of the server's declared capabilities: in this era the method does not exist
+      # at all, which is why the check precedes `ensure_capability!`.
+      if Methods::MODERN_REMOVED_METHODS.include?(method) && modern_request?(request, session)
         raise RequestHandlerError.new(
           "Method not found: #{method} is not part of the modern lifecycle (SEP-2575)",
           request,
@@ -675,6 +675,23 @@ module MCP
           session&.unregister_in_flight(related_request_id) if related_request_id
         end
       }
+    end
+
+    # Whether this request belongs to the modern lifecycle, used to refuse the RPCs SEP-2575 removed from it.
+    # A locked `ServerSession#era` is authoritative; until it locks, the request's own `_meta` envelope is
+    # the signal. Both are needed because `StdioTransport` locks the era only after a response succeeds,
+    # which would otherwise let the first request of a connection reach a method the modern lifecycle does not have.
+    # The Python SDK gates the same way, on the envelope of each request rather than on connection state that
+    # is only settled afterwards.
+    #
+    # A legacy-locked session is deliberately excluded: `lift_request_envelope` answers a modern envelope there
+    # with the lifecycle violation, which names the cause better than Method not found.
+    def modern_request?(request, session)
+      era = session.respond_to?(:era) ? session.era : nil
+      return true if era == :modern
+      return false unless era.nil?
+
+      RequestEnvelope.modern?(request.is_a?(Hash) ? request[:params] : nil)
     end
 
     # Lifts the SEP-2575 per-request `_meta` envelope for modern requests. Only a request whose `_meta` carries
