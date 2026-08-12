@@ -8,9 +8,9 @@ client:
   # are not implemented in `MCP::Client::HTTP` yet.
   - http-custom-headers
   - http-invalid-tool-headers
-  # Client-side JSON Schema preservation gaps: `$ref` values must reach the caller unresolved.
+  # Client-side JSON Schema handling: `$ref` values must reach the caller unresolved,
+  # and the conformance client does not run the scenario over the modern lifecycle yet.
   - json-schema-ref-no-deref
-  - json-schema-2020-12-preservation
   # Unimplemented authorization extensions.
   - auth/dpop
   - auth/dpop-nonce
