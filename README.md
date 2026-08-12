@@ -1493,6 +1493,18 @@ server.define_tool(name: "update_resource") do |server_context:, **args|
 end
 ```
 
+The `resources/subscribe` and `resources/unsubscribe` responses are empty results. The one field the spec allows
+alongside is `_meta`, so a handler that returns `{ _meta: { ... } }` has it passed through; any other field it
+returns is dropped. To convey a subscription identifier or other advisory data to the client, nest it under `_meta`
+rather than returning it at the top level, which interoperating clients reject:
+
+```ruby
+server.resources_subscribe_handler do |params|
+  id = subscriptions.create(params[:uri].to_s)
+  { _meta: { "myapp.example/subscriptionId" => id } }
+end
+```
+
 ### Sampling
 
 The Model Context Protocol allows servers to request LLM completions from clients through the `sampling/createMessage` method.

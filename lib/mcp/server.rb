@@ -407,19 +407,25 @@ module MCP
     end
 
     # Sets a custom handler for `resources/subscribe` requests.
-    # The block receives the parsed request params. The return value is
-    # ignored; the response is always an empty result `{}` per the MCP specification.
+    # The block receives the parsed request params. The response is an empty result, except that
+    # a `_meta` hash the block returns is passed through - the spec defines no other member for this result,
+    # so any other field the block returns is dropped. Nest a subscription identifier or other advisory data
+    # under `_meta`.
     #
     # @yield [params] The request params containing `:uri`.
+    # @yieldreturn [Hash, nil] Optionally `{ _meta: { ... } }`; any other shape yields an empty result.
     def resources_subscribe_handler(&block)
       @handlers[Methods::RESOURCES_SUBSCRIBE] = block
     end
 
     # Sets a custom handler for `resources/unsubscribe` requests.
-    # The block receives the parsed request params. The return value is
-    # ignored; the response is always an empty result `{}` per the MCP specification.
+    # The block receives the parsed request params. The response is an empty result, except that
+    # a `_meta` hash the block returns is passed through - the spec defines no other member for this result,
+    # so any other field the block returns is dropped. Nest a subscription identifier or other advisory data
+    # under `_meta`.
     #
     # @yield [params] The request params containing `:uri`.
+    # @yieldreturn [Hash, nil] Optionally `{ _meta: { ... } }`; any other shape yields an empty result.
     def resources_unsubscribe_handler(&block)
       @handlers[Methods::RESOURCES_UNSUBSCRIBE] = block
     end
@@ -621,8 +627,9 @@ module MCP
             contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
             validate_resource_subscription_params!(params)
-            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
-            {}
+            handler_result = dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+
+            subscription_result(handler_result)
           when Methods::TOOLS_CALL
             call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
           when Methods::PROMPTS_GET
@@ -904,6 +911,18 @@ module MCP
       unless params.is_a?(Hash) && params[:uri].is_a?(String)
         raise RequestHandlerError.new("Missing or invalid uri", params, error_type: :invalid_params)
       end
+    end
+
+    # The `resources/subscribe` and `resources/unsubscribe` result is an empty object except for the optional `_meta`
+    # every result may carry: the TypeScript SDK validates it against `EmptyResultSchema.strict()`,
+    # which rejects any other member, so only `_meta` is passed through from the handler. A handler that returns
+    # anything else keeps the empty `{}` result it had before, so returning a subscription identifier or
+    # other advisory data means nesting it under `_meta`.
+    def subscription_result(handler_result)
+      return {} unless handler_result.is_a?(Hash)
+
+      meta = handler_result[:_meta] || handler_result["_meta"]
+      meta.is_a?(Hash) ? { _meta: meta } : {}
     end
 
     def validate_initialize_params!(params)
