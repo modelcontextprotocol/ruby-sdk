@@ -85,49 +85,25 @@ module MCP
       assert_equal Methods::NOTIFICATIONS_MESSAGE, @mock_transport.notifications.first[:method]
     end
 
-    test "#notify_log_message warns when configured protocol version is 2026-07-28" do
-      server = Server.new(
-        name: "test_server",
-        version: "1.0.0",
-        configuration: Configuration.new(protocol_version: "2026-07-28"),
-      )
+    test "#notify_log_message does not warn on any server configuration" do
+      # A modern pin is rejected at configuration time and the handshake never lands on
+      # a deprecating revision, so no server-side path can reach the SEP-2577 warnings;
+      # the notification itself still goes out (or is suppressed below the configured level).
+      server = Server.new(name: "test_server", version: "1.0.0")
       mock_transport = MockTransport.new(server)
       server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
 
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+      assert_no_deprecation_warning do
         server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
       end
 
       assert_equal Methods::NOTIFICATIONS_MESSAGE, mock_transport.notifications.first[:method]
-    end
 
-    test "#notify_log_message warns when configured protocol version is 2026-07-28 without transport" do
-      server = Server.new(
-        name: "test_server",
-        version: "1.0.0",
-        configuration: Configuration.new(protocol_version: "2026-07-28"),
-      )
-      server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
-
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
-        server.notify_log_message(data: { error: "Connection Failed" }, level: "error")
-      end
-    end
-
-    test "#notify_log_message warns when configured protocol version is 2026-07-28 below configured level" do
-      server = Server.new(
-        name: "test_server",
-        version: "1.0.0",
-        configuration: Configuration.new(protocol_version: "2026-07-28"),
-      )
-      mock_transport = MockTransport.new(server)
-      server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "error")
-
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+      assert_no_deprecation_warning do
         server.notify_log_message(data: { message: "test" }, level: "info")
       end
 
-      assert_empty mock_transport.notifications
+      assert_equal 1, mock_transport.notifications.size
     end
 
     test "#notify_log_message does not warn when configured protocol version is older" do
@@ -144,7 +120,9 @@ module MCP
       end
     end
 
-    test "ServerSession#notify_log_message warns when negotiated protocol version is 2026-07-28 below configured level" do
+    test "ServerSession#notify_log_message does not warn after a modern initialize request is counter-offered" do
+      # `initialize` asking for 2026-07-28 lands on 2025-11-25 (SEP-2575 era model), where logging
+      # is not deprecated; the below-configured-level suppression still applies.
       server = Server.new(name: "test_server", version: "1.0.0")
       mock_transport = MockTransport.new(server)
       session = ServerSession.new(server: server, transport: mock_transport)
@@ -163,7 +141,7 @@ module MCP
       )
       session.configure_logging(MCP::LoggingMessageNotification.new(level: "error"))
 
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+      assert_no_deprecation_warning do
         session.notify_log_message(data: { message: "test" }, level: "info")
       end
 

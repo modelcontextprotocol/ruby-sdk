@@ -563,15 +563,15 @@ module MCP
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
         end
 
-        test "initialize negotiating 2026-07-28 still locks the legacy era" do
-          # 2026-07-28 serves both lifecycles of the dual-era model: negotiating it through
-          # the legacy handshake locks `:legacy`, so a later modern envelope is still rejected.
+        test "initialize requesting 2026-07-28 is counter-offered 2025-11-25 and locks the legacy era" do
+          # Per the SEP-2575 era model, the handshake never lands on a modern version; the connection proceeds on
+          # the legacy lifecycle it selected, so a later modern envelope is still rejected.
           responses = run_transport_session([
             initialize_request(id: 1, protocol_version: "2026-07-28"),
             modern_tools_list_request(id: 2),
           ])
 
-          assert_equal "2026-07-28", responses[0].dig(:result, :protocolVersion)
+          assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, responses[0].dig(:result, :protocolVersion)
           assert_equal :legacy, session_era
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, responses[1].dig(:error, :code)
         end

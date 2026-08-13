@@ -585,8 +585,7 @@ configuration = MCP::Configuration.new(protocol_version: "2024-11-05")
 MCP::Server.new(name: "test_server", configuration: configuration)
 ```
 
-If no protocol version is specified, the latest stable version will be applied by default.
-The latest stable version includes new features from the [draft version](https://modelcontextprotocol.io/specification/draft).
+If no protocol version is specified, the latest handshake version (`2025-11-25`) is applied by default.
 
 This will make all new server instances use the specified protocol version instead of the default version. The protocol version can be reset to the default by setting it to `nil`:
 
@@ -595,6 +594,11 @@ MCP::Configuration.new(protocol_version: nil)
 ```
 
 If an invalid `protocol_version` value is set, an `ArgumentError` is raised.
+
+The pin scopes the `initialize` handshake, so it accepts handshake versions (`2025-11-25` and earlier) only. Per the SEP-2575 era model,
+`2026-07-28` carries its version on every request and has no handshake at all, so there is nothing for a pin to configure there and setting it raises `ArgumentError`;
+a client asking `initialize` for a modern version is counter-offered the pinned version (or the latest handshake version), matching the TypeScript and Python SDKs.
+Clients reach `2026-07-28` through `server/discover` and the per-request `_meta` envelope, which the bundled transports serve alongside the handshake with no configuration needed.
 
 Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification/versioning) for the protocol version to understand the supported features for the version being set.
 

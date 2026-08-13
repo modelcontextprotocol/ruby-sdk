@@ -248,7 +248,7 @@ module MCP
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
           assert_equal "123", body["id"]
-          assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
+          assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
         end
 
         test "rejects duplicate initialize with existing Mcp-Session-Id and preserves session" do
@@ -1902,7 +1902,9 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
           body = JSON.parse(response[2][0])
-          assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
+          # The body's requested version drives negotiation (not the older header);
+          # the default modern request is counter-offered the latest handshake version.
+          assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
         end
 
         test "POST initialize request negotiates body protocolVersion when header is a newer supported version" do
@@ -2027,7 +2029,9 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params(protocolVersion: "2026-07-28") }.to_json,
           )
           init_response = @transport.handle_request(init_request)
-          assert_equal "2026-07-28", JSON.parse(init_response[2][0])["result"]["protocolVersion"]
+          # The handshake never negotiates a modern version (SEP-2575 era model);
+          # the session proceeds on the counter-offered 2025-11-25.
+          assert_equal "2025-11-25", JSON.parse(init_response[2][0])["result"]["protocolVersion"]
           session_id = init_response[1]["mcp-session-id"]
 
           request = create_rack_request(
@@ -5784,9 +5788,10 @@ module MCP
           assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
-        test "sessionless POST initialize with the dual-era header stays legacy and negotiates 2026-07-28" do
+        test "sessionless POST initialize with the dual-era header stays legacy and is counter-offered" do
           # The 2026-07-28 header alone cannot route the era: a sessionless `initialize` body is
-          # the legacy-distinctive handshake, so a client sending both connects over the legacy lifecycle.
+          # the legacy-distinctive handshake, so a client sending both connects over the legacy lifecycle
+          # and is counter-offered the latest handshake version (SEP-2575 era model).
           request = create_rack_request(
             "POST",
             "/",
@@ -5797,10 +5802,16 @@ module MCP
           response = @transport.handle_request(request)
           assert_equal 200, response[0]
           refute_nil response[1]["mcp-session-id"]
-          assert_equal "2026-07-28", JSON.parse(response[2][0]).dig("result", "protocolVersion")
+          assert_equal "2025-11-25", JSON.parse(response[2][0]).dig("result", "protocolVersion")
         end
 
         test "session-bound POST with the dual-era header stays on the legacy path" do
+          # A deliberately lenient reading. The header names a version the handshake refused to
+          # negotiate, so it disagrees with the session; the session wins and the request is served
+          # at the negotiated revision, unstamped. Rejecting instead would read the spec's
+          # "invalid or unsupported MCP-Protocol-Version MUST be 400" as covering a version this
+          # server does in fact support (through the modern lifecycle), and would break a client
+          # over what is a SHOULD on its side: sending the negotiated version rather than its own.
           session_id = initialize_test_session
 
           response = @transport.handle_request(create_rack_request(
@@ -5815,6 +5826,13 @@ module MCP
           ))
 
           assert_equal 200, response[0]
+
+          io = StringIO.new
+          response[2].call(io)
+          body = sse_events(io).first
+
+          # No `resultType`: the header claim does not move the session onto the modern wire.
+          refute(body["result"].key?("resultType"))
         end
 
         test "session-bound DELETE with the dual-era header terminates the legacy session" do

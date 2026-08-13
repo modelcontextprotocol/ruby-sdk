@@ -818,7 +818,56 @@ module MCP
         stdout_write.close
       end
 
-      def test_connect_warns_for_deprecated_capabilities_when_negotiated_protocol_version_is_2026_07_28
+      def test_connect_adopts_a_counter_offered_protocol_version
+        # A server may answer `initialize` with a version other than the one offered, and the connection
+        # then speaks the answer rather than the offer. This server counter-offers a handshake version
+        # to clients asking `initialize` for a modern one, which only resolves anything because
+        # clients behave this way.
+        counter_offered = "2025-06-18"
+        refute_equal(
+          counter_offered,
+          MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION,
+          "the counter-offer has to differ from the offer for this to test anything",
+        )
+
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        offered = nil
+
+        server_thread = Thread.new do
+          init_request = JSON.parse(stdin_read.gets)
+          offered = init_request.dig("params", "protocolVersion")
+          stdout_write.puts(JSON.generate(
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: { protocolVersion: counter_offered },
+          ))
+          stdout_write.flush
+          stdin_read.gets
+        end
+
+        transport.connect
+
+        assert_equal(MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, offered)
+        assert_equal(counter_offered, transport.protocol_version)
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_connect_rejects_a_modern_protocol_version_in_the_initialize_result
+        # A server answering `initialize` with a modern version is refused like an unknown one:
+        # the handshake settles on a legacy version by definition (SEP-2575 era model),
+        # and the TypeScript and Python clients refuse a modern counter-offer the same way.
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe
         stderr_read, _ = IO.pipe
@@ -836,18 +885,33 @@ module MCP
             result: { protocolVersion: "2026-07-28" },
           ))
           stdout_write.flush
-          stdin_read.gets
         end
 
-        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
+        error = assert_raises(RequestHandlerError) do
           transport.connect(capabilities: { roots: { listChanged: true }, sampling: {} })
         end
+
+        assert_includes(error.message, "2026-07-28")
+        refute_predicate(transport, :connected?)
       ensure
         server_thread.join
         stdin_read.close
         stdin_write.close
         stdout_read.close
         stdout_write.close
+      end
+
+      def test_connect_raises_argument_error_for_an_explicit_modern_protocol_version_on_the_legacy_handshake
+        # Validated before the child process is spawned: a pure argument error must not leave
+        # an orphaned server process behind.
+        Open3.expects(:popen3).never
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        error = assert_raises(ArgumentError) do
+          transport.connect(protocol_version: "2026-07-28", mode: :legacy)
+        end
+
+        assert_includes(error.message, "cannot be negotiated through the legacy `initialize` handshake")
       end
 
       def test_connect_raises_on_jsonrpc_error_response
@@ -1491,6 +1555,43 @@ module MCP
         assert_equal("2026-07-28", triple["io.modelcontextprotocol/protocolVersion"])
         assert_equal({ "name" => "my-app", "version" => "9.9" }, triple["io.modelcontextprotocol/clientInfo"])
         assert_equal({}, triple["io.modelcontextprotocol/clientCapabilities"])
+      ensure
+        server_thread&.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def test_connect_modern_warns_for_deprecated_capabilities
+        # SEP-2577 deprecates roots and sampling at 2026-07-28, the revision every modern connection speaks.
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        server_thread = Thread.new do
+          discover_request = JSON.parse(stdin_read.gets)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: discover_request["id"],
+            result: {
+              supportedVersions: ["2026-07-28"],
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0" },
+              ttlMs: 0,
+              cacheScope: "private",
+            },
+          }))
+          stdout_write.flush
+        end
+
+        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
+          transport.connect(mode: :modern, capabilities: { roots: { listChanged: true }, sampling: {} })
+        end
+
+        assert_predicate(transport, :modern?)
       ensure
         server_thread&.join
         [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read].each do |io|

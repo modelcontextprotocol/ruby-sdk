@@ -3,6 +3,15 @@
 require_relative "configuration"
 
 module MCP
+  # Warning texts for the features SEP-2577 deprecates at 2026-07-28.
+  #
+  # Only the client emits these, from the modern connect, where the capabilities it declares are
+  # the ones being deprecated. No server-side trigger remains: the `initialize` handshake never lands on
+  # a deprecating revision and `Configuration` rejects a modern pin, so nothing on that side can reach
+  # a version these apply to. `LOGGING_MESSAGE` in particular has no caller left
+  # (a modern client declares no logging capability, and `notify_log_message` on that wire is
+  # the SEP-2575 sanctioned delivery path rather than a deprecated call). It stays public and
+  # callable for embedders, and because deleting it would be a breaking change for no gain.
   module ProtocolDeprecations
     extend self
 

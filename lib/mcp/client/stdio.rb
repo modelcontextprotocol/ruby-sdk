@@ -77,8 +77,9 @@ module MCP
       #
       # @param client_info [Hash, nil] `{ name:, version: }` identifying the client.
       #   Defaults to `{ name: "mcp-ruby-client", version: MCP::VERSION }`.
-      # @param protocol_version [String, nil] Protocol version to offer. Defaults
-      #   to `MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION`.
+      # @param protocol_version [String, nil] Protocol version to offer on the legacy handshake.
+      #   Defaults to `MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION`; a modern version
+      #   raises `ArgumentError` here (modern versions are selected via `mode: :modern`/`:auto`).
       # @param capabilities [Hash] Capabilities advertised by the client. Defaults to `{}`.
       # @return [Hash] The server's `InitializeResult`.
       # @raise [RequestHandlerError] If the server responds with a JSON-RPC error,
@@ -90,6 +91,9 @@ module MCP
       # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
       def connect(client_info: nil, protocol_version: nil, capabilities: {}, mode: :legacy)
         return @server_info if connected?
+
+        # Validated before `start` so a pure argument error never spawns the server process.
+        MCP::Configuration.reject_modern_handshake_version!(protocol_version) if mode == :legacy
 
         start unless @started
 
@@ -221,7 +225,7 @@ module MCP
       private
 
       def connect_legacy(client_info:, protocol_version:, capabilities:)
-        protocol_version ||= MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION
+        protocol_version ||= MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION
 
         init_request = {
           jsonrpc: JsonRpcHandler::Version::V2_0,
@@ -257,9 +261,11 @@ module MCP
         @server_info = response["result"]
 
         negotiated_protocol_version = @server_info["protocolVersion"]
-        unless MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(negotiated_protocol_version)
+        unless MCP::Configuration::SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS.include?(negotiated_protocol_version)
           # Per spec, if the client does not support the server's returned protocol version,
-          # the client SHOULD disconnect. Roll back the cached `InitializeResult` before raising
+          # the client SHOULD disconnect. A modern version is rejected along with unknown ones:
+          # the handshake settles on a legacy version by definition, and the TypeScript and Python clients refuse
+          # a modern counter-offer the same way. Roll back the cached `InitializeResult` before raising
           # so a retry starts without a stale `server_info`.
           # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation
           @server_info = nil
@@ -269,8 +275,6 @@ module MCP
             error_type: :internal_error,
           )
         end
-
-        MCP::ProtocolDeprecations.warn_for_client_capabilities(capabilities, protocol_version: negotiated_protocol_version, uplevel: 1)
 
         begin
           notification = {
@@ -317,6 +321,10 @@ module MCP
           )
         end
 
+        # SEP-2577 deprecates roots and sampling at 2026-07-28, the revision every modern connection speaks,
+        # so the warning lives here now that the handshake cannot land on one.
+        MCP::ProtocolDeprecations.warn_for_client_capabilities(capabilities, protocol_version: version, uplevel: 1)
+
         @server_info = result
         @server_info
       end
@@ -327,8 +335,13 @@ module MCP
       # version as well: during the 2026-07-28 rollout a server may answer discovery while
       # only serving legacy versions.
       def connect_auto(client_info:, protocol_version:, capabilities:)
-        connect_modern(client_info: client_info, protocol_version: nil, capabilities: capabilities)
+        modern_pin = protocol_version if protocol_version && MCP::Configuration.modern_protocol_version?(protocol_version)
+        connect_modern(client_info: client_info, protocol_version: modern_pin, capabilities: capabilities)
       rescue RequestHandlerError
+        # An explicitly requested modern version is never downgraded by the fallback: the legacy handshake cannot negotiate it,
+        # so the probe's failure is the real answer and propagates.
+        raise if modern_pin
+
         connect_legacy(client_info: client_info, protocol_version: protocol_version, capabilities: capabilities)
       end
 
