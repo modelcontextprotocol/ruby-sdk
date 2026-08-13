@@ -71,7 +71,13 @@ It implements the Model Context Protocol specification, handling model context r
   client-controlled input: pass `MCP::Server::RequestStateSecurity.new(key:)` (a 32-byte key) via `Server.new(request_state_security:)` to
   have it sealed with AES-256-GCM and bound to a TTL plus the originating method, target, and arguments, all transparently to handlers.
   Multi-process deployments must share the key across workers; without `request_state_security:` the state crosses the wire exactly as
-  the handler wrote it and protecting it is the handler author's responsibility
+  the handler wrote it and protecting it is the handler author's responsibility. On the client, register handlers with
+  `on_elicitation` / `on_sampling` / `on_roots` - the same registrations that answer a real server-to-client request - and
+  declare the matching capabilities on `connect` (a server embeds only the request kinds the client declared);
+  `call_tool` / `get_prompt` / `read_resource` then resume `input_required` results automatically: each embedded request is fulfilled by
+  the matching handler and the original request is re-issued with `inputResponses` plus the echoed `requestState`
+  (with exponential backoff for `requestState`-only load-shedding legs). Without a matching handler they raise `MCP::Client::InputRequiredError`,
+  and the `input_responses:` / `request_state:` keyword arguments support manual driving
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas

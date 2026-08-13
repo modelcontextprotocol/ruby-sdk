@@ -162,6 +162,13 @@ end
 oauth = scenario.start_with?("auth/") ? build_provider_for(scenario, conformance_context) : nil
 transport = MCP::Client::HTTP.new(url: server_url, oauth: oauth)
 client = MCP::Client.new(transport: transport)
+
+# SEP-2322: the MRTR scenario exercises the automatic driver; this elicitation handler accepts
+# every embedded confirmation request, and the driver echoes `requestState` byte-exactly.
+# The same registration answers a real `elicitation/create` request, so nothing here is MRTR-specific.
+if scenario == "sep-2322-client-request-state"
+  client.on_elicitation { |_params| { action: "accept", content: { confirmed: true } } }
+end
 capabilities = scenario == "elicitation-sep1034-client-defaults" ? { elicitation: {} } : {}
 # The conformance harness asserts on the observed protocol exchange, not on the client's exit status,
 # and echoes the client's output only when the exit status is non-zero. Several negative auth scenarios
@@ -171,13 +178,28 @@ capabilities = scenario == "elicitation-sep1034-client-defaults" ? { elicitation
 # free of noise, while letting any unexpected error (a real SDK bug) still raise with a full backtrace
 # and a failing exit status.
 begin
-  # The conformance referee validates the legacy `initialize` handshake, so pin the legacy lifecycle:
-  # the default `:auto` negotiation would prepend a `server/discover` probe the scenario servers do not expect.
-  client.connect(
-    client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION },
-    capabilities: capabilities,
-    mode: :legacy,
-  )
+  # The harness names the wire version per scenario run: the 2026 draft selects the stateless modern lifecycle,
+  # and every dated version through 2025-11-25 keeps the legacy `initialize` handshake
+  # (pinned rather than `:auto`, whose `server/discover` probe the legacy scenario servers do not expect).
+  mode = ENV["MCP_CONFORMANCE_PROTOCOL_VERSION"] == "2026-07-28" ? :modern : :legacy
+  connect = lambda do
+    client.connect(
+      client_info: { name: "ruby-sdk-conformance-client", version: MCP::VERSION },
+      capabilities: capabilities,
+      mode: mode,
+    )
+  end
+
+  begin
+    connect.call
+  rescue MCP::Client::RequestHandlerError
+    # SEP-2575 version negotiation: a server may reject the first request with `-32022` naming
+    # its supported versions. Retry once so the harness observes a follow-up request carrying
+    # a mutually supported version (this client already speaks the latest draft).
+    raise unless mode == :modern
+
+    connect.call
+  end
 
   case scenario
   when "initialize"
@@ -190,6 +212,35 @@ begin
     focal = tools.find { |t| t.name == "json_schema_2020_12_tool" }
     abort("Tool json_schema_2020_12_tool not found") unless focal
     client.call_tool(name: "json_schema_echo", arguments: { "schema" => focal.input_schema })
+  when "request-metadata"
+    # SEP-2575: the checks read the envelope and headers of the requests the modern connect
+    # and this listing already produce.
+    client.tools
+  when "sep-2322-client-request-state"
+    # SEP-2322: the driver resumes `test_mrtr_echo_state` automatically (fresh JSON-RPC id,
+    # byte-exact `requestState` echo); `test_mrtr_unrelated` must carry neither retry field;
+    # `test_mrtr_no_state` retries without inventing a state; `test_mrtr_no_result_type`
+    # has no `resultType` and therefore must be treated as complete, with no retry.
+    client.tools
+    client.call_tool(name: "test_mrtr_echo_state", arguments: {})
+    client.call_tool(name: "test_mrtr_unrelated", arguments: {})
+    client.call_tool(name: "test_mrtr_no_state", arguments: {})
+    client.call_tool(name: "test_mrtr_no_result_type", arguments: {})
+  when "http-custom-headers"
+    # SEP-2243: the harness names the exact tool calls (with encoding edge-case values) via context;
+    # listing first teaches the transport the `x-mcp-header` declarations it mirrors.
+    client.tools
+    (conformance_context["toolCalls"] || []).each do |tool_call|
+      client.call_tool(name: tool_call["name"], arguments: tool_call["arguments"])
+    end
+  when "http-invalid-tool-headers"
+    # SEP-2243: the listing carries one valid tool among invalid `x-mcp-header` definitions;
+    # calling only the valid one shows the invalid definitions did not block it.
+    client.tools
+    client.call_tool(name: "valid_tool", arguments: { "message" => "hello" })
+  when "json-schema-ref-no-deref"
+    # SEP-2106: listing tools whose schemas carry `$ref` must not trigger network dereferencing.
+    client.tools
   when "tools_call"
     tools = client.tools
     add_numbers = tools.find { |t| t.name == "add_numbers" }

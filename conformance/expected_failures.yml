@@ -1,19 +1,6 @@
 server: []
 client:
-  # Pending client-side support for the 2026-07-28 stateless lifecycle: the conformance client
-  # still connects through the legacy handshake and has no SEP-2322 MRTR driver yet.
-  - request-metadata
-  - sep-2322-client-request-state
-  # SEP-2243 client-side custom-header mirroring and invalid-tool header gating
-  # are not implemented in `MCP::Client::HTTP` yet.
-  - http-custom-headers
-  - http-invalid-tool-headers
-  # Client-side JSON Schema handling: `$ref` values must reach the caller unresolved,
-  # and the conformance client does not run the scenario over the modern lifecycle yet.
-  - json-schema-ref-no-deref
   # Unimplemented authorization extensions.
   - auth/dpop
   - auth/dpop-nonce
   - auth/wif-jwt-bearer
-  # Fails one check added to the suite after the 0.2.0-alpha.10 requirements anchor.
-  - auth/authorization-server-migration

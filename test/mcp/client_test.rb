@@ -55,15 +55,14 @@ module MCP
       Client.new(transport: transport).on_elicitation(&handler)
     end
 
-    def test_on_elicitation_raises_when_transport_does_not_support_server_requests
+    def test_on_elicitation_is_accepted_when_transport_does_not_support_server_requests
+      # The handler still answers embedded `elicitation/create` requests of SEP-2322 `input_required` results,
+      # which need no server-to-client route. Refusing to register it would lock stdio clients,
+      # and every modern-lifecycle connection, out of the only way the spec leaves for asking.
       transport = mock
       transport.stubs(:respond_to?).with(:on_server_request).returns(false)
 
-      error = assert_raises(ArgumentError) do
-        Client.new(transport: transport).on_elicitation { { action: "accept", content: {} } }
-      end
-
-      assert_includes(error.message, "does not support server-to-client requests")
+      Client.new(transport: transport).on_elicitation { { action: "accept", content: {} } }
     end
 
     def test_on_sampling_registers_handler_on_transport
@@ -74,15 +73,19 @@ module MCP
       Client.new(transport: transport).on_sampling(&handler)
     end
 
-    def test_on_sampling_raises_when_transport_does_not_support_server_requests
+    def test_on_sampling_is_accepted_when_transport_does_not_support_server_requests
       transport = mock
       transport.stubs(:respond_to?).with(:on_server_request).returns(false)
 
-      error = assert_raises(ArgumentError) do
-        Client.new(transport: transport).on_sampling { { role: "assistant", content: { type: "text", text: "hi" } } }
-      end
+      Client.new(transport: transport).on_sampling { { role: "assistant", content: { type: "text", text: "hi" } } }
+    end
 
-      assert_includes(error.message, "does not support server-to-client requests")
+    def test_on_roots_registers_handler_on_transport
+      transport = mock
+      handler = proc { { roots: [{ uri: "file:///project", name: "Project" }] } }
+      transport.expects(:on_server_request).with("roots/list")
+
+      Client.new(transport: transport).on_roots(&handler)
     end
 
     # A transport that declares `mode:` on `connect`, recording what it received.
@@ -380,16 +383,20 @@ module MCP
       # constraints MUST be excluded from `tools/list` results, with a warning naming the tool.
       transport = mock
       transport.stubs(:modern?).returns(true)
-      mock_response = { "result" => { "tools" => [
-        { "name" => "valid_tool", "inputSchema" => { "type" => "object" } },
-        {
-          "name" => "invalid_tool",
-          "inputSchema" => {
-            "type" => "object",
-            "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
-          },
+      mock_response = {
+        "result" => {
+          "tools" => [
+            { "name" => "valid_tool", "inputSchema" => { "type" => "object" } },
+            {
+              "name" => "invalid_tool",
+              "inputSchema" => {
+                "type" => "object",
+                "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
+              },
+            },
+          ],
         },
-      ] } }
+      }
       transport.expects(:send_request).returns(mock_response).once
       client = Client.new(transport: transport)
 
@@ -408,15 +415,19 @@ module MCP
     def test_tools_keeps_invalid_x_mcp_header_definitions_on_a_legacy_connection
       transport = mock
       transport.stubs(:modern?).returns(false)
-      mock_response = { "result" => { "tools" => [
-        {
-          "name" => "invalid_tool",
-          "inputSchema" => {
-            "type" => "object",
-            "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
-          },
+      mock_response = {
+        "result" => {
+          "tools" => [
+            {
+              "name" => "invalid_tool",
+              "inputSchema" => {
+                "type" => "object",
+                "properties" => { "value" => { "type" => "string", "x-mcp-header" => "bad name" } },
+              },
+            },
+          ],
         },
-      ] } }
+      }
       transport.expects(:send_request).returns(mock_response).once
       client = Client.new(transport: transport)
 
@@ -540,6 +551,190 @@ module MCP
 
       client = Client.new(transport: transport)
       assert_raises(Client::InputRequiredError) { client.list_tools }
+    end
+
+    def test_call_tool_drives_the_input_required_loop_with_a_configured_handler
+      transport = mock
+      sent_requests = []
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => {
+            "region" => { "method" => "elicitation/create", "params" => { "message" => "Which region?" } },
+          },
+          "requestState" => "state-1",
+        },
+      }
+      final_response = { "result" => { "content" => [{ "type" => "text", "text" => "done" }] } }
+      transport.expects(:send_request).twice.with do |args|
+        sent_requests << args[:request]
+        true
+      end.returns(input_required_response, final_response)
+
+      handled_params = nil
+      client = Client.new(transport: transport)
+      client.on_elicitation do |params|
+        handled_params = params
+        { action: "accept", content: { value: "us-east-1" } }
+      end
+
+      response = client.call_tool(name: "my_tool", arguments: { city: "Tokyo" })
+
+      assert_equal("done", response.dig("result", "content", 0, "text"))
+      assert_equal({ "message" => "Which region?" }, handled_params)
+
+      first_leg, retry_leg = sent_requests
+      # The ORIGINAL params are preserved; the answers ride under the same keys with
+      # the byte-exact `requestState` echo, on a fresh JSON-RPC id.
+      assert_equal("my_tool", retry_leg.dig(:params, :name))
+      assert_equal({ city: "Tokyo" }, retry_leg.dig(:params, :arguments))
+      assert_equal(
+        { "region" => { action: "accept", content: { value: "us-east-1" } } },
+        retry_leg.dig(:params, :inputResponses),
+      )
+      assert_equal("state-1", retry_leg.dig(:params, :requestState))
+      refute_equal(first_leg[:id], retry_leg[:id])
+    end
+
+    def test_input_required_loop_backs_off_on_request_state_only_legs
+      transport = mock
+      state_only_response = {
+        "result" => { "resultType" => "input_required", "requestState" => "busy-state" },
+      }
+      final_response = { "result" => { "content" => [] } }
+      transport.stubs(:send_request).returns(state_only_response, state_only_response, final_response)
+
+      client = Client.new(transport: transport)
+      client.on_elicitation { |_params| {} }
+      slept = []
+      client.stubs(:sleep).with { |seconds| slept << seconds }
+
+      response = client.call_tool(name: "my_tool")
+
+      assert_equal(final_response, response)
+
+      # Exponential from 50ms, matching the Python SDK.
+      assert_equal([0.05, 0.1], slept)
+    end
+
+    def test_input_required_loop_raises_after_max_rounds
+      transport = mock
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => { "q" => { "method" => "elicitation/create", "params" => {} } },
+          "requestState" => "state-1",
+        },
+      }
+      transport.stubs(:send_request).returns(input_required_response)
+
+      client = Client.new(transport: transport, input_required_max_rounds: 2)
+      client.on_elicitation { |_params| { action: "decline" } }
+
+      error = assert_raises(Client::InputRequiredError) { client.call_tool(name: "my_tool") }
+
+      assert_includes(error.message, "after 2 rounds")
+      assert_equal("state-1", error.request_state)
+    end
+
+    def test_input_required_loop_falls_back_to_the_error_for_unhandled_request_kinds
+      transport = mock
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => { "llm" => { "method" => "sampling/createMessage", "params" => {} } },
+          "requestState" => "state-1",
+        },
+      }
+      transport.expects(:send_request).returns(input_required_response).once
+
+      client = Client.new(transport: transport)
+      client.on_elicitation { |_params| {} }
+
+      error = assert_raises(Client::InputRequiredError) { client.call_tool(name: "my_tool") }
+
+      assert_includes(error.message, "sampling/createMessage")
+      assert_equal("state-1", error.request_state)
+    end
+
+    def test_input_required_loop_runs_on_a_transport_without_server_request_support
+      # The modern lifecycle forbids server-to-client requests, so an `input_required` result is the only
+      # way a server can ask. A transport with no `on_server_request` must still drive the loop.
+      transport = mock
+      transport.stubs(:respond_to?).with(:on_server_request).returns(false)
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => { "q" => { "method" => "elicitation/create", "params" => { "message" => "Region?" } } },
+          "requestState" => "state-1",
+        },
+      }
+      final_response = { "result" => { "content" => [{ "text" => "done" }] } }
+      transport.expects(:send_request).twice.returns(input_required_response, final_response)
+
+      client = Client.new(transport: transport)
+      client.on_elicitation { |_params| { action: "accept", content: { value: "us-east-1" } } }
+
+      response = client.call_tool(name: "my_tool")
+
+      assert_equal("done", response.dig("result", "content", 0, "text"))
+    end
+
+    def test_input_required_loop_uses_a_roots_handler_registered_with_on_roots
+      transport = mock
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => { "r" => { "method" => "roots/list" } },
+          "requestState" => "state-1",
+        },
+      }
+      final_response = { "result" => { "content" => [{ "text" => "done" }] } }
+      transport.expects(:on_server_request).with("roots/list")
+      transport.expects(:send_request).twice.returns(input_required_response, final_response)
+
+      client = Client.new(transport: transport)
+      client.on_roots { |_params| { roots: [{ uri: "file:///project", name: "Project" }] } }
+
+      response = client.call_tool(name: "my_tool")
+
+      assert_equal("done", response.dig("result", "content", 0, "text"))
+    end
+
+    def test_call_tool_sends_manual_retry_fields
+      transport = mock
+      transport.expects(:send_request).with do |args|
+        params = args[:request][:params]
+        params[:inputResponses] == { "region" => { action: "accept" } } && params[:requestState] == "state-1" && params[:name] == "my_tool"
+      end.returns({ "result" => { "content" => [] } }).once
+
+      client = Client.new(transport: transport)
+      client.call_tool(name: "my_tool", input_responses: { "region" => { action: "accept" } }, request_state: "state-1")
+    end
+
+    def test_get_prompt_drives_the_input_required_loop
+      transport = mock
+      input_required_response = {
+        "result" => {
+          "resultType" => "input_required",
+          "inputRequests" => { "q" => { "method" => "elicitation/create", "params" => { "message" => "?" } } },
+          "requestState" => "prompt-state",
+        },
+      }
+      final_response = { "result" => { "messages" => [] } }
+      sent_requests = []
+      transport.expects(:send_request).twice.with do |args|
+        sent_requests << args[:request]
+        true
+      end.returns(input_required_response, final_response)
+
+      client = Client.new(transport: transport)
+      client.on_elicitation { |_params| { action: "accept", content: {} } }
+
+      result = client.get_prompt(name: "my_prompt")
+
+      assert_equal({ "messages" => [] }, result)
+      assert_equal("prompt-state", sent_requests[1].dig(:params, :requestState))
     end
 
     def test_call_tool_raises_when_no_name_or_tool

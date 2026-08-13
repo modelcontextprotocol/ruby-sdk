@@ -57,8 +57,9 @@ module MCP
     # `inputRequests` (a map of id => `{ "method" => ..., "params" => ... }` request objects with
     # `sampling/createMessage`, `roots/list`, or `elicitation/create` shapes) and re-issue
     # the original request with `inputResponses` plus the echoed opaque `requestState`.
-    # This SDK does not yet drive that resume loop automatically; callers can inspect `input_requests`
-    # and respond manually.
+    # With handlers registered through `on_elicitation`, `on_sampling`, or `on_roots`, the resume loop runs
+    # automatically; this error surfaces when no matching handler exists (manual driving via
+    # `input_requests` and the `input_responses:`/`request_state:` kwargs), or when the round cap is exhausted.
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322
     class InputRequiredError < StandardError
       attr_reader :input_requests, :request_state, :result
@@ -93,16 +94,36 @@ module MCP
       keyword_init: true,
     )
 
+    # Rounds the SEP-2322 driver runs before giving up, matching the TypeScript and
+    # Python SDK defaults. Every leg counts, including `requestState`-only retries.
+    DEFAULT_INPUT_REQUIRED_MAX_ROUNDS = 10
+
+    # Backoff for `requestState`-only (load shedding) legs: exponential from 50ms to
+    # a 250ms cap, matching the Python SDK (the TypeScript SDK uses a fixed 250ms).
+    STATE_ONLY_BACKOFF_INITIAL_SECONDS = 0.05
+    STATE_ONLY_BACKOFF_CAP_SECONDS = 0.25
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
     #   The transport should be a duck type that responds to `send_request`. See the README for more details.
+    # @param input_required_max_rounds [Integer] Cap on SEP-2322 driver rounds.
+    #
+    # Once a handler is registered through `on_elicitation`, `on_sampling`, or `on_roots`, `call_tool`,
+    # `get_prompt`, and `read_resource` resume `input_required` results automatically; without handlers
+    # (or when a requested kind has no handler) they raise `InputRequiredError` for manual driving,
+    # exactly as before.
     #
     # @example
     #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
     #   client = MCP::Client.new(transport: transport)
-    def initialize(transport:)
+    def initialize(transport:, input_required_max_rounds: DEFAULT_INPUT_REQUIRED_MAX_ROUNDS)
       @transport = transport
+      # Populated by `on_elicitation`, `on_sampling`, and `on_roots`. The same handler answers both ways
+      # the server can ask for input: a real server-to-client request, and an embedded request inside
+      # a SEP-2322 `input_required` result.
+      @input_required_handlers = {}
+      @input_required_max_rounds = input_required_max_rounds
     end
 
     # The user may want to access additional transport-specific methods/attributes
@@ -431,7 +452,10 @@ module MCP
     # @note
     #   The exact requirements for `arguments` are determined by the transport layer in use.
     #   Consult the documentation for your transport (e.g., MCP::Client::HTTP) for details.
-    def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil, meta: nil, cancellation: nil)
+    # @param input_responses [Hash, nil] SEP-2322 answers to a previous `input_required` result's `inputRequests`,
+    #   keyed identically (manual retry legs).
+    # @param request_state [String, nil] The opaque `requestState` echoed back byte-exactly.
+    def call_tool(name: nil, tool: nil, arguments: nil, progress_token: nil, meta: nil, cancellation: nil, input_responses: nil, request_state: nil)
       tool_name = name || tool&.name
       raise ArgumentError, "Either `name:` or `tool:` must be provided." unless tool_name
 
@@ -442,8 +466,10 @@ module MCP
         meta_entries[:progressToken] = progress_token
       end
       params[:_meta] = meta_entries unless meta_entries.empty?
+      params[:inputResponses] = input_responses if input_responses
+      params[:requestState] = request_state if request_state
 
-      request(method: "tools/call", params: params, cancellation: cancellation)
+      drive_input_required(method: "tools/call", params: params, cancellation: cancellation)
     end
 
     # Reads a resource from the server by URI and returns the contents.
@@ -453,8 +479,13 @@ module MCP
     #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @param cancellation [MCP::Cancellation, nil] Optional cancellation token.
     # @return [Array<Hash>] An array of resource contents (text or blob).
-    def read_resource(uri:, meta: nil, cancellation: nil)
-      response = request(method: "resources/read", params: { uri: uri }, meta: meta, cancellation: cancellation)
+    def read_resource(uri:, meta: nil, cancellation: nil, input_responses: nil, request_state: nil)
+      params = { uri: uri }
+      params = params.merge(_meta: meta) if meta && !meta.empty?
+      params[:inputResponses] = input_responses if input_responses
+      params[:requestState] = request_state if request_state
+
+      response = drive_input_required(method: "resources/read", params: params, cancellation: cancellation)
 
       response.dig("result", "contents") || []
     end
@@ -466,8 +497,13 @@ module MCP
     #   e.g. SEP-414 trace context (see {MCP::TraceContext}).
     # @param cancellation [MCP::Cancellation, nil] Optional cancellation token.
     # @return [Hash] A hash containing the prompt details.
-    def get_prompt(name:, meta: nil, cancellation: nil)
-      response = request(method: "prompts/get", params: { name: name }, meta: meta, cancellation: cancellation)
+    def get_prompt(name:, meta: nil, cancellation: nil, input_responses: nil, request_state: nil)
+      params = { name: name }
+      params = params.merge(_meta: meta) if meta && !meta.empty?
+      params[:inputResponses] = input_responses if input_responses
+      params[:requestState] = request_state if request_state
+
+      response = drive_input_required(method: "prompts/get", params: params, cancellation: cancellation)
 
       response.fetch("result", {})
     end
@@ -496,8 +532,11 @@ module MCP
     # (message and `requestedSchema`, string keys) and must return an `ElicitResult`-shaped Hash:
     # `{ action: "accept" | "decline" | "cancel", content: { ... } }`.
     #
-    # Requires a transport that supports server-to-client requests (e.g. `MCP::Client::HTTP`);
-    # pass `capabilities: { elicitation: {} }` to `connect` so the server knows it may send them.
+    # The same handler answers both ways a server can ask: a real request mid-call, which needs a transport that
+    # carries server-to-client requests (e.g. `MCP::Client::HTTP`); and an `elicitation/create` embedded in a SEP-2322
+    # `input_required` result, which needs no server-to-client route, and is how the modern lifecycle asks now that it
+    # forbids server-to-client requests. Both routes need `capabilities: { elicitation: {} }` passed to `connect`: per SEP-2322,
+    # a server MUST NOT embed input requests of a kind the client has not declared.
     #
     # @example Accept with schema defaults applied (SEP-1034)
     #   client.on_elicitation do |params|
@@ -508,11 +547,7 @@ module MCP
     #   end
     # https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
     def on_elicitation(&handler)
-      unless transport.respond_to?(:on_server_request)
-        raise ArgumentError, "The transport does not support server-to-client requests"
-      end
-
-      transport.on_server_request(Methods::ELICITATION_CREATE, &handler)
+      register_input_handler(Methods::ELICITATION_CREATE, &handler)
     end
 
     # Registers a handler for `sampling/createMessage` requests the server sends while one of this client's requests is in flight.
@@ -523,8 +558,11 @@ module MCP
     # For trust and safety, the spec recommends a human in the loop able to review, edit, or reject the request and the generated response
     # before it is returned to the server. To reject, raise `ServerRequestError` with the spec's user-rejection code `-1`.
     #
-    # Requires a transport that supports server-to-client requests (e.g. `MCP::Client::HTTP`); pass `capabilities: { sampling: {} }` to
-    # `connect` (or `{ sampling: { tools: {} } }` to receive tool-enabled sampling requests) so the server knows it may send them.
+    # The same handler answers both ways a server can ask: a real request mid-call, which needs a transport that
+    # carries server-to-client requests (e.g. `MCP::Client::HTTP`); and a `sampling/createMessage` embedded in a SEP-2322
+    # `input_required` result, which needs no server-to-client route. Both routes need `capabilities: { sampling: {} }` passed to
+    # `connect` (or `{ sampling: { tools: {} } }` for tool-enabled requests): per SEP-2322, a server MUST NOT embed input requests of
+    # a kind the client has not declared.
     #
     # @example Forward the request to an LLM and return its completion
     #
@@ -546,11 +584,23 @@ module MCP
     #   Register this handler only to interoperate with servers that still send sampling requests during the deprecation window;
     #   new servers should call LLM provider APIs directly.
     def on_sampling(&handler)
-      unless transport.respond_to?(:on_server_request)
-        raise ArgumentError, "The transport does not support server-to-client requests"
-      end
+      register_input_handler(Methods::SAMPLING_CREATE_MESSAGE, &handler)
+    end
 
-      transport.on_server_request(Methods::SAMPLING_CREATE_MESSAGE, &handler)
+    # Registers a handler for `roots/list`, answering both a server-to-client request on transports that
+    # support one and an embedded `roots/list` inside a SEP-2322 `input_required` result. The handler
+    # receives the request `params` (`nil` for `roots/list`) and must return a `ListRootsResult`-shaped Hash:
+    # `{ roots: [{ uri: "file:///project", name: "Project" }] }`.
+    #
+    # @example
+    #   client.on_roots { { roots: [{ uri: "file:///project", name: "Project" }] } }
+    #
+    # @deprecated MCP Roots (`roots/list`) is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
+    #   Register this handler only to interoperate with servers that still ask for roots.
+    #
+    # https://modelcontextprotocol.io/specification/2025-11-25/client/roots
+    def on_roots(&handler)
+      register_input_handler(Methods::ROOTS_LIST, &handler)
     end
 
     # Sends a `ping` request to the server to verify the connection is alive.
@@ -575,6 +625,19 @@ module MCP
     end
 
     private
+
+    # Records a handler for one of the three kinds of input a server can ask this client for, and wires it to
+    # the transport when the transport can carry server-to-client requests. One registration serves both routes:
+    # the real request a 2025-11-25 server sends mid-call, and the request embedded in a SEP-2322
+    # `input_required` result, which is how the modern lifecycle asks now that it forbids server-to-client
+    # requests outright. Registering is therefore valid on a transport with no `on_server_request` (stdio,
+    # and every modern-lifecycle connection); only the wire route is skipped there.
+    def register_input_handler(method, &handler)
+      @input_required_handlers[method] = handler
+      transport.on_server_request(method, &handler) if transport.respond_to?(:on_server_request)
+
+      handler
+    end
 
     # SEP-2243: on the modern lifecycle, a tool definition whose `x-mcp-header` annotations violate
     # the spec constraints MUST be excluded from `tools/list` results, so one malformed definition
@@ -655,7 +718,7 @@ module MCP
     # without mutating the caller's hashes. Per SEP-414, `_meta` carries
     # request-specific metadata such as W3C trace context (`traceparent`,
     # `tracestate`, `baggage`); see {MCP::TraceContext}.
-    def request(method:, params: nil, meta: nil, cancellation: nil)
+    def request(method:, params: nil, meta: nil, cancellation: nil, raise_on_input_required: true)
       params = (params || {}).merge(_meta: meta) if meta && !meta.empty?
 
       request_body = {
@@ -677,20 +740,104 @@ module MCP
         raise ServerError.new(error["message"], code: error["code"], data: error["data"])
       end
 
-      raise_on_input_required(response)
+      raise_on_input_required(response) if raise_on_input_required
 
       response
+    end
+
+    # Drives the SEP-2322 multi round-trip loop for `tools/call`, `prompts/get`, and `resources/read`.
+    # With no configured handlers this degrades to the plain request (an `input_required` result raises
+    # `InputRequiredError` for manual driving). Otherwise each `inputRequests` entry is fulfilled by
+    # the matching handler and the ORIGINAL request is re-issued with `inputResponses` under
+    # the same keys plus the byte-exact echoed `requestState`, on a fresh JSON-RPC id per leg.
+    # A `requestState`-only result (load shedding) retries after an exponential backoff.
+    # Every leg counts against `input_required_max_rounds`.
+    def drive_input_required(method:, params:, cancellation:)
+      response = request(
+        method: method,
+        params: params,
+        cancellation: cancellation,
+        raise_on_input_required: @input_required_handlers.empty?,
+      )
+      return response unless input_required?(response)
+
+      original_params = params.dup
+      original_params.delete(:inputResponses)
+      original_params.delete(:requestState)
+      rounds = 0
+      backoff = STATE_ONLY_BACKOFF_INITIAL_SECONDS
+
+      loop do
+        result = response["result"]
+        rounds += 1
+        if rounds > @input_required_max_rounds
+          raise InputRequiredError.new(
+            "Server still returned `input_required` after #{@input_required_max_rounds} rounds (SEP-2322).",
+            input_requests: result["inputRequests"] || {},
+            request_state: result["requestState"],
+            result: result,
+          )
+        end
+
+        input_requests = result["inputRequests"] || {}
+        responses = nil
+        if input_requests.empty?
+          sleep(backoff)
+          backoff = [backoff * 2, STATE_ONLY_BACKOFF_CAP_SECONDS].min
+        else
+          backoff = STATE_ONLY_BACKOFF_INITIAL_SECONDS
+          responses = fulfill_input_requests(input_requests, result)
+        end
+
+        retry_params = original_params.dup
+        retry_params[:inputResponses] = responses if responses
+        retry_params[:requestState] = result["requestState"] if result["requestState"]
+
+        response = request(
+          method: method,
+          params: retry_params,
+          cancellation: cancellation,
+          raise_on_input_required: false,
+        )
+        return response unless input_required?(response)
+      end
+    end
+
+    # Dispatches every embedded request to its configured handler and collects
+    # the answers under the same keys. A kind without a handler falls back to
+    # the manual path by raising `InputRequiredError` with the full result.
+    def fulfill_input_requests(input_requests, result)
+      input_requests.each_with_object({}) do |(key, entry), responses|
+        entry_method = entry.is_a?(Hash) ? entry["method"] || entry[:method] : nil
+        handler = @input_required_handlers[entry_method]
+        unless handler
+          raise InputRequiredError.new(
+            "Server requested #{entry_method.inspect} input (key #{key.inspect}) but no matching handler " \
+              "is configured; inspect `input_requests` to respond manually (SEP-2322).",
+            input_requests: input_requests,
+            request_state: result["requestState"],
+            result: result,
+          )
+        end
+
+        responses[key] = handler.call(entry.is_a?(Hash) ? entry["params"] || entry[:params] : nil)
+      end
+    end
+
+    def input_required?(response)
+      result = response.is_a?(Hash) ? response["result"] : nil
+      result.is_a?(Hash) && result["resultType"] == ResultType::INPUT_REQUIRED
     end
 
     # Recognizes a SEP-2322 `input_required` result and raises rather than returning it as if it were a final result.
     # Servers on stable protocol versions never emit `resultType`, so this is a no-op for them.
     def raise_on_input_required(response)
-      result = response.is_a?(Hash) ? response["result"] : nil
-      return unless result.is_a?(Hash) && result["resultType"] == ResultType::INPUT_REQUIRED
+      return unless input_required?(response)
 
+      result = response["result"]
       raise InputRequiredError.new(
-        "Server returned `input_required`; this SDK does not yet resume multi-round-trip requests (SEP-2322). " \
-          "Inspect `input_requests` to respond manually.",
+        "Server returned `input_required` (SEP-2322). Register a handler with `on_elicitation`, " \
+          "`on_sampling`, or `on_roots` to resume automatically, or inspect `input_requests` to respond manually.",
         input_requests: result["inputRequests"] || {},
         request_state: result["requestState"],
         result: result,
