@@ -3960,15 +3960,16 @@ module MCP
     end
 
     test "list results carry ttlMs and cacheScope when ttl_ms is configured" do
-      # SEP-2549 cache hints. The cacheScope default is "public", matching
-      # the spec default and the Python SDK.
+      # SEP-2549 cache hints. The unset cacheScope fills as "private", the side that cannot
+      # leak a user-dependent result through a shared cache, matching the TypeScript and
+      # Python SDK defaults (the spec names no default scope).
       server = Server.new(name: "ttl_test", ttl_ms: 5000)
 
       ["tools/list", "prompts/list", "resources/list", "resources/templates/list"].each_with_index do |method, index|
         result = server.handle({ jsonrpc: "2.0", method: method, id: index + 1 })[:result]
 
         assert_equal 5000, result[:ttlMs], "#{method} missing ttlMs"
-        assert_equal "public", result[:cacheScope], "#{method} missing cacheScope"
+        assert_equal "private", result[:cacheScope], "#{method} missing cacheScope"
       end
     end
 
@@ -4029,7 +4030,7 @@ module MCP
       })[:result]
 
       assert_equal 60_000, result[:ttlMs]
-      assert_equal "public", result[:cacheScope]
+      assert_equal "private", result[:cacheScope]
       assert_equal [{ uri: "file:///x", mimeType: "text/plain", text: "hi" }], result[:contents]
     end
 
@@ -4309,6 +4310,56 @@ module MCP
       response = server.handle({ jsonrpc: "2.0", method: Methods::SERVER_DISCOVER, id: 1 })
 
       assert_equal "complete", response.dig(:result, :resultType)
+    end
+
+    # SEP-2549 makes the `ttlMs`/`cacheScope` cache hints REQUIRED on cacheable results at 2026-07-28;
+    # unset hints get the spec defaults, and stable protocol versions keep the opt-in emission.
+    test "modern cacheable results carry the default cache hints" do
+      server = Server.new(name: "cache_hints_test", tools: [result_type_tool])
+
+      response = server.handle(modern_request(Methods::TOOLS_LIST, {}))
+
+      assert_equal 0, response.dig(:result, :ttlMs)
+      assert_equal "private", response.dig(:result, :cacheScope)
+    end
+
+    test "modern non-cacheable results carry no cache hints" do
+      server = Server.new(name: "cache_hints_test", tools: [result_type_tool])
+
+      response = server.handle(modern_request(Methods::PING, {}))
+
+      refute response[:result].key?(:ttlMs)
+      refute response[:result].key?(:cacheScope)
+    end
+
+    test "configured cache hints win over the modern defaults" do
+      server = Server.new(name: "cache_hints_test", tools: [result_type_tool], ttl_ms: 5000, cache_scope: "private")
+
+      response = server.handle(modern_request(Methods::TOOLS_LIST, {}))
+
+      assert_equal 5000, response.dig(:result, :ttlMs)
+      assert_equal "private", response.dig(:result, :cacheScope)
+    end
+
+    test "modern resources/read results carry the default cache hints" do
+      server = Server.new(name: "cache_hints_test")
+      server.resources_read_handler do |params|
+        [{ uri: params[:uri], mimeType: "text/plain", text: "hi" }]
+      end
+
+      response = server.handle(modern_request(Methods::RESOURCES_READ, { uri: "file:///x" }))
+
+      assert_equal 0, response.dig(:result, :ttlMs)
+      assert_equal "private", response.dig(:result, :cacheScope)
+    end
+
+    test "legacy cacheable results keep the opt-in cache hint emission" do
+      server = Server.new(name: "cache_hints_test", tools: [result_type_tool])
+
+      response = server.handle({ jsonrpc: "2.0", method: Methods::TOOLS_LIST, id: 1 })
+
+      refute response[:result].key?(:ttlMs)
+      refute response[:result].key?(:cacheScope)
     end
 
     private
