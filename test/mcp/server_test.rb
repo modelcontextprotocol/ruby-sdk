@@ -4378,7 +4378,10 @@ module MCP
     test "modern non-cacheable results carry no cache hints" do
       server = Server.new(name: "cache_hints_test", tools: [result_type_tool])
 
-      response = server.handle(modern_request(Methods::PING, {}))
+      # `tools/call` is the non-cacheable example here: the spec types `CallToolResult` as a plain `Result`,
+      # while the results it types as `CacheableResult` are the discover, list, and read families.
+      # `ping` cannot stand in for it - SEP-2575 removed that method, so a modern request naming it is refused.
+      response = server.handle(modern_request(Methods::TOOLS_CALL, { name: "result_type_tool", arguments: {} }))
 
       refute response[:result].key?(:ttlMs)
       refute response[:result].key?(:cacheScope)
