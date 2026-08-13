@@ -7,6 +7,10 @@ module MCP
     LOGGING_SET_LEVEL = "logging/setLevel"
     # Sessionless capability discovery (MCP 2026-07-28 draft, SEP-2575).
     SERVER_DISCOVER = "server/discover"
+    # Long-lived notification subscription stream (MCP 2026-07-28, SEP-2575),
+    # replacing the legacy HTTP GET listening stream. Served at the transport layer
+    # (Streamable HTTP modern path); transports without streaming support answer `-32601`.
+    SUBSCRIPTIONS_LISTEN = "subscriptions/listen"
 
     PROMPTS_GET = "prompts/get"
     PROMPTS_LIST = "prompts/list"
@@ -50,6 +54,9 @@ module MCP
     NOTIFICATIONS_PROGRESS = "notifications/progress"
     NOTIFICATIONS_CANCELLED = "notifications/cancelled"
     NOTIFICATIONS_ELICITATION_COMPLETE = "notifications/elicitation/complete"
+    # First message on a `subscriptions/listen` stream (SEP-2575): reports the subset
+    # of requested notification types the server agreed to honor.
+    NOTIFICATIONS_SUBSCRIPTIONS_ACKNOWLEDGED = "notifications/subscriptions/acknowledged"
 
     class MissingRequiredCapabilityError < StandardError
       attr_reader :method

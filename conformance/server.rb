@@ -667,6 +667,34 @@ module Conformance
         end
       end
     end
+
+    class TestTriggerToolChange < MCP::Tool
+      tool_name "test_trigger_tool_change"
+      description "A diagnostic tool that broadcasts notifications/tools/list_changed to listen streams (SEP-2575)"
+
+      class << self
+        # The broadcast alone exercises the `subscriptions/listen` delivery, so no actual
+        # tool-list mutation is needed, matching the suite's TypeScript reference fixture.
+        def call(server_context:, **_args)
+          server_context.notify_tools_list_changed
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Mutation triggered").to_h])
+        end
+      end
+    end
+
+    class TestTriggerPromptChange < MCP::Tool
+      tool_name "test_trigger_prompt_change"
+      description "A diagnostic tool that broadcasts notifications/prompts/list_changed to listen streams (SEP-2575)"
+
+      class << self
+        def call(server_context:, **_args)
+          server_context.notify_prompts_list_changed
+
+          MCP::Tool::Response.new([MCP::Content::Text.new("Mutation triggered").to_h])
+        end
+      end
+    end
   end
 
   module Prompts
@@ -907,6 +935,8 @@ module Conformance
           Tools::TestInputRequiredResultCapabilities,
           Tools::TestStreamingElicitation,
           Tools::TestLoggingTool,
+          Tools::TestTriggerToolChange,
+          Tools::TestTriggerPromptChange,
         ],
         prompts: [
           Prompts::TestSimplePrompt,

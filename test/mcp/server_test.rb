@@ -130,13 +130,38 @@ module MCP
       result = response[:result]
 
       assert_equal Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS, result[:supportedVersions]
-      assert_equal @server.capabilities, result[:capabilities]
+      # Without a `subscriptions/listen`-serving transport, the `listChanged` flags are
+      # stripped from the advertised capabilities (see the dedicated tests below).
+      assert_equal @server.capabilities.keys, result[:capabilities].keys
       # Per the finalized spec (PR #3002), the server identity is the optional `_meta` stamp,
       # not a top-level `serverInfo` field.
       assert_equal @server_name, result.dig(:_meta, RequestEnvelope::SERVER_INFO_META_KEY, :name)
       assert_equal "1.2.3", result.dig(:_meta, RequestEnvelope::SERVER_INFO_META_KEY, :version)
       refute result.key?(:serverInfo)
       assert_equal "Optional instructions for the client", result[:instructions]
+    end
+
+    test "#handle server/discover strips listChanged and subscribe flags without a listen-serving transport" do
+      server = Server.new(name: "discover_test", capabilities: {
+        tools: { listChanged: true },
+        resources: { listChanged: true, subscribe: true },
+        logging: {},
+      })
+
+      result = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })[:result]
+
+      assert_equal({ tools: {}, resources: {}, logging: {} }, result[:capabilities])
+    end
+
+    test "#handle server/discover keeps listChanged flags when the transport serves subscriptions/listen" do
+      server = Server.new(name: "discover_test", capabilities: { tools: { listChanged: true } })
+      transport = mock
+      transport.stubs(:serves_subscriptions_listen?).returns(true)
+      server.transport = transport
+
+      result = server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })[:result]
+
+      assert_equal({ tools: { listChanged: true } }, result[:capabilities])
     end
 
     test "#handle server/discover responds before initialize and regardless of capabilities" do
