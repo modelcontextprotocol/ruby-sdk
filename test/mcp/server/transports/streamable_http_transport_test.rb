@@ -2939,6 +2939,18 @@ module MCP
           assert_equal("Stateless mode does not support server-to-client requests.", error.message)
         end
 
+        test "send_request refuses to run at all in the modern lifecycle" do
+          # SEP-2575 removes server-initiated requests, so a modern handler reaching for elicitation or sampling
+          # is told why rather than being sent down a path that fails on an unrelated session lookup.
+          modern_session = ServerSession.new(server: @server, transport: @transport, session_id: "modern-1", era: :modern)
+
+          error = assert_raises(RuntimeError) do
+            @transport.send_request("elicitation/create", { message: "hi" }, session_id: "modern-1", server_session: modern_session)
+          end
+
+          assert_equal("Server-initiated requests are not available in the modern lifecycle (SEP-2575).", error.message)
+        end
+
         test "send_request raises error when session_id is not provided" do
           error = assert_raises(RuntimeError) do
             @transport.send_request("sampling/createMessage", { "messages" => [] })
