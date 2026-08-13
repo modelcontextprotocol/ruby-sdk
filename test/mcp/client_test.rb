@@ -1645,6 +1645,59 @@ module MCP
       assert_equal(2, tools.size)
     end
 
+    def test_tools_raises_when_the_server_offers_more_pages_than_max_pages
+      transport = mock
+
+      pages = (1..3).map do |n|
+        {
+          "result" => {
+            "tools" => [{ "name" => "tool#{n}", "description" => "tool#{n}", "inputSchema" => {} }],
+            "nextCursor" => "cursor#{n}",
+          },
+        }
+      end
+
+      # A fresh cursor on every response defeats the repeat guard, so only `max_pages` stops the walk.
+      transport.expects(:send_request).times(3).returns(*pages)
+
+      client = Client.new(transport: transport, max_pages: 3)
+
+      error = assert_raises(Client::PaginationLimitError) { client.tools }
+      assert_equal(
+        "Server returned more than 3 pages; pass a larger `max_pages:` to `MCP::Client.new` if this is expected.",
+        error.message,
+      )
+    end
+
+    def test_tools_returns_every_page_when_the_server_stops_exactly_at_max_pages
+      transport = mock
+
+      page1 = {
+        "result" => {
+          "tools" => [{ "name" => "tool1", "description" => "tool1", "inputSchema" => {} }],
+          "nextCursor" => "cursor1",
+        },
+      }
+      page2 = {
+        "result" => {
+          "tools" => [{ "name" => "tool2", "description" => "tool2", "inputSchema" => {} }],
+        },
+      }
+
+      transport.expects(:send_request).twice.returns(page1, page2)
+
+      client = Client.new(transport: transport, max_pages: 2)
+      tools = client.tools
+
+      assert_equal(["tool1", "tool2"], tools.map(&:name))
+    end
+
+    def test_raises_argument_error_when_max_pages_is_not_positive
+      error = assert_raises(ArgumentError) { Client.new(transport: mock, max_pages: 0) }
+
+      assert_equal("max_pages must be a positive Integer", error.message)
+    end
+
     def test_tools_breaks_when_server_cycles_between_cursors
       transport = mock
 

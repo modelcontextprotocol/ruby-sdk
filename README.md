@@ -2386,12 +2386,17 @@ If your application needs the complete collection regardless of how the server i
 `client.tools`, `client.resources`, `client.resource_templates`, and `client.prompts` auto-iterate
 through all pages and return a plain array of items, guaranteeing the full collection regardless
 of the server's `page_size` setting. When a server paginates, they issue multiple JSON-RPC round
-trips per call and break out of the pagination loop if the server returns the same `nextCursor`
-twice in a row as a safety measure.
+trips per call. Two guards keep that loop finite: it stops when the server returns a `nextCursor`
+it has already sent, and it stops after `max_pages` pages.
 
 ```ruby
 tools = client.tools # => Array<MCP::Client::Tool> of every tool on the server.
 ```
+
+`MCP::Client.new` accepts an optional `max_pages:` keyword that caps how many pages these methods
+will walk. It defaults to `1_000`; a server that keeps offering a fresh `nextCursor` past that
+point raises `MCP::Client::PaginationLimitError` rather than being followed indefinitely. Raise it
+if you legitimately expect more pages than that.
 
 Use these when you want the complete list; use `list_tools(cursor:)` etc. when you need
 fine-grained iteration (e.g. to stream-process pages without loading everything into memory).

@@ -12,6 +12,12 @@ require_relative "result_type"
 
 module MCP
   class Client
+    # Upper bound on the number of pages the all-pages methods (`tools`, `resources`,
+    # `resource_templates`, `prompts`) will walk. The cursor guard in `fetch_all_pages` only
+    # stops a server that repeats or cycles cursors; one that returns a fresh `nextCursor` on
+    # every response would otherwise be followed indefinitely, growing the retained pages with it.
+    MAX_PAGES = 1_000
+
     class ServerError < StandardError
       attr_reader :code, :data
 
@@ -51,6 +57,11 @@ module MCP
     # whose `result` field is missing or has the wrong type. This is distinct from a
     # server-returned JSON-RPC error, which is raised as `ServerError`.
     class ValidationError < StandardError; end
+
+    # Raised when an all-pages method reaches `max_pages` while the server is still offering
+    # another cursor. Use the single-page `list_*` methods to walk such a collection with
+    # a policy of your own.
+    class PaginationLimitError < StandardError; end
 
     # Raised when a server answers with a SEP-2322 Multi Round-Trip `input_required` result instead of
     # a final result. The result is not an error on the wire: it asks the client to fulfill the server's
@@ -108,6 +119,8 @@ module MCP
     # @param transport [Object] The transport object to use for communication with the server.
     #   The transport should be a duck type that responds to `send_request`. See the README for more details.
     # @param input_required_max_rounds [Integer] Cap on SEP-2322 driver rounds.
+    # @param max_pages [Integer] Maximum number of pages the all-pages methods ({#tools}, {#resources},
+    #   {#resource_templates}, {#prompts}) will walk before raising {MCP::Client::PaginationLimitError}.
     #
     # Once a handler is registered through `on_elicitation`, `on_sampling`, or `on_roots`, `call_tool`,
     # `get_prompt`, and `read_resource` resume `input_required` results automatically; without handlers
@@ -117,8 +130,15 @@ module MCP
     # @example
     #   transport = MCP::Client::HTTP.new(url: "http://localhost:3000")
     #   client = MCP::Client.new(transport: transport)
-    def initialize(transport:, input_required_max_rounds: DEFAULT_INPUT_REQUIRED_MAX_ROUNDS)
+    def initialize(transport:, input_required_max_rounds: DEFAULT_INPUT_REQUIRED_MAX_ROUNDS, max_pages: MAX_PAGES)
+      # `nil` or a non-positive value would make the pagination unbounded and silently
+      # disable the protection, so reject it up front.
+      unless max_pages.is_a?(Integer) && max_pages > 0
+        raise ArgumentError, "max_pages must be a positive Integer"
+      end
+
       @transport = transport
+      @max_pages = max_pages
       # Populated by `on_elicitation`, `on_sampling`, and `on_roots`. The same handler answers both ways
       # the server can ask for input: a real server-to-client request, and an embedded request inside
       # a SEP-2322 `input_required` result.
@@ -301,6 +321,7 @@ module MCP
     #   Cancelling it aborts whichever page is currently in flight; pages already returned are kept,
     #   but the call raises `MCP::CancelledError` instead of returning the partial set.
     # @return [Array<MCP::Client::Tool>] An array of available tools.
+    # @raise [MCP::Client::PaginationLimitError] If the server offers more than `max_pages` pages.
     #
     # @example
     #   tools = client.tools
@@ -342,6 +363,7 @@ module MCP
     #
     # @param cancellation [MCP::Cancellation, nil] Optional cancellation token (see {#tools}).
     # @return [Array<Hash>] An array of available resources.
+    # @raise [MCP::Client::PaginationLimitError] See {#tools}.
     def resources(cancellation: nil)
       # TODO: consider renaming to `list_all_resources`.
       fetch_all_pages { |cursor| list_resources(cursor: cursor, cancellation: cancellation) }.flat_map(&:resources)
@@ -377,6 +399,7 @@ module MCP
     #
     # @param cancellation [MCP::Cancellation, nil] Optional cancellation token (see {#tools}).
     # @return [Array<Hash>] An array of available resource templates.
+    # @raise [MCP::Client::PaginationLimitError] See {#tools}.
     def resource_templates(cancellation: nil)
       # TODO: consider renaming to `list_all_resource_templates`.
       fetch_all_pages { |cursor| list_resource_templates(cursor: cursor, cancellation: cancellation) }.flat_map(&:resource_templates)
@@ -412,6 +435,7 @@ module MCP
     #
     # @param cancellation [MCP::Cancellation, nil] Optional cancellation token (see {#tools}).
     # @return [Array<Hash>] An array of available prompts.
+    # @raise [MCP::Client::PaginationLimitError] See {#tools}.
     def prompts(cancellation: nil)
       # TODO: consider renaming to `list_all_prompts`.
       fetch_all_pages { |cursor| list_prompts(cursor: cursor, cancellation: cancellation) }.flat_map(&:prompts)
@@ -695,7 +719,8 @@ module MCP
 
     # Walks every page of a list endpoint, following `next_cursor`, and returns
     # the page results. The `seen` set guards against a server that repeats or
-    # cycles cursors, so the loop always terminates.
+    # cycles cursors, and `@max_pages` bounds one that returns a fresh cursor every
+    # time, so the loop always terminates.
     def fetch_all_pages
       pages = []
       seen = Set.new
@@ -706,6 +731,11 @@ module MCP
         pages << page
         next_cursor = page.next_cursor
         break if next_cursor.nil? || seen.include?(next_cursor)
+
+        if pages.size >= @max_pages
+          raise PaginationLimitError, "Server returned more than #{@max_pages} pages; pass a larger `max_pages:` to " \
+                                      "`MCP::Client.new` if this is expected."
+        end
 
         seen << next_cursor
         cursor = next_cursor
