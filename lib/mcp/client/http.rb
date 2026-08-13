@@ -27,6 +27,29 @@ module MCP
       DEFAULT_RECONNECTION_DELAY_MS = 1000
       MAX_RECONNECTION_ATTEMPTS = 2
 
+      # Floor on the effective reconnection delay. `listen_for_server_requests` treats a graceful close as success
+      # and resets `consecutive_failures`, so `retry: 0` never reaches the attempt cap and reconnects in a tight loop.
+      # Waiting longer than the server asked for is explicitly allowed: the `retry` field the spec points at is
+      # the one defined by WHATWG HTML, whose reconnection algorithm reads "Wait a delay equal to the reconnection time
+      # of the event source. Optionally, wait some more." Waiting *less* is what the spec's MUST rules out,
+      # and nothing here ever does that.
+      #
+      # https://html.spec.whatwg.org/multipage/server-sent-events.html#reconnection-time
+      MIN_RECONNECTION_DELAY_MS = 100
+
+      # Budget in seconds for `await_response_after_disconnect`: it gates every wait between reconnection attempts,
+      # and whatever is left of it becomes the read timeout of each resumed stream. That method runs on the calling thread,
+      # so without a deadline a server answering with a large `retry:` parks a thread of the embedding application for
+      # as long as it likes; `MAX_RECONNECTION_ATTEMPTS` caps how many times the client reconnects,
+      # not how long it waits for each. A delay that would run past the deadline is not shortened - the client stops
+      # reconnecting instead, the same kind of decision the attempt cap already makes, so the server's `retry:` is
+      # always honored in full or not acted on at all.
+      #
+      # Matches `SSE_LISTENER_READ_TIMEOUT`, this client's other "how long to wait on a quiet SSE stream" value.
+      # `listen_for_server_requests` has no such deadline: it runs on a thread this client owns and is meant
+      # to poll indefinitely, so a long `retry:` there idles the SDK's own listener rather than the application.
+      MAX_RECONNECTION_WAIT = 300
+
       # How long the standalone GET listening stream may stay idle before the read times out
       # and the connection is counted as a failure and retried. Matches the Python SDK's
       # `sse_read_timeout` default of 5 minutes; without this, the adapter's default read timeout
@@ -216,11 +239,22 @@ module MCP
 
       attr_reader :url, :session_id, :protocol_version, :server_info, :oauth
 
-      def initialize(url:, headers: {}, oauth: nil, max_message_bytes: MAX_MESSAGE_BYTES, &block)
+      def initialize(
+        url:,
+        headers: {},
+        oauth: nil,
+        max_message_bytes: MAX_MESSAGE_BYTES,
+        max_reconnection_wait: MAX_RECONNECTION_WAIT,
+        &block
+      )
         # `nil` or a non-positive value would make the buffering unbounded and silently
         # disable the protection, so reject it up front.
         unless max_message_bytes.is_a?(Integer) && max_message_bytes > 0
           raise ArgumentError, "max_message_bytes must be a positive Integer"
+        end
+
+        unless max_reconnection_wait.is_a?(Numeric) && max_reconnection_wait > 0
+          raise ArgumentError, "max_reconnection_wait must be a positive number"
         end
 
         if oauth && !MCP::Client::OAuth::Discovery.secure_url?(url)
@@ -237,6 +271,7 @@ module MCP
         @faraday_customizer = block
         @oauth = oauth
         @max_message_bytes = max_message_bytes
+        @max_reconnection_wait = max_reconnection_wait
         # Snapshot the canonical URL at construction time. This single value
         # serves two related roles, both of which need to see the query string:
         #
@@ -965,8 +1000,24 @@ module MCP
 
           stream.reset_parser!
 
-          sleep((stream.retry_ms || DEFAULT_RECONNECTION_DELAY_MS) / 1000.0)
+          sleep(reconnection_delay_seconds(stream))
         end
+      end
+
+      # The reconnection delay in seconds: the server's `retry:` value when it sent one and
+      # the default otherwise, never shortened, raised to `MIN_RECONNECTION_DELAY_MS` when the server
+      # asked for less than that. A `retry:` that is negative or not a run of digits is not a value at all;
+      # the SSE parser drops it, so those arrive here as the default rather than as something to guard.
+      def reconnection_delay_seconds(stream)
+        delay_ms = stream.retry_ms || DEFAULT_RECONNECTION_DELAY_MS
+
+        [delay_ms, MIN_RECONNECTION_DELAY_MS].max / 1000.0
+      end
+
+      # Seconds left before `deadline`, floored just above zero so a budget consumed down to the last instant
+      # still asks the adapter for a timeout rather than for "no timeout".
+      def remaining_reconnection_budget(deadline)
+        [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0.001].max
       end
 
       def require_faraday!
@@ -1085,23 +1136,43 @@ module MCP
 
       # SEP-1699 resumability: the server closed the SSE stream after a priming event
       # without delivering the response. Treat the graceful close like a network failure:
-      # wait the server-specified `retry:` interval (default 1000ms), then reconnect with
+      # wait the `retry:` interval the server asked for (default 1000ms), then reconnect with
       # a GET carrying `Last-Event-ID` so the server can replay the pending response on
       # the standalone stream. Mirrors the TypeScript SDK's `StreamableHTTPClientTransport`
       # reconnection and the Python SDK's `_handle_reconnection` (including its 2-attempt cap).
+      #
+      # This runs on the caller's thread, so the attempts are bounded by `max_reconnection_wait` as well as
+      # by their count: the deadline gates each wait, and what is left of it becomes the read timeout of
+      # the resumed stream. A delay that would run past the deadline is never shortened: the client stops
+      # reconnecting instead, so the server's `retry:` is honored in full or not acted on at all.
       # https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1699
       def await_response_after_disconnect(stream, method, params)
         stream.abortable = true
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @max_reconnection_wait
+        gave_up_waiting = false
 
         MAX_RECONNECTION_ATTEMPTS.times do
-          sleep((stream.retry_ms || DEFAULT_RECONNECTION_DELAY_MS) / 1000.0)
+          delay = reconnection_delay_seconds(stream)
+          if Process.clock_gettime(Process::CLOCK_MONOTONIC) + delay > deadline
+            gave_up_waiting = true
+            break
+          end
+
+          sleep(delay)
           stream.reset_parser!
+
+          # Bound the resumed stream's idle time by what is left of the budget, rather than leaving it to
+          # whatever the Faraday adapter defaults to. `listen_for_server_requests` guards its own GET the same way;
+          # without this, a caller-supplied adapter with no default read timeout would let a server hold
+          # the connection open past the budget by simply sending nothing.
+          read_timeout = remaining_reconnection_budget(deadline)
 
           reconnect_response = begin
             client.get("") do |req|
               req.headers.update(session_headers)
               req.headers["Accept"] = SSE_ACCEPT_HEADER
               req.headers[LAST_EVENT_ID_HEADER] = stream.last_event_id if stream.last_event_id
+              req.options.read_timeout = read_timeout
               req.options.on_data = stream.on_data
             end
           rescue StreamAbort
@@ -1117,9 +1188,14 @@ module MCP
           return stream.response if stream.response
         end
 
+        reason = if gave_up_waiting
+          "the reconnection delay it asked for would exceed the #{@max_reconnection_wait} second reconnection budget"
+        else
+          "#{MAX_RECONNECTION_ATTEMPTS} reconnection attempts"
+        end
+
         raise RequestHandlerError.new(
-          "Server closed the SSE stream without a response for #{method} " \
-            "after #{MAX_RECONNECTION_ATTEMPTS} reconnection attempts",
+          "Server closed the SSE stream without a response for #{method} after #{reason}",
           { method: method, params: params },
           error_type: :internal_error,
         )
