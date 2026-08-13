@@ -162,6 +162,41 @@ module MCP
       assert_equal({}, result)
     end
 
+    test "ServerContext forwards a per-request timeout to the notification target" do
+      notification_target = mock
+      notification_target.expects(:ping).with(related_request_id: nil, timeout: 12).returns({})
+      notification_target.expects(:list_roots).with(related_request_id: nil, timeout: 34).returns({ roots: [] })
+      notification_target.expects(:create_form_elicitation).with(
+        message: "Approve?",
+        requested_schema: { type: "object", properties: {} },
+        related_request_id: nil,
+        timeout: 56,
+      ).returns({ action: "accept" })
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(mock, progress: progress, notification_target: notification_target)
+
+      server_context.ping(timeout: 12)
+      server_context.list_roots(timeout: 34)
+      server_context.create_form_elicitation(
+        message: "Approve?",
+        requested_schema: { type: "object", properties: {} },
+        timeout: 56,
+      )
+    end
+
+    test "ServerContext omits timeout entirely when the caller does not ask for one" do
+      # A notification target predating the keyword (a custom object standing in for a session) keeps working,
+      # and the transport applies its own default.
+      notification_target = mock
+      notification_target.expects(:ping).with(related_request_id: nil).returns({})
+
+      progress = Progress.new(notification_target: notification_target, progress_token: nil)
+      server_context = ServerContext.new(mock, progress: progress, notification_target: notification_target)
+
+      server_context.ping
+    end
+
     test "ServerContext#ping raises NoMethodError when notification_target does not respond" do
       notification_target = mock
       context = mock

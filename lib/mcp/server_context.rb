@@ -138,9 +138,9 @@ module MCP
     #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
     #   server configuration, or environment variables instead.
-    def list_roots
+    def list_roots(timeout: nil)
       if @notification_target.respond_to?(:list_roots)
-        @notification_target.list_roots(related_request_id: @related_request_id)
+        @notification_target.list_roots(related_request_id: @related_request_id, **timeout_kwarg(timeout))
       else
         raise NoMethodError, "undefined method 'list_roots' for #{self}"
       end
@@ -160,9 +160,9 @@ module MCP
     #   end
     #
     # @see https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping
-    def ping
+    def ping(timeout: nil)
       if @notification_target.respond_to?(:ping)
-        @notification_target.ping(related_request_id: @related_request_id)
+        @notification_target.ping(related_request_id: @related_request_id, **timeout_kwarg(timeout))
       else
         raise NoMethodError, "undefined method 'ping' for #{self}"
       end
@@ -244,6 +244,16 @@ module MCP
 
     def respond_to_missing?(name, include_private = false)
       @context.respond_to?(name) || super
+    end
+
+    private
+
+    # An omitted `timeout:` is not forwarded at all, so the delegated call keeps the shape it had
+    # before per-request timeouts existed. A notification target that predates the keyword
+    # (a custom object standing in for a session) keeps working until a caller actually asks for a timeout,
+    # and the transport applies its own default in that case.
+    def timeout_kwarg(timeout)
+      timeout.nil? ? {} : { timeout: timeout }
     end
   end
 end

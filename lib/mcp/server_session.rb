@@ -131,7 +131,7 @@ module MCP
     #   `notifications/roots/list_changed`) is deprecated as of MCP protocol
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
     #   server configuration, or environment variables instead.
-    def list_roots(related_request_id: nil)
+    def list_roots(related_request_id: nil, timeout: nil)
       @server.send(:warn_if_deprecated_protocol_feature, :roots, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
@@ -139,12 +139,12 @@ module MCP
         raise "Client does not support roots."
       end
 
-      send_to_transport_request(Methods::ROOTS_LIST, nil, related_request_id: related_request_id)
+      send_to_transport_request(Methods::ROOTS_LIST, nil, related_request_id: related_request_id, timeout: timeout)
     end
 
     # Sends a `ping` request scoped to this session.
-    def ping(related_request_id: nil)
-      result = send_to_transport_request(Methods::PING, nil, related_request_id: related_request_id)
+    def ping(related_request_id: nil, timeout: nil)
+      result = send_to_transport_request(Methods::PING, nil, related_request_id: related_request_id, timeout: timeout)
       raise Server::ValidationError, "Response validation failed: invalid `result`" unless result.is_a?(Hash)
 
       result
@@ -158,12 +158,17 @@ module MCP
     # @deprecated MCP Sampling (`sampling/createMessage`) is deprecated as of
     #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
     #   APIs instead.
-    def create_sampling_message(related_request_id: nil, **kwargs)
+    def create_sampling_message(related_request_id: nil, timeout: nil, **kwargs)
       @server.send(:warn_if_deprecated_protocol_feature, :sampling, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
       params = @server.build_sampling_params(client_capabilities, **kwargs)
-      send_to_transport_request(Methods::SAMPLING_CREATE_MESSAGE, params, related_request_id: related_request_id)
+      send_to_transport_request(
+        Methods::SAMPLING_CREATE_MESSAGE,
+        params,
+        related_request_id: related_request_id,
+        timeout: timeout,
+      )
     end
 
     # Sends an `elicitation/create` request (form mode) scoped to this session.
@@ -171,7 +176,7 @@ module MCP
     # Per SEP-2260, the request must be associated with an originating client
     # request; prefer `server_context.create_form_elicitation` inside a handler,
     # which stamps the association automatically.
-    def create_form_elicitation(message:, requested_schema:, related_request_id: nil)
+    def create_form_elicitation(message:, requested_schema:, related_request_id: nil, timeout: nil)
       warn_unassociated_request(__method__, related_request_id)
 
       unless client_capabilities&.dig(:elicitation)
@@ -180,7 +185,12 @@ module MCP
       end
 
       params = { mode: "form", message: message, requestedSchema: requested_schema }
-      send_to_transport_request(Methods::ELICITATION_CREATE, params, related_request_id: related_request_id)
+      send_to_transport_request(
+        Methods::ELICITATION_CREATE,
+        params,
+        related_request_id: related_request_id,
+        timeout: timeout,
+      )
     end
 
     # Sends an `elicitation/create` request (URL mode) scoped to this session.
@@ -188,7 +198,7 @@ module MCP
     # Per SEP-2260, the request must be associated with an originating client
     # request; prefer `server_context.create_url_elicitation` inside a handler,
     # which stamps the association automatically.
-    def create_url_elicitation(message:, url:, elicitation_id:, related_request_id: nil)
+    def create_url_elicitation(message:, url:, elicitation_id:, related_request_id: nil, timeout: nil)
       warn_unassociated_request(__method__, related_request_id)
 
       unless client_capabilities&.dig(:elicitation, :url)
@@ -197,7 +207,12 @@ module MCP
       end
 
       params = { mode: "url", message: message, url: url, elicitationId: elicitation_id }
-      send_to_transport_request(Methods::ELICITATION_CREATE, params, related_request_id: related_request_id)
+      send_to_transport_request(
+        Methods::ELICITATION_CREATE,
+        params,
+        related_request_id: related_request_id,
+        timeout: timeout,
+      )
     end
 
     # Sends `notifications/cancelled` to the peer for a nested server-to-client request
@@ -296,7 +311,7 @@ module MCP
     # `parent_cancellation:` / `server_session:` receive the nested-cancellation plumbing.
     # When `related_request_id` names an in-flight request, its `Cancellation` token is looked up
     # so that cancelling the parent also cancels this nested server-to-client request.
-    def send_to_transport_request(method, params, related_request_id: nil)
+    def send_to_transport_request(method, params, related_request_id: nil, timeout: nil)
       parent_cancellation = related_request_id ? lookup_in_flight(related_request_id) : nil
 
       kwargs = {
@@ -304,6 +319,7 @@ module MCP
         related_request_id: related_request_id,
         parent_cancellation: parent_cancellation,
         server_session: self,
+        timeout: timeout,
       }.compact
 
       forward_to_transport(@transport.method(:send_request), method, params, kwargs)

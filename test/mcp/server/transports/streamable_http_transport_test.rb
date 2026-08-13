@@ -3041,6 +3041,89 @@ module MCP
           assert_equal "Hi there", result[:content][:text]
         end
 
+        test "send_request times out when the client never answers" do
+          # The spec asks implementations to bound every sent request so an unanswered one cannot
+          # exhaust the sender's resources.
+          transport = StreamableHTTPTransport.new(@server, server_to_client_request_timeout: 0.05)
+          session_id = open_sse_session(transport)
+
+          error = assert_raises(MCP::Server::RequestTimeoutError) do
+            transport.send_request("sampling/createMessage", { messages: [] }, session_id: session_id)
+          end
+
+          assert_equal 0.05, error.timeout
+          assert_includes error.message, "sampling/createMessage"
+
+          # Left uncaught in a handler, the originating request is answered with a timeout code rather than
+          # a generic internal error, so the peer that failed to answer can tell the two apart.
+          assert_equal(-32001, error.error_code)
+        ensure
+          transport.close
+        end
+
+        test "send_request timeout is overridable per request" do
+          transport = StreamableHTTPTransport.new(@server, server_to_client_request_timeout: 60)
+          session_id = open_sse_session(transport)
+
+          error = assert_raises(MCP::Server::RequestTimeoutError) do
+            transport.send_request("ping", nil, session_id: session_id, timeout: 0.05)
+          end
+
+          assert_equal 0.05, error.timeout
+        ensure
+          transport.close
+        end
+
+        test "send_request tells the peer it gave up when the timeout fires" do
+          # These requests only happen on 2025-11-25 and earlier connections, whose spec asks the sender
+          # to issue a cancellation notification for the request it stops waiting on.
+          transport = StreamableHTTPTransport.new(@server, server_to_client_request_timeout: 0.05)
+          io = StringIO.new
+          session_id = open_sse_session(transport, io: io)
+          session = transport.instance_variable_get(:@sessions)[session_id][:server_session]
+
+          assert_raises(MCP::Server::RequestTimeoutError) do
+            transport.send_request("ping", nil, session_id: session_id, server_session: session)
+          end
+
+          events = io.string.lines.grep(/\Adata: /).map { |line| JSON.parse(line.sub("data: ", "")) }
+          cancellation = events.find { |event| event["method"] == "notifications/cancelled" }
+          refute_nil cancellation, "expected the peer to be told the request was abandoned"
+          assert_match(/Timed out after 0.05 seconds/, cancellation.dig("params", "reason"))
+        ensure
+          transport.close
+        end
+
+        test "send_request returns the response when it arrives before the timeout" do
+          transport = StreamableHTTPTransport.new(@server, server_to_client_request_timeout: 30)
+          io = StringIO.new
+          session_id = open_sse_session(transport, io: io)
+
+          result_queue = Queue.new
+          Thread.new do
+            result_queue.push(transport.send_request("ping", nil, session_id: session_id))
+          end
+          wait_until { io.string.include?("ping") }
+
+          request_id = JSON.parse(io.string.lines.grep(/\Adata: /).first.sub("data: ", ""))["id"]
+          transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: request_id, result: { ok: true } }.to_json,
+          ))
+
+          assert_equal({ ok: true }, result_queue.pop)
+        ensure
+          transport.close
+        end
+
+        test "server_to_client_request_timeout rejects a non-positive value" do
+          assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, server_to_client_request_timeout: 0) }
+          assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, server_to_client_request_timeout: -1) }
+          assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, server_to_client_request_timeout: nil) }
+        end
+
         test "send_request with related_request_id rides the originating POST stream, not the GET stream" do
           # Per SEP-2260, server-to-client requests associated with a client request are delivered on
           # that request's POST SSE response stream rather than the standalone GET stream.
@@ -6026,6 +6109,36 @@ module MCP
             { jsonrpc: "2.0", method: "initialize", id: id, params: initialize_params }.to_json,
           )
           @transport.handle_request(init_request)[1]["mcp-session-id"]
+        end
+
+        # Polls until the block is truthy; the work being awaited happens on another thread.
+        def wait_until(timeout: 5)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+          until yield
+            flunk("Timed out waiting for condition") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.01)
+          end
+        end
+
+        # Initializes a session on `transport` and attaches a GET SSE stream to it, so
+        # server-to-client requests have somewhere to go. Returns the session id.
+        def open_sse_session(transport, io: StringIO.new)
+          session_id = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          ))[1]["mcp-session-id"]
+
+          get_response = transport.handle_request(create_rack_request(
+            "GET",
+            "/",
+            { "HTTP_MCP_SESSION_ID" => session_id },
+          ))
+          get_response[2].call(io) if get_response[2].is_a?(Proc)
+          wait_until { transport.instance_variable_get(:@sessions).dig(session_id, :get_sse_stream) }
+
+          session_id
         end
 
         # Installs a stream that records, on every write, whether `@mutex` was held at that moment.
