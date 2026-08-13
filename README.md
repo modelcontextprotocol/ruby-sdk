@@ -2986,6 +2986,14 @@ SEP-2322 also makes `resultType` a required member of every result a 2026-07-28 
 the modern `_meta` envelope (and on `server/discover` results), while results that already carry a discriminator (`"input_required"`, the tasks extension's `"task"`) keep it.
 Legacy results stay unstamped, and clients treat an absent `resultType` as `"complete"` per the spec.
 
+#### Dual-era authoring (legacy fulfilment shim)
+
+Handlers written in the 2026 style serve pre-2026 clients too: when a `tools/call`, `prompts/get`, or `resources/read` handler returns an `InputRequiredResult` on the legacy wire,
+the server fulfills it in place of the client's driver. Each `inputRequests` entry is sent as the equivalent real server-to-client request
+(`elicitation/create`, `sampling/createMessage`, `roots/list`), associated with the originating request per SEP-2260; the answers are collected under the same keys,
+and the handler re-runs with `server_context.input_responses` populated and the raw `requestState` echoed, the same deterministic replay contract the modern client driver follows.
+The shim is on by default (matching the TypeScript SDK) and capped at 8 rounds; `MCP::Server.new(input_required_legacy_shim: false)` restores the strict rejection of `input_required` results on legacy requests.
+
 ## Conformance Testing
 
 The `conformance/` directory contains a test server and runner that validate the SDK against the MCP specification using [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
