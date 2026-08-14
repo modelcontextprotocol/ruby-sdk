@@ -2226,6 +2226,18 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 # When tools change, notify clients
 server.define_tool(name: "new_tool") { |**args| { result: "ok" } }
 server.notify_tools_list_changed
+
+# When prompts change, notify clients
+server.define_prompt(name: "new_prompt") do |args, server_context:|
+  MCP::Prompt::Result.new(messages: [])
+end
+server.notify_prompts_list_changed
+
+# When resources change, notify clients
+server.define_resource(uri: "resource://new", name: "new_resource", mime_type: "text/plain") do
+  [MCP::Resource::TextContents.new(uri: "resource://new", mime_type: "text/plain", text: "contents")]
+end
+server.notify_resources_list_changed
 ```
 
 You can use Stateless Streamable HTTP, where notifications are not supported and all calls are request/response interactions.
