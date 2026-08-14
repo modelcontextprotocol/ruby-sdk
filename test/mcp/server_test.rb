@@ -1395,6 +1395,9 @@ module MCP
       }
 
       response = @server.handle(request)
+      # An unknown prompt is client input, so it maps to Invalid Params (-32602), not the
+      # default Internal Error (-32603); matches the tools/call and completion/complete siblings.
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
       assert_equal("Prompt not found unknown_prompt", response[:error][:data])
       assert_instrumentation_data({ method: "prompts/get", error: :prompt_not_found })
     end
@@ -1411,6 +1414,9 @@ module MCP
       }
 
       response = @server.handle(request)
+      # A missing required argument is client input, so it maps to Invalid Params (-32602),
+      # not the default Internal Error (-32603).
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
       assert_equal "Missing required arguments: test_argument", response[:error][:data]
       assert_instrumentation_data({
         method: "prompts/get",
