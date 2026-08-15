@@ -64,7 +64,9 @@ module MCP
       assert callback_called
     end
 
-    test "notifications/roots/list_changed warns when negotiated protocol version is 2026-07-28" do
+    test "notifications/roots/list_changed does not warn after a modern initialize request is counter-offered" do
+      # `initialize` asking for 2026-07-28 lands on 2025-11-25 (SEP-2575 era model),
+      # where roots is not deprecated.
       server = Server.new(name: "test", version: "1.0")
       server.handle({
         jsonrpc: "2.0",
@@ -77,7 +79,7 @@ module MCP
         },
       })
 
-      assert_deprecation_warning(/MCP Roots .*2026-07-28/) do
+      assert_no_deprecation_warning do
         server.handle({
           jsonrpc: "2.0",
           method: "notifications/roots/list_changed",
@@ -176,13 +178,14 @@ module MCP
       assert_silent { session.list_roots(related_request_id: "req-1") }
     end
 
-    test "ServerSession#list_roots warns when negotiated protocol version is 2026-07-28 and client lacks roots" do
-      session = ServerSession.new(server: @server, transport: @mock_transport)
+    test "ServerSession#list_roots raises without a warning when the client lacks roots" do
+      # A modern pin is rejected at configuration time and the handshake never lands on
+      # a deprecating revision, so no server-side path can reach the SEP-2577 warnings.
+      session = ServerSession.new(server: @server, transport: @mock_transport, era: :modern)
       session.store_client_info(client: { name: "test-client" }, capabilities: {})
-      session.mark_initialized!(protocol_version: "2026-07-28")
 
       error = nil
-      assert_deprecation_warning(/MCP Roots .*2026-07-28/) do
+      assert_no_deprecation_warning do
         error = assert_raises(RuntimeError) do
           session.list_roots(related_request_id: "req-1")
         end
@@ -267,7 +270,9 @@ module MCP
       assert_equal("No active stream for roots/list request.", error.message)
     end
 
-    test "ServerSession#list_roots warns when session negotiated protocol version is 2026-07-28" do
+    test "ServerSession#list_roots does not warn after a modern initialize request is counter-offered" do
+      # `initialize` asking for 2026-07-28 lands on 2025-11-25 (SEP-2575 era model),
+      # where roots is not deprecated; the request itself still goes out.
       server = Server.new(name: "test", version: "1.0")
       transport = MockTransport.new(server)
 
@@ -286,7 +291,7 @@ module MCP
         session: session,
       )
 
-      assert_deprecation_warning(/MCP Roots .*2026-07-28/) do
+      assert_no_deprecation_warning do
         session.list_roots(related_request_id: "req-1")
       end
 

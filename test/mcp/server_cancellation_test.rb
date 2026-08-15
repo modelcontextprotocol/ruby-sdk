@@ -304,7 +304,7 @@ module MCP
 
     test "initialize request cannot be cancelled" do
       init_params = {
-        protocolVersion: Configuration::LATEST_STABLE_PROTOCOL_VERSION,
+        protocolVersion: Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION,
         clientInfo: { name: "test", version: "1.0" },
         capabilities: {},
       }

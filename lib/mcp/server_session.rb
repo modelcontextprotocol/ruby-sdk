@@ -132,7 +132,6 @@ module MCP
     #   version 2026-07-28 (SEP-2577). Use tool parameters, resource URIs,
     #   server configuration, or environment variables instead.
     def list_roots(related_request_id: nil, timeout: nil)
-      @server.send(:warn_if_deprecated_protocol_feature, :roots, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
       unless client_capabilities&.dig(:roots)
@@ -159,7 +158,6 @@ module MCP
     #   MCP protocol version 2026-07-28 (SEP-2577). Use direct LLM provider
     #   APIs instead.
     def create_sampling_message(related_request_id: nil, timeout: nil, **kwargs)
-      @server.send(:warn_if_deprecated_protocol_feature, :sampling, session: self, uplevel: 2)
       warn_unassociated_request(__method__, related_request_id)
 
       params = @server.build_sampling_params(client_capabilities, **kwargs)
@@ -274,8 +272,6 @@ module MCP
     #   is deprecated as of MCP protocol version 2026-07-28 (SEP-2577).
     #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil, related_request_id: nil)
-      @server.send(:warn_if_deprecated_protocol_feature, :logging, session: self, uplevel: 2)
-
       # In the modern lifecycle, log delivery is authorized per request through the `_meta` envelope's `logLevel` member
       # (applied via `configure_logging`); without it no `notifications/message` is sent, and the server-wide level
       # does not apply (SEP-2575).

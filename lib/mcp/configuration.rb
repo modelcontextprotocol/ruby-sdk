@@ -9,18 +9,39 @@ module MCP
     ].freeze
     DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
 
-    # Protocol versions of the stateless "modern" lifecycle introduced by the MCP 2026-07-28 spec release (SEP-2575).
-    # 2026-07-28 serves both lifecycles of the dual-era model: it is negotiable through the legacy `initialize`
-    # handshake (so it also appears in `SUPPORTED_STABLE_PROTOCOL_VERSIONS`), and it is the version of the modern
-    # lifecycle, where each request carries its own version in `_meta` and is validated against this list
-    # independently, with no handshake.
+    # Protocol versions of the stateless "modern" lifecycle introduced by the MCP 2026-07-28 spec release (SEP-2575),
+    # where each request carries its own version in `_meta` and is validated against this list independently,
+    # with no handshake. These are reachable only through `server/discover` and the per-request envelope.
     # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
     LATEST_MODERN_PROTOCOL_VERSION = "2026-07-28"
     SUPPORTED_MODERN_PROTOCOL_VERSIONS = [LATEST_MODERN_PROTOCOL_VERSION].freeze
 
+    # Protocol versions reachable through the legacy `initialize` handshake, derived so the era partition
+    # (handshake = stable minus modern) cannot drift when a new revision lands.
+    # Per the SEP-2575 era model, an era is a property of the protocol version itself: legacy versions establish
+    # a session via `initialize` (2025-11-25 and earlier), and modern versions carry the version on every request
+    # in `_meta` with no handshake at all. The handshake therefore never negotiates a modern version:
+    # a client asking `initialize` for one is counter-offered
+    # `LATEST_HANDSHAKE_PROTOCOL_VERSION`, matching the TypeScript and Python SDKs.
+    SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS = (SUPPORTED_STABLE_PROTOCOL_VERSIONS - SUPPORTED_MODERN_PROTOCOL_VERSIONS).freeze
+    LATEST_HANDSHAKE_PROTOCOL_VERSION = SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS.first
+
     class << self
       def modern_protocol_version?(version)
         SUPPORTED_MODERN_PROTOCOL_VERSIONS.include?(version)
+      end
+
+      def handshake_protocol_version?(version)
+        SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS.include?(version)
+      end
+
+      # The one statement of the client-side handshake contract, shared by every transport:
+      # a modern version cannot ride the legacy `initialize` handshake.
+      def reject_modern_handshake_version!(version)
+        return unless version && modern_protocol_version?(version)
+
+        raise ArgumentError, "protocol version #{version.inspect} cannot be negotiated through the legacy " \
+                             "`initialize` handshake; use `mode: :modern` (or `:auto`) instead"
       end
     end
 
@@ -78,8 +99,12 @@ module MCP
       @validate_tool_call_results = validate_tool_call_results
     end
 
+    # The pin scopes the `initialize` handshake, so an unset pin reads as the version that handshake
+    # settles on by default. Reading the newest version of any era here would hand back a value
+    # the writer rejects, and no caller wants the modern revision: a modern connection carries
+    # its version on every request instead of consulting configuration.
     def protocol_version
-      @protocol_version || LATEST_STABLE_PROTOCOL_VERSION
+      @protocol_version || LATEST_HANDSHAKE_PROTOCOL_VERSION
     end
 
     def protocol_version?
@@ -174,11 +199,24 @@ module MCP
 
     private
 
+    # A pin scopes the `initialize` handshake, so only handshake versions are accepted:
+    # a modern version has no handshake to pin (its version rides every request in `_meta`),
+    # and accepting one here would configure nothing. Failing at construction beats
+    # a setting that silently does not apply.
     def validate_protocol_version!(protocol_version)
-      unless SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(protocol_version)
-        message = "protocol_version must be #{SUPPORTED_STABLE_PROTOCOL_VERSIONS[0...-1].join(", ")}, or #{SUPPORTED_STABLE_PROTOCOL_VERSIONS[-1]}"
-        raise ArgumentError, message
+      return if SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS.include?(protocol_version)
+
+      # A version this SDK serves, rejected only for where it was set, deserves the reason and
+      # the alternative rather than a list it is missing from: this is the error an upgrade from
+      # a release that accepted the value lands on, so it doubles as the migration note.
+      if self.class.modern_protocol_version?(protocol_version)
+        raise ArgumentError, "protocol_version #{protocol_version.inspect} is a modern protocol version and cannot be pinned here: " \
+                             "the pin scopes the `initialize` handshake, which never negotiates a modern version. " \
+                             "Modern clients carry their version on every request and need no pin; remove the setting."
       end
+
+      raise ArgumentError, "protocol_version must be #{SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS[0...-1].join(", ")}, " \
+                           "or #{SUPPORTED_HANDSHAKE_PROTOCOL_VERSIONS[-1]}"
     end
 
     def validate_value_of_validate_tool_call_arguments!(validate_tool_call_arguments)

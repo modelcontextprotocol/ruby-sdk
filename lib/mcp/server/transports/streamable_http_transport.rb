@@ -277,12 +277,12 @@ module MCP
           # An empty header value is malformed rather than a version claim, so it stays on the legacy path
           # and fails legacy header validation as before.
           #
-          # 2026-07-28 serves both lifecycles of the dual-era model, so for that header value the version
-          # alone cannot decide the era: an `Mcp-Session-Id` binds the request to an established legacy session
-          # (POST requests, the GET SSE stream, and DELETE termination keep working), and a session-less POST whose
-          # body is `initialize` is the legacy-distinctive handshake. Everything else under a dual-era header is
-          # sessionless modern traffic (`server/discover`, envelope-carrying requests, and envelope-missing requests
-          # that get the modern path's error shape).
+          # A modern header value (2026-07-28) alone cannot decide the era: sessionless modern traffic carries it,
+          # and requests of an established legacy session may stamp it as well (the handshake itself never negotiates it):
+          # an `Mcp-Session-Id` binds the request to an established legacy session (POST requests, the GET SSE stream,
+          # and DELETE termination keep working), and a session-less POST whose body is `initialize` is
+          # the legacy-distinctive handshake. Everything else under a dual-era header is sessionless modern traffic
+          # (`server/discover`, envelope-carrying requests, and envelope-missing requests that get the modern path's error shape).
           header_version = request.env["HTTP_MCP_PROTOCOL_VERSION"]
           if header_version && !header_version.empty? && !stable_only_version?(header_version)
             unless MCP::Configuration.modern_protocol_version?(header_version)
@@ -1414,8 +1414,9 @@ module MCP
           body.is_a?(Hash) && body[:method] == Methods::SERVER_DISCOVER
         end
 
-        # A version negotiable only through the legacy handshake, with no modern meaning.
-        # Dual-era versions (2026-07-28) appear in both lists and need further disambiguation.
+        # A version with no modern meaning, whose header can only accompany legacy traffic.
+        # A modern version's header (2026-07-28) can accompany either era's traffic - the handshake never negotiates it,
+        # but requests of an established legacy session may stamp it - so that value needs further disambiguation.
         def stable_only_version?(version)
           MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(version) &&
             !MCP::Configuration.modern_protocol_version?(version)

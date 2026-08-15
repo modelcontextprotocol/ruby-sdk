@@ -36,15 +36,21 @@ module MCP
       assert_equal test_context, reported_context
     end
 
-    # https://github.com/modelcontextprotocol/modelcontextprotocol/blob/14ec41c/schema/draft/schema.ts#L15
     test "initializes with default protocol version" do
+      # The unset pin reads as the version the handshake settles on, which is also the only kind of
+      # value the writer accepts: reading back a version that cannot be set again would break code
+      # that round-trips the setting.
       config = Configuration.new
-      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, config.protocol_version
+
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, config.protocol_version
+      refute_predicate config, :protocol_version?
+      assert_nothing_raised { Configuration.new(protocol_version: config.protocol_version) }
     end
 
-    test "uses the draft protocol version when protocol_version is set to nil" do
+    test "uses the default protocol version when protocol_version is set to nil" do
       config = Configuration.new(protocol_version: nil)
-      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, config.protocol_version
+
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, config.protocol_version
     end
 
     test "raises ArgumentError when setting the draft protocol version" do
@@ -54,7 +60,7 @@ module MCP
         Configuration.new(protocol_version: "DRAFT-2025-v3")
       end
 
-      assert_equal("protocol_version must be 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
+      assert_equal("protocol_version must be 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
     end
 
     test "raises ArgumentError when protocol_version is not a supported protocol version" do
@@ -63,7 +69,7 @@ module MCP
         custom_version = "2025-03-27"
         config.protocol_version = custom_version
       end
-      assert_equal("protocol_version must be 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
+      assert_equal("protocol_version must be 2025-11-25, 2025-06-18, 2025-03-26, or 2024-11-05", exception.message)
     end
 
     test "exposes the SEP-2575 modern protocol versions" do
@@ -73,11 +79,20 @@ module MCP
       refute Configuration.modern_protocol_version?("2025-11-25")
     end
 
-    test "accepts 2026-07-28 as the protocol version" do
-      # 2026-07-28 serves both lifecycles of the dual-era model (SEP-2575), so it is negotiable through
-      # the legacy `initialize` handshake and settable as the fallback version.
-      config = Configuration.new(protocol_version: Configuration::LATEST_MODERN_PROTOCOL_VERSION)
-      assert_equal "2026-07-28", config.protocol_version
+    test "rejects a modern version as the protocol version pin" do
+      # The pin scopes the `initialize` handshake; a modern version has no handshake to pin
+      # (its version rides every request in `_meta`), so accepting it would configure nothing.
+      # The message names that reason instead of listing the accepted values, because this is
+      # the error an upgrade from a release that accepted the value lands on.
+      exception = assert_raises(ArgumentError) do
+        Configuration.new(protocol_version: Configuration::LATEST_MODERN_PROTOCOL_VERSION)
+      end
+
+      assert_includes(exception.message, "is a modern protocol version and cannot be pinned here")
+      assert_includes(exception.message, "remove the setting")
+
+      config = Configuration.new
+      assert_raises(ArgumentError) { config.protocol_version = "2026-07-28" }
     end
 
     test "raises ArgumentError when protocol_version is not a boolean value" do

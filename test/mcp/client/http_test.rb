@@ -1630,6 +1630,52 @@ module MCP
         client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
       end
 
+      def test_adopts_a_counter_offered_protocol_version_from_the_handshake
+        # A server may answer `initialize` with a version other than the one offered, and everything
+        # after the handshake speaks the answer rather than the offer. This server counter-offers
+        # a handshake version to clients asking `initialize` for a modern one, which only resolves
+        # anything because clients behave this way.
+        counter_offered = "2025-06-18"
+        refute_equal(
+          counter_offered,
+          MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION,
+          "the counter-offer has to differ from the offer for this to test anything",
+        )
+
+        offered = nil
+        stub_request(:post, url).with do |req|
+          body = JSON.parse(req.body)
+          offered = body.dig("params", "protocolVersion") if body["method"] == "initialize"
+          body["method"] == "initialize"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
+          body: { result: { protocolVersion: counter_offered } }.to_json,
+        )
+        stub_notification
+
+        client.connect
+
+        assert_equal(MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, offered)
+        assert_equal(counter_offered, client.protocol_version)
+
+        # Scoped to the body as well: `notifications/initialized` already went out under
+        # the adopted version, and a header-only stub would count that too.
+        header_stub = stub_request(:post, url).with(
+          headers: { "MCP-Protocol-Version" => counter_offered },
+        ) do |req|
+          JSON.parse(req.body)["method"] == "tools/list"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { tools: [] } }.to_json,
+        )
+
+        client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+
+        assert_requested(header_stub)
+      end
+
       def test_does_not_send_protocol_version_header_before_initialize
         stub_request(:post, url)
           .with { |req| !req.headers.keys.map(&:downcase).include?("mcp-protocol-version") }
@@ -1884,14 +1930,14 @@ module MCP
           .with do |req|
             body = JSON.parse(req.body)
             body["method"] == "initialize" &&
-              body["params"]["protocolVersion"] == MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION &&
+              body["params"]["protocolVersion"] == MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION &&
               body["params"]["clientInfo"] == { "name" => "mcp-ruby-client", "version" => MCP::VERSION } &&
               body["params"]["capabilities"] == {}
           end
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: MCP::Configuration::LATEST_STABLE_PROTOCOL_VERSION } }.to_json,
+            body: { result: { protocolVersion: MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION } }.to_json,
           )
 
         client.connect
@@ -1927,9 +1973,31 @@ module MCP
         assert_requested(notification_stub)
       end
 
-      def test_connect_warns_for_deprecated_capabilities_when_negotiated_protocol_version_is_2026_07_28
-        notification_stub = stub_notification
+      def test_connect_offers_the_latest_handshake_version_by_default
+        # The handshake negotiates legacy versions only (SEP-2575 era model); modern versions are
+        # selected via `mode: :modern`/`:auto`, so the default offer is the latest handshake version.
+        offered = nil
+        init_stub = stub_request(:post, url).with do |req|
+          body = JSON.parse(req.body)
+          offered = body.dig("params", "protocolVersion") if body["method"] == "initialize"
+          body["method"] == "initialize"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+        )
+        stub_notification
 
+        client.connect
+
+        assert_requested(init_stub)
+        assert_equal(MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, offered)
+      end
+
+      def test_connect_rejects_a_modern_protocol_version_in_the_initialize_result
+        # A server answering `initialize` with a modern version is refused like an unknown one:
+        # the handshake settles on a legacy version by definition, and the TypeScript and Python clients
+        # refuse a modern counter-offer the same way.
         init_stub = stub_request(:post, url)
           .with { |req| JSON.parse(req.body)["method"] == "initialize" }
           .to_return(
@@ -1938,12 +2006,20 @@ module MCP
             body: { result: { protocolVersion: "2026-07-28" } }.to_json,
           )
 
-        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
-          client.connect(capabilities: { roots: { listChanged: true }, sampling: {} })
+        error = assert_raises(RequestHandlerError) do
+          client.connect
         end
 
+        assert_includes(error.message, "2026-07-28")
         assert_requested(init_stub)
-        assert_requested(notification_stub)
+      end
+
+      def test_connect_raises_argument_error_for_an_explicit_modern_protocol_version_on_the_legacy_handshake
+        error = assert_raises(ArgumentError) do
+          client.connect(protocol_version: "2026-07-28", mode: :legacy)
+        end
+
+        assert_includes(error.message, "cannot be negotiated through the legacy `initialize` handshake")
       end
 
       def test_connect_does_not_warn_for_deprecated_capabilities_when_negotiated_protocol_version_is_older
@@ -2165,6 +2241,37 @@ module MCP
       def test_connect_rejects_unknown_modes_and_legacy_versions_for_modern_mode
         assert_raises(ArgumentError) { client.connect(mode: :bogus) }
         assert_raises(ArgumentError) { client.connect(mode: :modern, protocol_version: "2025-11-25") }
+      end
+
+      def test_connect_auto_propagates_the_discovery_failure_for_an_explicitly_modern_version
+        # An explicitly requested modern version is never downgraded by the fallback:
+        # the legacy handshake cannot negotiate it, so the probe's failure is the real answer.
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.connect(mode: :auto, protocol_version: "2026-07-28")
+        end
+
+        assert_includes(error.message, "no mutually supported modern protocol version")
+        refute_predicate(client, :connected?)
+      end
+
+      def test_connect_modern_warns_for_deprecated_capabilities
+        # SEP-2577 deprecates roots and sampling at 2026-07-28, the revision every
+        # modern connection speaks.
+        stub_discover
+
+        assert_deprecation_warning(/MCP Roots .*2026-07-28.*MCP Sampling .*2026-07-28/m) do
+          client.connect(mode: :modern, capabilities: { roots: { listChanged: true }, sampling: {} })
+        end
+
+        assert_predicate(client, :modern?)
       end
 
       def test_reconnect_after_close

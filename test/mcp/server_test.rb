@@ -430,9 +430,9 @@ module MCP
       refute_nil response[:result]
     end
 
-    test "#handle keeps serving a legacy initialize that negotiates a dual-era version" do
-      # Negotiating 2026-07-28 through the legacy handshake is not the same as carrying the modern envelope:
-      # the handshake still belongs to the legacy lifecycle and locks that era.
+    test "#handle counter-offers the latest handshake version for a modern initialize request and locks the legacy era" do
+      # Per the SEP-2575 era model, the handshake never lands on a modern version: the client is
+      # counter-offered 2025-11-25 and the connection proceeds on the legacy lifecycle it selected.
       session = ServerSession.new(server: @server, transport: mock)
 
       response = @server.handle(
@@ -445,7 +445,7 @@ module MCP
         session: session,
       )
 
-      assert_equal "2026-07-28", response.dig(:result, :protocolVersion)
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, response.dig(:result, :protocolVersion)
       assert_equal :legacy, session.era
     end
 
@@ -724,7 +724,7 @@ module MCP
         jsonrpc: "2.0",
         id: 1,
         result: {
-          protocolVersion: Configuration::LATEST_STABLE_PROTOCOL_VERSION,
+          protocolVersion: Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION,
           capabilities: {
             prompts: { listChanged: true },
             resources: { listChanged: true },
@@ -916,7 +916,7 @@ module MCP
         params: initialize_params(protocolVersion: "1999-01-01"),
       })
 
-      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
     test "instrumentation data does not include client key when no clientInfo provided" do
@@ -1721,7 +1721,10 @@ module MCP
       refute response.key?(:error)
     end
 
-    test "#configure_logging_level warns when negotiated protocol version is 2026-07-28" do
+    test "#configure_logging_level does not warn after a modern initialize request is counter-offered" do
+      # `initialize` asking for 2026-07-28 lands on 2025-11-25, where logging is not deprecated,
+      # so no warning fires. On the modern lifecycle itself `logging/setLevel` is a removed method
+      # and never reaches this handler.
       server = Server.new(tools: [TestTool])
       server.handle(
         {
@@ -1737,7 +1740,7 @@ module MCP
       )
 
       response = nil
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
+      assert_no_deprecation_warning do
         response = server.handle(
           {
             jsonrpc: "2.0",
@@ -1829,35 +1832,6 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_equal(-32603, response[:error][:code])
-      assert_includes response[:error][:data], "Server does not support logging"
-    end
-
-    test "#configure_logging_level warns when configured protocol version is 2026-07-28 and server lacks logging capability" do
-      server = Server.new(
-        tools: [TestTool],
-        configuration: Configuration.new(protocol_version: "2026-07-28"),
-        capabilities: {
-          tools: { listChanged: true },
-          prompts: { listChanged: true },
-          resources: { listChanged: true },
-        },
-      )
-
-      response = nil
-      assert_deprecation_warning(/MCP Logging .*2026-07-28/) do
-        response = server.handle(
-          {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "logging/setLevel",
-            params: {
-              level: "debug",
-            },
-          },
-        )
-      end
-
       assert_equal(-32603, response[:error][:code])
       assert_includes response[:error][:data], "Server does not support logging"
     end
@@ -2213,7 +2187,7 @@ module MCP
       assert_equal local_exception_reporter, server.configuration.exception_reporter
     end
 
-    test "server uses default protocol version when not configured" do
+    test "server uses the latest handshake version when not configured" do
       request = {
         jsonrpc: "2.0",
         method: "initialize",
@@ -2222,7 +2196,7 @@ module MCP
       }
 
       response = @server.handle(request)
-      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
     test "server response does not include optional parameters when configured" do
@@ -2612,7 +2586,7 @@ module MCP
       assert_equal "2025-06-18", response[:result][:protocolVersion]
     end
 
-    test "server falls back to default version when client requests unsupported version" do
+    test "server falls back to the latest handshake version when client requests unsupported version" do
       server = Server.new(name: "test_server")
 
       request = {
@@ -2623,10 +2597,13 @@ module MCP
       }
 
       response = server.handle(request)
-      assert_equal Configuration::LATEST_STABLE_PROTOCOL_VERSION, response[:result][:protocolVersion]
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, response[:result][:protocolVersion]
     end
 
-    test "server negotiates 2026-07-28 when the client requests it via initialize" do
+    test "server counter-offers 2025-11-25 when the client requests 2026-07-28 via initialize" do
+      # Per the SEP-2575 era model, `initialize` negotiates legacy versions only: a modern version carries
+      # its own version on every request and has no handshake at all. The TypeScript and Python servers
+      # answer the same way.
       server = Server.new(name: "test_server")
 
       request = {
@@ -2637,7 +2614,7 @@ module MCP
       }
 
       response = server.handle(request)
-      assert_equal "2026-07-28", response[:result][:protocolVersion]
+      assert_equal "2025-11-25", response[:result][:protocolVersion]
     end
 
     test "server removes description and icons from server_info when negotiating to 2025-06-18" do
@@ -4360,6 +4337,23 @@ module MCP
         response = server.handle(request)
         refute response[:result].key?(:resultType), "expected no stamp for #{request[:method]}"
       end
+    end
+
+    test "results after a counter-offered modern initialize carry no resultType" do
+      # The scenario from issue #512: a client asking `initialize` for 2026-07-28 lands on
+      # 2025-11-25, where `resultType` does not exist, so its absence is the correct shape
+      # (clients MUST read an absent `resultType` as "complete" on that revision).
+      server = Server.new(name: "result_type_test", tools: [result_type_tool])
+      session = ServerSession.new(server: server, transport: mock)
+
+      init_response = server.handle(
+        { jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params(protocolVersion: "2026-07-28") },
+        session: session,
+      )
+      response = server.handle({ jsonrpc: "2.0", method: Methods::TOOLS_LIST, id: 2 }, session: session)
+
+      assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, init_response.dig(:result, :protocolVersion)
+      refute response[:result].key?(:resultType)
     end
 
     test "server/discover carries resultType complete" do
