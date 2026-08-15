@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-15
+
+This release completes the SEP-2575 stateless lifecycle of the 2026-07-28 specification, together with
+the SEP-2322, SEP-2549, and SEP-2243 features that revision builds on. Several entries under "Changed"
+are incompatible with 1.1.0 and ship in a minor release under the spec-conformance and security exceptions
+described in [VERSIONING.md](VERSIONING.md).
+
+### Added
+
+- Handle the SEP-2575 modern request envelope in the server core (#475)
+- Serve both lifecycle eras over stdio with an era lock per SEP-2575 (#478)
+- Serve the sessionless modern path over Streamable HTTP per SEP-2575 (#479)
+- Finalize `server/discover` and add client modern lifecycle support per SEP-2575 (#480)
+- Let handlers return multi round-trip `input_required` results per SEP-2322 (#481)
+- Add `MCP::Elicitation::EnumSchema` builders per SEP-1330 (#482)
+- Stamp the required `resultType` on modern results per SEP-2322 (#487)
+- Enforce the modern lifecycle admission rules per SEP-2575 (#489)
+- Stream modern request notifications and honor the envelope `logLevel` per SEP-2575 (#490)
+- Expose the user-defined `server_context` in instrumentation data (#493)
+- Serve the `subscriptions/listen` notification stream per SEP-2575 (#495)
+- Add opt-in `requestState` sealing via `MCP::Server::RequestStateSecurity` (#496)
+- Mirror `x-mcp-header` tool parameters into `Mcp-Param-*` headers per SEP-2243 (#498)
+- Stamp the required cache hints on modern cacheable results per SEP-2549 (#499)
+- Drive multi round-trip `input_required` results on the client per SEP-2322 (#500)
+- Fulfill `input_required` results on the legacy wire per SEP-2322 (#501)
+
+### Changed
+
+- Align modern envelope validation with the finalized specification (#491)
+- Require the `Mcp-Method` header on the modern path (#492)
+- Bound server-to-client requests with a timeout (#502)
+- Refuse server-to-client requests in the modern lifecycle per SEP-2575 (#503)
+- Bound the total wait across SSE reconnection attempts (#504)
+- Bound automatic pagination in the MCP client (#505)
+- Reject modern-removed methods before the connection era locks (#511)
+- Stop negotiating modern protocol versions through the `initialize` handshake (#516)
+
+### Deprecated
+
+- Warn on modern client connects that declare the Roots or Sampling capabilities deprecated per SEP-2577 (#406, #516)
+
+### Fixed
+
+- Stop leaking exception messages to clients via JSON-RPC error data (#486)
+- Return Invalid Params for unknown prompts and missing prompt arguments (#517)
+- Restrict OAuth discovery to same-origin metadata URLs and refuse private-network destinations
+
 ## [1.1.0] - 2026-08-01
 
 ### Added
