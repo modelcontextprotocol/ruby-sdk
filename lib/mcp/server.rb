@@ -1260,7 +1260,16 @@ module MCP
       prompt = @prompts[prompt_name]
       unless prompt
         add_instrumentation_data(error: :prompt_not_found)
-        raise RequestHandlerError.new("Prompt not found #{prompt_name}", request, error_type: :prompt_not_found)
+        # The explicit `error_code` maps an unknown prompt to Invalid Params (-32602) rather than
+        # the default Internal Error (-32603), matching the `tools/call`, `resources/read`, and
+        # `completion/complete` siblings for the same not-found condition, while `error_type:
+        # :prompt_not_found` keeps the descriptive message and instrumentation label.
+        raise RequestHandlerError.new(
+          "Prompt not found #{prompt_name}",
+          request,
+          error_type: :prompt_not_found,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+        )
       end
 
       add_instrumentation_data(prompt_name: prompt_name)

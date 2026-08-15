@@ -111,8 +111,15 @@ module MCP
         missing = required_args - args.keys
         return if missing.empty?
 
+        # The explicit `error_code` maps a missing prompt argument to Invalid Params (-32602) rather
+        # than the default Internal Error (-32603); a missing required argument is client input, not a
+        # server fault. `error_type: :missing_required_arguments` keeps the descriptive message and
+        # instrumentation label. Mirrors `MCP::Server::ResourceNotFoundError`.
         raise MCP::Server::RequestHandlerError.new(
-          "Missing required arguments: #{missing.join(", ")}", nil, error_type: :missing_required_arguments
+          "Missing required arguments: #{missing.join(", ")}",
+          nil,
+          error_type: :missing_required_arguments,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
         )
       end
 
