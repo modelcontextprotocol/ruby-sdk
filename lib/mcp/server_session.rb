@@ -58,19 +58,41 @@ module MCP
       @era = era
     end
 
-    # Registers a `Cancellation` token for an in-flight request.
+    # Registers a `Cancellation` token for an in-flight request, or returns `nil` when `request_id` is already in flight.
+    # The request id is the only key that routes request-scoped notifications, server-to-client requests,
+    # and `notifications/cancelled` back to the request that caused them, so a second live request under the same id
+    # has no destination of its own. Rather than let the newcomer displace the registration, report the collision
+    # and leave the first request intact; the caller turns that into an Invalid Request.
     def register_in_flight(request_id)
       return if request_id.nil?
 
       cancellation = Cancellation.new(request_id: request_id)
-      @in_flight_mutex.synchronize { @in_flight[request_id] = cancellation }
-      cancellation
+      registered = @in_flight_mutex.synchronize do
+        next false if @in_flight.key?(request_id)
+
+        @in_flight[request_id] = cancellation
+        true
+      end
+
+      registered ? cancellation : nil
     end
 
-    def unregister_in_flight(request_id)
+    # Removes an in-flight registration. Passing the `Cancellation` that `register_in_flight` returned removes
+    # the entry only while it is still that one, so a request can never evict a registration it does not own.
+    def unregister_in_flight(request_id, cancellation: nil)
       return if request_id.nil?
 
-      @in_flight_mutex.synchronize { @in_flight.delete(request_id) }
+      @in_flight_mutex.synchronize do
+        next if cancellation && !@in_flight[request_id].equal?(cancellation)
+
+        @in_flight.delete(request_id)
+      end
+    end
+
+    # Whether `request_id` is currently in flight, so a transport can refuse a colliding request
+    # before registering any state of its own for it.
+    def in_flight?(request_id)
+      !lookup_in_flight(request_id).nil?
     end
 
     def lookup_in_flight(request_id)

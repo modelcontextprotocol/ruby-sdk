@@ -3431,6 +3431,110 @@ module MCP
           assert_equal "ok", result[:content][:text]
         end
 
+        test "refuses a POST reusing an in-flight request id and keeps the original stream" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          gate = Queue.new
+          server.define_tool(name: "victim_tool") do |server_context:|
+            server_context.report_progress(1, message: "first-frame")
+            gate.pop
+            server_context.report_progress(2, message: "second-frame")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          session_id, server_session = start_session(transport)
+
+          victim = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+          victim_stream = TestStream.new
+          victim_thread = Thread.new { victim[2].call(victim_stream) }
+          sleep(0.01) until server_session.lookup_in_flight("req-1")
+
+          attacker = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+
+          assert_equal 409, attacker[0]
+          assert_equal(
+            JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            JSON.parse(attacker[2][0]).dig("error", "code"),
+          )
+
+          gate << :go
+          victim_thread.join
+
+          # The registration survived the refusal, so the frame emitted after it still reaches
+          # the request that asked for it.
+          assert_includes victim_stream.string, "first-frame"
+          assert_includes victim_stream.string, "second-frame"
+        end
+
+        test "a finishing request leaves a stream another request registered under the same id" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          gate = Queue.new
+          server.define_tool(name: "victim_tool") do |server_context:|
+            gate.pop
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          session_id, server_session = start_session(transport)
+
+          victim = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+          victim_stream = TestStream.new
+          victim_thread = Thread.new { victim[2].call(victim_stream) }
+          sleep(0.01) until server_session.lookup_in_flight("req-1")
+
+          # Stand in for a stream that won the registration in a race the pre-dispatch refusal normally prevents.
+          # Finishing the other request must not unregister it.
+          foreign_stream = TestStream.new
+          sessions = transport.instance_variable_get(:@sessions)
+          sessions[session_id][:post_request_streams]["req-1"] = foreign_stream
+
+          gate << :go
+          victim_thread.join
+
+          assert_same foreign_stream, sessions[session_id][:post_request_streams]["req-1"]
+        end
+
+        test "a broken request-scoped stream drops only itself, even when it is not the registered one" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          session_id, = start_session(transport)
+          sessions = transport.instance_variable_get(:@sessions)
+          registered = TestStream.new
+          sessions[session_id][:post_request_streams] = { "req-1" => registered }
+
+          transport.send(:drop_broken_stream, session_id, TestStream.new, "req-1")
+
+          assert sessions.key?(session_id), "a request-scoped failure must not tear down the session"
+          assert_same registered, sessions[session_id][:post_request_streams]["req-1"]
+        end
+
+        test "allows a request id to be reused once the earlier request has finished" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          server.define_tool(name: "victim_tool") do |server_context:|
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          session_id, = start_session(transport)
+
+          2.times do
+            response = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+
+            assert_equal 200, response[0]
+            stream = TestStream.new
+            response[2].call(stream)
+            assert_includes stream.string, "done"
+          end
+        end
+
         test "JSON response mode returns accepted when cancellation suppresses response" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server, enable_json_response: true)
@@ -6197,6 +6301,36 @@ module MCP
           end
 
           writes
+        end
+
+        # Initializes `transport` and returns its session id together with the `ServerSession`,
+        # which the in-flight request id tests poll to know when a request has really started.
+        def start_session(transport)
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(request)[1]["mcp-session-id"]
+
+          [session_id, transport.instance_variable_get(:@sessions)[session_id][:server_session]]
+        end
+
+        # A `tools/call` for `victim_tool` under a caller-chosen request id, with a progress token so
+        # the tool's `report_progress` has somewhere to go.
+        def colliding_tool_call(session_id, request_id)
+          create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            {
+              jsonrpc: "2.0",
+              id: request_id,
+              method: "tools/call",
+              params: { name: "victim_tool", arguments: {}, _meta: { progressToken: "tok" } },
+            }.to_json,
+          )
         end
 
         def create_rack_request(method, path, headers, body = nil)

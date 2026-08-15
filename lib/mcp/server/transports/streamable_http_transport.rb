@@ -450,8 +450,13 @@ module MCP
 
           @mutex.synchronize do
             session = @sessions[session_id]
-            if related_request_id && session&.dig(:post_request_streams, related_request_id)
-              session[:post_request_streams].delete(related_request_id)
+            if related_request_id
+              # Unregister only our own stream: removing on the id alone would drop whichever stream currently holds it,
+              # which is not necessarily the one that failed. The failed stream is closed either way, and a request-scoped
+              # failure never reaches the session teardown below.
+              registered = session&.dig(:post_request_streams, related_request_id)
+              session[:post_request_streams].delete(related_request_id) if registered.equal?(stream)
+
               streams_to_close << stream
             else
               cleanup_and_collect_stream(session_id, streams_to_close)
@@ -1595,6 +1600,14 @@ module MCP
             end
           end
 
+          # `Server` refuses a duplicate id as well, but only once the request reaches it. The SSE branch below
+          # registers this request's stream under that id first, so without this check the colliding request
+          # would take over the routing entry for the moment it takes to be rejected, and its `ensure` would then
+          # clear the entry the original request still needs.
+          if related_request_id && server_session&.in_flight?(related_request_id)
+            return request_id_conflict_response
+          end
+
           if session_id && !@stateless && !@enable_json_response
             handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id)
           else
@@ -1618,7 +1631,11 @@ module MCP
               session = @sessions[session_id]
               if session && related_request_id
                 session[:post_request_streams] ||= {}
-                session[:post_request_streams][related_request_id] = stream
+
+                # Claim the id only while it is free. `handle_regular_request` already refused the colliding request,
+                # so reaching an occupied slot means a race got past that check; leaving the first stream in place keeps
+                # its messages going where they belong.
+                session[:post_request_streams][related_request_id] ||= stream
               end
             end
 
@@ -1630,7 +1647,11 @@ module MCP
               if related_request_id
                 @mutex.synchronize do
                   session = @sessions[session_id]
-                  session[:post_request_streams]&.delete(related_request_id) if session
+                  # Only retire our own registration: a request that never claimed the id, or one whose claim has
+                  # already been replaced, must not unregister the stream that owns it.
+                  registered = session&.dig(:post_request_streams, related_request_id)
+
+                  session[:post_request_streams].delete(related_request_id) if registered.equal?(stream)
                 end
               end
 
@@ -1846,6 +1867,16 @@ module MCP
             status: 409,
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
             message: "Conflict: Only one SSE stream is allowed per session",
+          )
+        end
+
+        # The POST counterpart of the GET conflict above. A request id already in flight cannot be given
+        # a stream of its own, because the id is what routes request-scoped messages back.
+        def request_id_conflict_response
+          json_rpc_error_response(
+            status: 409,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Conflict: Request id is already in flight for this session",
           )
         end
 

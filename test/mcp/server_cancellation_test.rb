@@ -5,6 +5,7 @@ require "test_helper"
 module MCP
   class ServerCancellationTest < ActiveSupport::TestCase
     include InstrumentationTestHelper
+    include InitializeParamsTestHelper
 
     class MockTransport < Transport
       attr_reader :requests, :notifications, :cancelled_request_ids
@@ -331,6 +332,74 @@ module MCP
       assert_equal "timeout", notification[:params][:reason]
 
       assert_includes @mock_transport.cancelled_request_ids, "req-9"
+    end
+
+    test "register_in_flight refuses an id that is already in flight" do
+      first = @session.register_in_flight("req-1")
+
+      assert first
+      assert_nil @session.register_in_flight("req-1"), "a second live request cannot share the id"
+      assert_same first, @session.lookup_in_flight("req-1"), "the first registration must survive"
+    end
+
+    test "unregister_in_flight leaves a registration it does not own" do
+      owner = @session.register_in_flight("req-1")
+      @session.unregister_in_flight("req-1", cancellation: Cancellation.new(request_id: "req-1"))
+
+      assert_same owner, @session.lookup_in_flight("req-1")
+
+      @session.unregister_in_flight("req-1", cancellation: owner)
+
+      assert_nil @session.lookup_in_flight("req-1")
+    end
+
+    test "in_flight? reports whether an id is registered" do
+      refute @session.in_flight?("req-1")
+
+      @session.register_in_flight("req-1")
+
+      assert @session.in_flight?("req-1")
+    end
+
+    test "a request reusing an in-flight id is answered with Invalid Request" do
+      @server.define_tool(name: "slow") do |server_context:|
+        sleep(0.2)
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        id: "req-1",
+        method: Methods::TOOLS_CALL,
+        params: { name: "slow", arguments: {} },
+      }
+
+      in_flight = Thread.new { @session.handle(request) }
+      sleep(0.01) until @session.lookup_in_flight("req-1")
+
+      duplicate = @session.handle(request)
+
+      assert_equal(
+        JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+        duplicate.dig(:error, :code) || duplicate.dig("error", "code"),
+      )
+      in_flight.join
+    end
+
+    test "a refused duplicate initialize leaves an in-flight registration under its reused id" do
+      @session.handle(jsonrpc: "2.0", id: "init", method: Methods::INITIALIZE, params: initialize_params)
+
+      owner = @session.register_in_flight("req-1")
+
+      # `initialize` bypasses the duplicate-id refusal (it is never in flight itself), so its
+      # rejection path is the one place a reused id reaches a handler while the id is still live.
+      duplicate = @session.handle(jsonrpc: "2.0", id: "req-1", method: Methods::INITIALIZE, params: initialize_params)
+
+      assert_equal(
+        JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+        duplicate.dig(:error, :code) || duplicate.dig("error", "code"),
+      )
+      assert_same owner, @session.lookup_in_flight("req-1"), "the registration must survive the refused initialize"
     end
 
     test "parent cancellation propagates to nested server-to-client requests" do
