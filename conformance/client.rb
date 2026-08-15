@@ -238,6 +238,21 @@ begin
     # calling only the valid one shows the invalid definitions did not block it.
     client.tools
     client.call_tool(name: "valid_tool", arguments: { "message" => "hello" })
+  when "http-standard-headers"
+    # SEP-2243: the harness inspects the `Mcp-Method` header on every POST and the `Mcp-Name` header on
+    # the name-carrying requests, so drive one of each standard request kind.
+    tools = client.tools
+    tool = tools.find { |t| t.name == "test_headers" } || tools.first
+    abort("No tool exposed by conformance server for #{scenario}") unless tool
+    client.call_tool(tool: tool, arguments: {})
+
+    resource = client.resources.first
+    abort("No resource exposed by conformance server for #{scenario}") unless resource
+    client.read_resource(uri: resource["uri"])
+
+    prompt = client.prompts.first
+    abort("No prompt exposed by conformance server for #{scenario}") unless prompt
+    client.get_prompt(name: prompt["name"])
   when "json-schema-ref-no-deref"
     # SEP-2106: listing tools whose schemas carry `$ref` must not trigger network dereferencing.
     client.tools
