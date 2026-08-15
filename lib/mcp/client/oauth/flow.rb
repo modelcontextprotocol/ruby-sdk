@@ -33,9 +33,15 @@ module MCP
         def run!(server_url:, resource_metadata_url: nil, scope: nil)
           # The `resource_metadata` URL ships in `WWW-Authenticate` and is the very
           # first thing we contact in the OAuth flow, so it has to clear the same
-          # Communication Security bar as the OAuth endpoints downstream.
+          # Communication Security bar as the OAuth endpoints downstream, and it has to
+          # point back at the server that issued the challenge.
           if resource_metadata_url
             ensure_secure_url!(resource_metadata_url, label: "WWW-Authenticate resource_metadata URL")
+            ensure_same_origin!(
+              resource_metadata_url,
+              label: "WWW-Authenticate resource_metadata URL",
+              server_url: server_url,
+            )
           end
 
           prm, authorization_server = locate_authorization_server(
@@ -49,7 +55,11 @@ module MCP
           # being redirected to credentials minted for a different audience.
           resource = canonical_resource(server_url: server_url, prm_resource: prm&.dig("resource"))
 
-          as_metadata = authorization_server_metadata(authorization_server: authorization_server, legacy: prm.nil?)
+          as_metadata = authorization_server_metadata(
+            authorization_server: authorization_server,
+            legacy: prm.nil?,
+            server_url: server_url,
+          )
 
           case provider_authorization_flow
           when :client_credentials
@@ -212,6 +222,11 @@ module MCP
 
           if resource_metadata_url
             ensure_secure_url!(resource_metadata_url, label: "WWW-Authenticate resource_metadata URL")
+            ensure_same_origin!(
+              resource_metadata_url,
+              label: "WWW-Authenticate resource_metadata URL",
+              server_url: server_url,
+            )
           end
 
           prm, authorization_server = locate_authorization_server(
@@ -221,7 +236,11 @@ module MCP
 
           resource = canonical_resource(server_url: server_url, prm_resource: prm&.dig("resource"))
 
-          as_metadata = authorization_server_metadata(authorization_server: authorization_server, legacy: prm.nil?)
+          as_metadata = authorization_server_metadata(
+            authorization_server: authorization_server,
+            legacy: prm.nil?,
+            server_url: server_url,
+          )
 
           client_info = if have_stored_client_info
             # Pre-registered / DCR-issued `client_information` always wins: if the user picked an explicit identity,
@@ -296,6 +315,11 @@ module MCP
           if prm
             authorization_server = first_authorization_server(prm)
             ensure_secure_url!(authorization_server, label: "PRM `authorization_servers` entry")
+            ensure_routable_destination!(
+              authorization_server,
+              label: "PRM `authorization_servers` entry",
+              server_url: server_url,
+            )
             [prm, authorization_server]
           else
             authorization_base = server_origin!(server_url)
@@ -311,7 +335,7 @@ module MCP
         # and a pre-PRM server may host its OAuth endpoints under a path prefix whose `issuer` legitimately differs from
         # the origin the metadata was discovered at (neither the TypeScript nor the Python SDK validates the issuer on this path).
         # When even the metadata document is absent, the legacy spec's default endpoints are used.
-        def authorization_server_metadata(authorization_server:, legacy:)
+        def authorization_server_metadata(authorization_server:, legacy:, server_url:)
           metadata = if legacy
             begin
               fetch_authorization_server_metadata(issuer_url: authorization_server)
@@ -324,7 +348,7 @@ module MCP
             end
           end
 
-          ensure_secure_endpoints!(metadata)
+          ensure_secure_endpoints!(metadata, server_url: server_url)
           metadata
         end
 
@@ -445,11 +469,70 @@ module MCP
             "#{label} #{url.inspect} is not over HTTPS; refusing to use it (MCP authorization Communication Security)."
         end
 
-        def ensure_secure_endpoints!(as_metadata)
+        # Requires a URL the *server* chose to sit on the origin the *caller* chose.
+        #
+        # Protected Resource Metadata describes the MCP server itself, so on a real deployment it is
+        # published on that server's own origin. Without this check a `WWW-Authenticate` challenge
+        # can aim the first request of the flow at any host the client can route to: the URL arrives
+        # from the network, it is fetched before the user approves anything, and the `resource` check that
+        # runs afterwards cannot un-send the request.
+        #
+        # RFC 9728 does not itself require the metadata URL to be same-origin, so this is stricter than
+        # the specification. It is enforced unconditionally because no known deployment publishes its PRM
+        # anywhere else, and because the alternative (`Discovery.private_network_host?`) cannot see
+        # internal hosts that are named rather than addressed.
+        # https://www.rfc-editor.org/rfc/rfc9728#section-7.7
+        def ensure_same_origin!(url, label:, server_url:)
+          return if Discovery.same_origin?(url, server_url)
+
+          raise AuthorizationError,
+            "#{label} #{sanitized_url(url).inspect} is not on the MCP server origin " \
+              "#{sanitized_url(server_url).inspect}; refusing to fetch it."
+        end
+
+        # Refuses an OAuth URL that points into a private, loopback, link-local, or unique-local address,
+        # which is the SSRF precaution RFC 9728 Section 7.7 and the MCP security best practices ask clients to take.
+        #
+        # The carve-out matters as much as the rule: when the MCP server the caller configured is itself on such an address,
+        # the whole flow is already inside that network and the authorization server legitimately lives there too.
+        # That covers `http://localhost` development, the conformance harness (which runs the MCP server and
+        # the authorization server on two loopback ports), and deployments that never leave a corporate network.
+        # Only a server reachable on the public internet is barred from steering the client inward.
+        # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
+        def ensure_routable_destination!(url, label:, server_url:)
+          return unless private_network_url?(url)
+          return if private_network_url?(server_url)
+
+          raise AuthorizationError,
+            "#{label} #{sanitized_url(url).inspect} points into a private network range, " \
+              "which the MCP server at #{sanitized_url(server_url).inspect} is not on; refusing to contact it."
+        end
+
+        def ensure_secure_endpoints!(as_metadata, server_url:)
           ["authorization_endpoint", "token_endpoint", "registration_endpoint"].each do |key|
             endpoint = as_metadata[key]
-            ensure_secure_url!(endpoint, label: "Authorization server #{key}") if endpoint
+            next unless endpoint
+
+            ensure_secure_url!(endpoint, label: "Authorization server #{key}")
+            ensure_routable_destination!(endpoint, label: "Authorization server #{key}", server_url: server_url)
           end
+        end
+
+        # `ensure_secure_url!` runs first at every call site and already rejects a URL that fails to parse,
+        # so the rescue here is a backstop rather than a leniency.
+        def private_network_url?(url)
+          Discovery.private_network_host?(URI.parse(url.to_s).host)
+        rescue URI::InvalidURIError
+          false
+        end
+
+        # Strips userinfo and query before a URL reaches an exception message, the same precaution `MCP::Client::HTTP` takes
+        # when it reports a URL: these values come off the network and can carry credentials that would otherwise land in
+        # every log destination the error passes through.
+        def sanitized_url(url)
+          Discovery.canonicalize_origin_and_path(url)
+        rescue URI::Error
+          url.to_s
         end
 
         # Per RFC 8414 Section 3.3, the AS metadata document's `issuer` value MUST be
@@ -962,6 +1045,11 @@ module MCP
           @http_client ||= @http_client_factory.call
         end
 
+        # Deliberately built without redirect-following middleware. Every destination check in
+        # this class runs against the URL as written, before the request goes out, so a connection
+        # that transparently followed a `3xx` would let a server reach a host the checks just refused.
+        # A caller passing `http_client_factory:` takes on that responsibility: add redirect following here
+        # and the guards above only cover the first hop.
         def default_http_client
           require "faraday"
           Faraday.new do |faraday|

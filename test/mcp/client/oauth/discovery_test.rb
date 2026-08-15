@@ -437,6 +437,121 @@ module MCP
           refute(Discovery.secure_url?("not a url"))
         end
 
+        def test_same_origin_accepts_matching_scheme_host_and_port
+          assert(Discovery.same_origin?("https://srv.example.com/.well-known/x", "https://srv.example.com/mcp"))
+          assert(Discovery.same_origin?("https://srv.example.com:8443/a", "https://srv.example.com:8443/b"))
+          assert(Discovery.same_origin?("http://localhost:9292/a", "http://localhost:9292/mcp"))
+          assert(Discovery.same_origin?("https://srv.example.com/a?q=1#f", "https://srv.example.com/mcp"))
+        end
+
+        def test_same_origin_ignores_case_in_scheme_and_host
+          assert(Discovery.same_origin?("HTTPS://SRV.Example.COM/a", "https://srv.example.com/mcp"))
+        end
+
+        def test_same_origin_treats_an_explicit_default_port_as_the_implicit_one
+          assert(Discovery.same_origin?("https://srv.example.com:443/a", "https://srv.example.com/mcp"))
+          assert(Discovery.same_origin?("http://srv.example.com:80/a", "http://srv.example.com/mcp"))
+        end
+
+        def test_same_origin_rejects_differing_components
+          refute(Discovery.same_origin?("https://attacker.example.com/a", "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?("https://169.254.169.254/latest/", "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?("https://srv.example.com:8443/a", "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?("http://srv.example.com/a", "https://srv.example.com/mcp"))
+          # A subdomain is a different origin, so a hijacked challenge cannot walk
+          # sideways into a sibling host that shares the registrable domain.
+          refute(Discovery.same_origin?("https://evil.srv.example.com/a", "https://srv.example.com/mcp"))
+        end
+
+        def test_same_origin_rejects_malformed_or_hostless_urls
+          refute(Discovery.same_origin?("not a url", "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?("https://srv.example.com/a", "not a url"))
+          refute(Discovery.same_origin?("https://", "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?(nil, "https://srv.example.com/mcp"))
+          refute(Discovery.same_origin?("/relative/path", "https://srv.example.com/mcp"))
+        end
+
+        def test_private_network_host_recognizes_reserved_ipv4_ranges
+          assert(Discovery.private_network_host?("0.0.0.0"))
+          assert(Discovery.private_network_host?("10.0.0.5"))
+          assert(Discovery.private_network_host?("100.64.0.1"))
+          assert(Discovery.private_network_host?("127.0.0.1"))
+          # The cloud metadata address this check exists for.
+          assert(Discovery.private_network_host?("169.254.169.254"))
+          assert(Discovery.private_network_host?("172.16.0.1"))
+          assert(Discovery.private_network_host?("172.31.255.255"))
+          assert(Discovery.private_network_host?("192.168.1.1"))
+        end
+
+        def test_private_network_host_recognizes_reserved_ipv6_ranges
+          assert(Discovery.private_network_host?("::"))
+          assert(Discovery.private_network_host?("::1"))
+          assert(Discovery.private_network_host?("[::1]"))
+          assert(Discovery.private_network_host?("fd00::1"))
+          assert(Discovery.private_network_host?("fe80::1"))
+          assert(Discovery.private_network_host?("[fe80::1]"))
+        end
+
+        def test_private_network_host_unwraps_ipv4_mapped_ipv6
+          # `::ffff:169.254.169.254` reaches the same interface as the IPv4 spelling,
+          # so the mapped form must not be a way around the ranges above.
+          assert(Discovery.private_network_host?("::ffff:169.254.169.254"))
+          assert(Discovery.private_network_host?("[::ffff:10.0.0.5]"))
+          assert(Discovery.private_network_host?("::ffff:127.0.0.1"))
+          refute(Discovery.private_network_host?("::ffff:93.184.216.34"))
+        end
+
+        def test_private_network_host_refuses_non_canonical_ipv4_spellings
+          # `inet_aton` accepts forms `IPAddr` rejects, and the resolver reaches the same
+          # interfaces through them: `2130706433` and `127.1` are 127.0.0.1, and
+          # `0xa9fea9fe` is the cloud metadata address. Checking only the dotted-decimal
+          # spelling would refuse `169.254.169.254` and admit every alias of it.
+          assert(Discovery.private_network_host?("2130706433"))
+          assert(Discovery.private_network_host?("0x7f000001"))
+          assert(Discovery.private_network_host?("0xa9fea9fe"))
+          assert(Discovery.private_network_host?("127.1"))
+          assert(Discovery.private_network_host?("127.0.1"))
+          assert(Discovery.private_network_host?("0x7f.0.0.1"))
+          assert(Discovery.private_network_host?("0251.0376.0251.0376"))
+        end
+
+        def test_private_network_host_refuses_numeric_spellings_whose_value_is_resolver_dependent
+          # `010.0.0.1` is 8.0.0.1 read as octal and 10.0.0.1 read as decimal, and platforms
+          # disagree on which it is. Both readings are refused rather than one being chosen,
+          # since the reading not taken would otherwise be a way through.
+          assert(Discovery.private_network_host?("010.0.0.1"))
+          assert(Discovery.private_network_host?("0177.0.0.1"))
+
+          # The same applies to numeric spellings that land outside the blocked ranges, or
+          # nowhere at all: nothing is addressed this way on purpose.
+          assert(Discovery.private_network_host?("0x8080808"))
+          assert(Discovery.private_network_host?("256.1.1.1"))
+        end
+
+        def test_private_network_host_recognizes_localhost_by_name_only
+          assert(Discovery.private_network_host?("localhost"))
+          assert(Discovery.private_network_host?("LOCALHOST"))
+          refute(Discovery.private_network_host?("foo.localhost"))
+          refute(Discovery.private_network_host?("localhost.attacker.com"))
+        end
+
+        def test_private_network_host_rejects_public_addresses_and_names
+          refute(Discovery.private_network_host?("93.184.216.34"))
+          refute(Discovery.private_network_host?("8.8.8.8"))
+          refute(Discovery.private_network_host?("172.32.0.1"))
+          refute(Discovery.private_network_host?("2606:4700::1111"))
+          refute(Discovery.private_network_host?("srv.example.com"))
+          refute(Discovery.private_network_host?(nil))
+          refute(Discovery.private_network_host?(""))
+        end
+
+        def test_private_network_host_does_not_resolve_names
+          # Documents the deliberate limit of the predicate: an internal host that is
+          # named rather than addressed reads as public here. `same_origin?` is what
+          # keeps the `resource_metadata` URL from reaching one.
+          refute(Discovery.private_network_host?("vault.corp.internal"))
+        end
+
         def test_client_id_metadata_document_url_accepts_https_with_path
           assert(Discovery.client_id_metadata_document_url?("https://app.example.com/client-metadata.json"))
           assert(Discovery.client_id_metadata_document_url?("https://app.example.com/path/to/cm"))

@@ -2976,6 +2976,28 @@ whether the swap was triggered by
 `instance_variable_set(:@url, ...)`, by a Faraday customizer rewriting `url_prefix`, or by a custom middleware rewriting `env.url` (including just `env.url.query`) at request time,
 and whether the new URL is `http://` *or* `https://` to a different host or tenant.
 
+##### Discovery URL Destinations
+
+The scheme rules above say how a URL is contacted, not where it points. Discovery URLs arrive from the network, so the SDK also constrains their destinations.
+Both checks run before the request is sent, and neither is configurable.
+
+- The `resource_metadata` URL in a `WWW-Authenticate` challenge must be on the MCP server's own origin. Protected Resource Metadata describes that server,
+  so a real deployment publishes it there; requiring it means a `401` cannot aim the first request of the flow at an unrelated host. This is stricter than RFC 9728,
+  which does not require it.
+- The PRM `authorization_servers` entry and the `authorization_endpoint`, `token_endpoint`, and `registration_endpoint` from Authorization Server metadata must not be
+  IP literals in a private, loopback, link-local, or unique-local range, per the SSRF precaution in [RFC 9728 Section 7.7](https://www.rfc-editor.org/rfc/rfc9728#section-7.7).
+  The blocked ranges are `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `::/96`, `fc00::/7`,
+  and `fe80::/10`, along with the IPv4-mapped IPv6 spellings of each and the `localhost` name.
+- That range check is skipped when the MCP server URL you configured is itself on such an address. Pointing the client at a private network is a deliberate act,
+  and the authorization server for it usually lives on the same network, so `http://localhost` development and deployments that never leave a corporate network keep working.
+
+The range check compares IP literals and does not resolve hostnames, so it cannot recognize an internal service that is named rather than addressed,
+such as `https://vault.corp.internal/`. Resolving names here would not close that gap either, because the address the SDK looked up need not be the one
+the HTTP client connects to a moment later. The same-origin rule is what protects the `resource_metadata` URL, which is the only one of these a server supplies directly.
+
+If you replace the OAuth HTTP client through `MCP::Client::OAuth::Flow.new(http_client_factory:)`, do not add redirect-following middleware. Every check above runs against
+the URL as written, so a connection that follows a `3xx` on its own would reach hosts these rules just refused.
+
 #### Customizing the Faraday Connection
 
 You can pass a block to `MCP::Client::HTTP.new` to customize the underlying Faraday connection.
