@@ -948,6 +948,69 @@ module MCP
           assert_match(/authorization_servers/i, error.message)
         end
 
+        def test_run_refuses_an_authorization_server_metadata_body_over_the_cap
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: over_cap_body,
+          )
+
+          error = assert_raises(Flow::AuthorizationError) { run_authorization_flow }
+
+          assert_match(/exceeds \d+ bytes/, error.message)
+        end
+
+        def test_run_refuses_a_protected_resource_metadata_body_over_the_cap
+          # PRM discovery failures select the legacy path by design, so the refusal shows up as
+          # the fallback rather than as a raise. The padded document is valid JSON naming
+          # an authorization server, so contacting that server is exactly what would happen
+          # if the body had been read: the assertion below fails if the cap stops working.
+          stub_request(:any, %r{\Ahttps://srv\.example\.com/}).to_return(status: 404)
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: "https://srv.example.com/mcp",
+              authorization_servers: [@auth_base],
+              padding: "a" * (4 * 1024 * 1024),
+            ),
+          )
+
+          assert_raises(Flow::AuthorizationError) { run_authorization_flow }
+
+          assert_not_requested(:get, @as_metadata_url)
+        end
+
+        def test_run_refuses_a_dynamic_client_registration_body_over_the_cap
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: over_cap_body,
+          )
+
+          error = assert_raises(Flow::AuthorizationError) { run_authorization_flow }
+
+          assert_match(/exceeds \d+ bytes/, error.message)
+        end
+
+        def test_run_refuses_a_token_endpoint_body_over_the_cap
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: over_cap_body,
+          )
+
+          error = assert_raises(Flow::AuthorizationError) { run_authorization_flow }
+
+          assert_match(/exceeds \d+ bytes/, error.message)
+        end
+
+        # One byte past the cap, so the three request wrappers are each proven to install the streaming callback.
+        # A wrapper that forgot it would buffer this whole body and parse it.
+        def over_cap_body
+          "a" * (4 * 1024 * 1024 + 1)
+        end
+
         def test_run_raises_when_token_response_is_not_a_json_object
           # The token endpoint MUST return a JSON object per RFC 6749 §5.1.
           # A non-object body would otherwise be persisted into the provider

@@ -34,10 +34,13 @@ module MCP
           def request(token_endpoint:, id_token:, client_id:, audience:, resource:, http_client: nil)
             http_client ||= default_http_client
 
+            bounded = BoundedBody.new
+
             response = begin
-              http_client.post(token_endpoint) do |req|
+              raw_response = http_client.post(token_endpoint) do |req|
                 req.headers["Content-Type"] = "application/x-www-form-urlencoded"
                 req.headers["Accept"] = "application/json"
+                req.options.on_data = bounded.on_data
                 req.body = URI.encode_www_form(
                   "grant_type" => GRANT_TYPE,
                   "subject_token" => id_token,
@@ -48,6 +51,10 @@ module MCP
                   "client_id" => client_id,
                 )
               end
+
+              bounded.response_for(raw_response)
+            rescue BoundedBody::TooLargeError => e
+              raise ExchangeError, "#{e.message}."
             rescue Faraday::Error => e
               raise ExchangeError, "Token exchange request to #{token_endpoint} failed: #{e.class}: #{e.message}."
             end
@@ -88,8 +95,12 @@ module MCP
             assertion
           end
 
+          # `Accept-Encoding` is deliberately left unset, for the same reason as `Flow#default_http_client`:
+          # claiming that header turns Net::HTTP's `decode_content` off and would move `BoundedBody`'s cap
+          # onto compressed bytes.
           def default_http_client
             require "faraday"
+
             Faraday.new do |faraday|
               faraday.headers["Accept"] = "application/json"
             end
