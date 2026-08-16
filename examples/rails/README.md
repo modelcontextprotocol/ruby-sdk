@@ -36,7 +36,7 @@ per the MCP Streamable HTTP transport spec. Responses arrive as SSE `data:` line
 ```console
 SESSION_ID=$(curl -s -D - -o /dev/null http://localhost:9292/mcp \
   -H "Accept: application/json, text/event-stream" \
-  --json '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
+  --json '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
   | grep -i "^mcp-session-id:" | cut -d' ' -f2 | tr -d '\r')
 ```
 

@@ -56,6 +56,7 @@ end
 # Set up the server
 server = MCP::Server.new(
   name: "example_http_server",
+  version: "1.0.0",
   tools: [ExampleTool],
   prompts: [ExamplePrompt],
   resources: [
@@ -169,7 +170,9 @@ puts <<~MESSAGE
   Starting MCP HTTP server on http://localhost:9292
   Use POST requests to initialize and send JSON-RPC commands
   Example initialization:
-    curl -i http://localhost:9292 --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+    curl -i http://localhost:9292 \\
+      -H "Accept: application/json, text/event-stream" \\
+      --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 
   The server will return a session ID in the Mcp-Session-Id header.
   Use this session ID for subsequent requests.

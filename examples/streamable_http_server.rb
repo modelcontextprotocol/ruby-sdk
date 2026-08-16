@@ -13,14 +13,16 @@ sse_logger.formatter = proc do |severity, datetime, _progname, msg|
   "[SSE] #{severity} #{datetime.strftime("%H:%M:%S.%L")} - #{msg}\n"
 end
 
-# Tool that returns a response that will be sent via SSE if a stream is active
+# Tool that emits `notifications/progress` events, delivered over the SSE stream.
+# The client must request them by sending a `progressToken` in the request `_meta`.
 class NotificationTool < MCP::Tool
   tool_name "notification_tool"
-  description "Returns a notification message that will be sent via SSE if stream is active"
+  description "Sends the message back as progress notifications via SSE, then returns a summary"
   input_schema(
     properties: {
       message: { type: "string", description: "Message to send via SSE" },
-      delay: { type: "number", description: "Delay in seconds before returning (optional)" },
+      steps: { type: "number", description: "Number of progress notifications to send (default: 3)" },
+      delay: { type: "number", description: "Delay in seconds between notifications (optional)" },
     },
     required: ["message"],
   )
@@ -28,14 +30,19 @@ class NotificationTool < MCP::Tool
   class << self
     attr_accessor :logger
 
-    def call(message:, delay: 0)
-      sleep(delay) if delay > 0
+    def call(message:, server_context:, steps: 3, delay: 0)
+      steps = steps.to_i.clamp(1, 10)
 
-      logger&.info("Returning notification message: #{message}")
+      steps.times do |i|
+        sleep(delay) if delay > 0
+
+        logger&.info("Reporting progress #{i + 1}/#{steps}: #{message}")
+        server_context.report_progress(i + 1, total: steps, message: message)
+      end
 
       MCP::Tool::Response.new([{
         type: "text",
-        text: "Notification: #{message} (timestamp: #{Time.now.iso8601})",
+        text: "Sent #{steps} progress notifications for: #{message}",
       }])
     end
   end
@@ -44,6 +51,7 @@ end
 # Create the server
 server = MCP::Server.new(
   name: "sse_test_server",
+  version: "1.0.0",
   tools: [NotificationTool],
   prompts: [],
   resources: [],
@@ -149,29 +157,34 @@ puts <<~MESSAGE
   Starting server on http://localhost:9393
 
   Available Tools:
-  1. NotificationTool - Returns messages that are sent via SSE when stream is active"
+  1. notification_tool - Sends the message back as progress notifications via SSE
   2. echo - Simple echo tool
 
   Testing SSE:
 
   1. Initialize session:
      curl -i http://localhost:9393 \\
-       --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}'
+       -H "Accept: application/json, text/event-stream" \\
+       --json '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sse-test","version":"1.0"}}}'
 
-  2. Connect SSE stream (use the session ID from step 1):"
+  2. Connect SSE stream (use the session ID from step 1):
      curl -i -N -H "Mcp-Session-Id: YOUR_SESSION_ID" http://localhost:9393
 
   3. In another terminal, test tools (responses will be sent via SSE if stream is active):
 
      Echo tool:
      curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\
+       -H "Accept: application/json, text/event-stream" \\
        --json '{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"echo","arguments":{"message":"Hello SSE!"}}}'
 
-     Notification tool (with 2 second delay):
+     Notification tool (progress notifications require a progressToken in _meta):
      curl -i http://localhost:9393 -H "Mcp-Session-Id: YOUR_SESSION_ID" \\
-       --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!", "delay": 2}}}'
+       -H "Accept: application/json, text/event-stream" \\
+       --json '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"notification_tool","arguments":{"message":"Hello SSE!","delay":1},"_meta":{"progressToken":"curl-progress"}}}'
 
-  Note: When an SSE stream is active, tool responses will appear in the SSE stream and the POST request will return 202 Accepted with no body.
+  Note: Each POST is answered with an SSE stream of its own; request-scoped notifications
+  (such as the progress events above) appear on it before the final response.
+  The standalone GET stream carries server-initiated messages that are not tied to a request.
 
   Press Ctrl+C to stop the server
 MESSAGE
