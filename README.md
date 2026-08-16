@@ -3028,9 +3028,11 @@ The MCP 2026-07-28 draft replaces in-flight server-to-client requests with Multi
 or `elicitation/create` while a request is being processed, a server may answer with a result whose `resultType` is `"input_required"`, carrying an `inputRequests` map
 and an opaque `requestState`; the client fulfills the requests and re-issues the original request with `inputResponses` and the echoed `requestState`.
 
-The Ruby client recognizes such results and raises `MCP::Client::InputRequiredError` instead of returning them as if they were final. The error exposes `input_requests`, `request_state`,
-and the raw `result`; automatic resumption is not implemented yet, so callers respond manually if they opt into the draft flow. `MCP::ResultType::COMPLETE` and `MCP::ResultType::INPUT_REQUIRED`
-are provided for forward compatibility. Servers on stable protocol versions never send `resultType`, so existing behavior is unchanged.
+The Ruby client drives such results automatically: once a handler is registered through `on_elicitation`, `on_sampling`, or `on_roots`, the `call_tool`, `get_prompt`,
+and `read_resource` methods fulfill the embedded requests and re-issue the original request with `inputResponses` plus the echoed `requestState`, capped at `input_required_max_rounds`
+(10 by default, matching the TypeScript and Python SDKs). Without a matching handler, `MCP::Client::InputRequiredError` is raised instead of returning the result as if it were final;
+the error exposes `input_requests`, `request_state`, and the raw `result` for manual driving via the `input_responses:` and `request_state:` keywords.
+`MCP::ResultType::COMPLETE` and `MCP::ResultType::INPUT_REQUIRED` are provided for forward compatibility. Servers on stable protocol versions never send `resultType`, so existing behavior is unchanged.
 
 SEP-2322 also makes `resultType` a required member of every result a 2026-07-28 server returns. The server stamps `resultType: "complete"` on all results of requests carrying
 the modern `_meta` envelope (and on `server/discover` results), while results that already carry a discriminator (`"input_required"`, the tasks extension's `"task"`) keep it.
