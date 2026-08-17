@@ -1021,24 +1021,52 @@ module MCP
         end
 
         def http_get(url)
-          http_client.get(url)
+          bounded_request do |on_data|
+            http_client.get(url) do |req|
+              req.options.on_data = on_data
+            end
+          end
         end
 
         def http_post_json(url, body)
-          http_client.post(url) do |req|
-            req.headers["Content-Type"] = "application/json"
-            req.headers["Accept"] = "application/json"
-            req.body = JSON.generate(body)
+          bounded_request do |on_data|
+            http_client.post(url) do |req|
+              req.headers["Content-Type"] = "application/json"
+              req.headers["Accept"] = "application/json"
+              req.options.on_data = on_data
+              req.body = JSON.generate(body)
+            end
           end
         end
 
         def http_post_form(url, form, headers: {})
-          http_client.post(url) do |req|
-            req.headers["Content-Type"] = "application/x-www-form-urlencoded"
-            req.headers["Accept"] = "application/json"
-            headers.each { |key, value| req.headers[key] = value }
-            req.body = URI.encode_www_form(form)
+          bounded_request do |on_data|
+            http_client.post(url) do |req|
+              req.headers["Content-Type"] = "application/x-www-form-urlencoded"
+              req.headers["Accept"] = "application/json"
+
+              headers.each do |key, value|
+                req.headers[key] = value
+              end
+
+              req.options.on_data = on_data
+              req.body = URI.encode_www_form(form)
+            end
           end
+        end
+
+        # Issues a request with the response body bounded as it arrives, and returns the status paired with
+        # that body. An over-cap response is refused rather than truncated: a partial discovery or token document
+        # cannot be validated, and `fetch_metadata_json` must not fall through to the next candidate URL either,
+        # since the same server would serve the same body.
+        def bounded_request
+          bounded = BoundedBody.new
+
+          response = yield(bounded.on_data)
+
+          bounded.response_for(response)
+        rescue BoundedBody::TooLargeError => e
+          raise AuthorizationError, "#{e.message}."
         end
 
         def http_client
@@ -1050,8 +1078,14 @@ module MCP
         # that transparently followed a `3xx` would let a server reach a host the checks just refused.
         # A caller passing `http_client_factory:` takes on that responsibility: add redirect following here
         # and the guards above only cover the first hop.
+        #
+        # `Accept-Encoding` is deliberately left unset. `Net::HTTP::GenericRequest` negotiates it and decodes
+        # the response only while the caller has not claimed that header; assigning it turns `decode_content` off,
+        # which would silently move `BoundedBody`'s cap onto compressed bytes and let a small body expand past it
+        # after the check.
         def default_http_client
           require "faraday"
+
           Faraday.new do |faraday|
             faraday.headers["Accept"] = "application/json"
           end

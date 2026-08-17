@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "oauth/bounded_body"
 require_relative "oauth/discovery"
 require_relative "oauth/flow"
 require_relative "oauth/in_memory_storage"

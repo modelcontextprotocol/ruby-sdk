@@ -101,6 +101,17 @@ module MCP
           error = assert_raises(IDJAGTokenExchange::ExchangeError) { request_exchange }
           assert_match(/not a JSON object/, error.message)
         end
+
+        def test_request_refuses_a_response_body_over_the_cap
+          stub_request(:post, @token_endpoint).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: "a" * (4 * 1024 * 1024 + 1),
+          )
+
+          error = assert_raises(IDJAGTokenExchange::ExchangeError) { request_exchange }
+          assert_match(/exceeds \d+ bytes/, error.message)
+        end
       end
     end
   end

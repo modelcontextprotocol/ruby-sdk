@@ -3002,6 +3002,11 @@ the HTTP client connects to a moment later. The same-origin rule is what protect
 If you replace the OAuth HTTP client through `MCP::Client::OAuth::Flow.new(http_client_factory:)`, do not add redirect-following middleware. Every check above runs against
 the URL as written, so a connection that follows a `3xx` on its own would reach hosts these rules just refused.
 
+The SDK also bounds what those endpoints may return. A discovery, dynamic client registration, token, or token exchange response is refused once it passes 4 MiB,
+measured as the body arrives rather than after it has been buffered, so a compressed body that expands past the limit is refused partway through the expansion.
+Unlike the transport's `max_message_bytes:`, this limit is not configurable: these documents run to kilobytes in normal operation, and a connection supplied through
+`http_client_factory:` is bounded as well, so there is no way to opt out of it.
+
 #### Customizing the Faraday Connection
 
 You can pass a block to `MCP::Client::HTTP.new` to customize the underlying Faraday connection.
