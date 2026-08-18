@@ -619,8 +619,24 @@ module MCP
 
       # `initialize` MUST NOT be cancelled (MCP spec 2025-11-25, cancellation item 2),
       # so do not track it in the in-flight registry.
-      cancellation = if related_request_id && method != Methods::INITIALIZE
-        session&.register_in_flight(related_request_id)
+      cancellation = nil
+      if related_request_id && method != Methods::INITIALIZE && session
+        cancellation = session.register_in_flight(related_request_id)
+
+        # The spec puts the uniqueness obligation on the sender - "The request ID MUST NOT have been previously used by
+        # the requestor within the same session" - and says nothing about what a receiver does with a duplicate.
+        # Answering one is the only option that stays correct: the id routes request-scoped messages back to
+        # the request that caused them, and the transport's rule is that those messages "SHOULD relate to
+        # the originating client request", which a second live request under the same id makes impossible to honor
+        # for either of them. Refused the same way a duplicate `initialize` is, and for the same reason:
+        # so that a repeated id cannot silently displace state negotiated by the first one.
+        if cancellation.nil?
+          raise RequestHandlerError.new(
+            "Invalid Request: request id #{related_request_id.inspect} is already in flight",
+            request,
+            error_type: :invalid_request,
+          )
+        end
       end
 
       ->(params) {
@@ -727,7 +743,10 @@ module MCP
           reported_exception = wrapped
           raise wrapped
         ensure
-          session&.unregister_in_flight(related_request_id) if related_request_id
+          # `cancellation` is non-nil exactly when this request claimed the id above, so this also keeps `initialize`
+          # (which never registers) from evicting an in-flight registration under a reused id when the duplicate-`initialize`
+          # refusal raises out of the handler.
+          session&.unregister_in_flight(related_request_id, cancellation: cancellation) if related_request_id && cancellation
         end
       }
     end
