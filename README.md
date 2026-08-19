@@ -1261,6 +1261,20 @@ end
 otherwise `resources/read` requests will be a no-op. Note that a `resources_read_handler` fully replaces
 the default `resources/read` handling, including the automatic routing to class-based resources described above.
 
+To make the resource *list* depend on the request, register a `resources_list_handler`. The block returns the resource collection to serve,
+so the visible resources can vary by the authenticated principal or the granted scope. The framework paginates the returned array
+and stamps the same cache hints it applies to the constructor-provided resources, so the block returns only the array.
+A block that declares `server_context:` receives it:
+
+```ruby
+server.resources_list_handler do |params, server_context:|
+  server_context[:authenticated] ? real_resources : demo_resources
+end
+```
+
+The block is invoked once per page, so it must return a stable ordering across the pages of one query; the cursor is a positional offset
+into the returned collection. When no handler is set, the resources passed to `MCP::Server.new` are served unchanged.
+
 For unknown URIs, raise `MCP::Server::ResourceNotFoundError` from the handler.
 Per SEP-2164, the server then responds with the standard JSON-RPC Invalid Params error (`-32602`)
 carrying the requested URI in the error `data` member:
@@ -1646,7 +1660,7 @@ Client-initiated cancellation is also supported: see [Client-Side: Cancelling an
 #### Server-Side: Handlers that Check for Cancellation
 
 Any handler that opts in to `server_context:` - tools (`Tool.call`), prompt templates,
-`resources_read_handler`, `completion_handler`, `resources_subscribe_handler`,
+`resources_read_handler`, `resources_list_handler`, `completion_handler`, `resources_subscribe_handler`,
 `resources_unsubscribe_handler`, and `define_custom_method` blocks - receives
 an `MCP::ServerContext` wired to the in-flight request's cancellation token.
 Handlers check `cancelled?` in their work loop, or call `raise_if_cancelled!` to raise

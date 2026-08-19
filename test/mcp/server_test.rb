@@ -1437,6 +1437,54 @@ module MCP
       assert_instrumentation_data({ method: "resources/list" })
     end
 
+    test "#resources_list_handler replaces the served resource collection" do
+      other = Resource.new(uri: "https://other.invalid", name: "other", mime_type: "text/plain")
+      @server.resources_list_handler { |_params| [other] }
+
+      response = @server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+
+      assert_equal({ resources: [other.to_h] }, response[:result])
+    end
+
+    test "#resources_list_handler receives server_context when it opts in" do
+      real = Resource.new(uri: "https://real.invalid", name: "real", mime_type: "text/plain")
+      demo = Resource.new(uri: "https://demo.invalid", name: "demo", mime_type: "text/plain")
+      @server.resources_list_handler do |_params, server_context:|
+        server_context[:authenticated] ? [real] : [demo]
+      end
+
+      @server.server_context = { authenticated: false }
+      anon = @server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      @server.server_context = { authenticated: true }
+      authed = @server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+
+      assert_equal({ resources: [demo.to_h] }, anon[:result])
+      assert_equal({ resources: [real.to_h] }, authed[:result])
+    end
+
+    test "#resources_list_handler paginates and stamps cache hints on the returned collection" do
+      first = Resource.new(uri: "https://first.invalid", name: "first", mime_type: "text/plain")
+      second = Resource.new(uri: "https://second.invalid", name: "second", mime_type: "text/plain")
+      server = Server.new(name: @server_name, resources: [], page_size: 1, ttl_ms: 60_000)
+      server.resources_list_handler { |_params| [first, second] }
+
+      response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+
+      assert_equal([first.to_h], response[:result][:resources])
+      assert_equal("1", response[:result][:nextCursor])
+      assert_equal(60_000, response[:result][:ttlMs])
+    end
+
+    test "#resources_list_handler serves a server with no constructor-provided resources" do
+      only = Resource.new(uri: "https://only.invalid", name: "only", mime_type: "text/plain")
+      server = Server.new(name: @server_name, resources: [])
+      server.resources_list_handler { |_params| [only] }
+
+      response = server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+
+      assert_equal({ resources: [only.to_h] }, response[:result])
+    end
+
     test "#handle resources/read returns an empty array of contents by default" do
       request = {
         jsonrpc: "2.0",
