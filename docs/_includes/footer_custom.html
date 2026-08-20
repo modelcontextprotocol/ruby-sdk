@@ -1,0 +1,48 @@
+{%- comment -%}
+  Previous/Next pager following the sidebar order: top-level pages by
+  nav_order, then the server, client, and extensions collections.
+{%- endcomment -%}
+{%- assign top_pages = site.html_pages | where_exp: "item", "item.nav_order" | sort: "nav_order" -%}
+{%- assign server_docs = site.server | sort: "nav_order" -%}
+{%- assign client_docs = site.client | sort: "nav_order" -%}
+{%- assign extensions_docs = site.extensions | sort: "nav_order" -%}
+{%- assign ordered_pages = top_pages | concat: server_docs | concat: client_docs | concat: extensions_docs -%}
+{%- assign pager_state = "before" -%}
+{%- assign prev_page = nil -%}
+{%- assign next_page = nil -%}
+{%- for item in ordered_pages -%}
+  {%- if pager_state == "current" -%}
+    {%- assign next_page = item -%}
+    {%- assign pager_state = "after" -%}
+  {%- elsif item.url == page.url -%}
+    {%- assign pager_state = "current" -%}
+  {%- elsif pager_state == "before" -%}
+    {%- assign prev_page = item -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if pager_state != "before" -%}
+<nav class="docs-pager" aria-label="Pager">
+  {%- if prev_page %}
+  <a class="docs-pager-link docs-pager-prev" href="{{ prev_page.url | relative_url }}">
+    <span class="docs-pager-direction">Previous</span>
+    <span class="docs-pager-title">
+      {%- if prev_page.collection != page.collection -%}
+        {%- if prev_page.collection == "server" -%}Building Servers · {% elsif prev_page.collection == "client" -%}Building Clients · {% elsif prev_page.collection == "extensions" -%}Extensions · {% endif -%}
+      {%- endif -%}
+      {{- prev_page.title -}}
+    </span>
+  </a>
+  {%- endif -%}
+  {%- if next_page %}
+  <a class="docs-pager-link docs-pager-next" href="{{ next_page.url | relative_url }}">
+    <span class="docs-pager-direction">Next</span>
+    <span class="docs-pager-title">
+      {%- if next_page.collection != page.collection -%}
+        {%- if next_page.collection == "server" -%}Building Servers · {% elsif next_page.collection == "client" -%}Building Clients · {% elsif next_page.collection == "extensions" -%}Extensions · {% endif -%}
+      {%- endif -%}
+      {{- next_page.title -}}
+    </span>
+  </a>
+  {%- endif %}
+</nav>
+{%- endif -%}

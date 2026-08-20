@@ -1,0 +1,8 @@
+// The include imports the light scheme first, so only overrides live here.
+$link-color: #990000;
+$btn-primary-color: #b61d1d;
+$sidebar-color: #fff;
+
+// The light scheme derives $feedback-color before these overrides apply,
+// so it is restated (the hover shade on the white sidebar).
+$feedback-color: #f2f2f2;
