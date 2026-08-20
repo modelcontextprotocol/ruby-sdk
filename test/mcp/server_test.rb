@@ -3729,6 +3729,80 @@ module MCP
       assert_equal "Invalid params", response[:error][:message]
     end
 
+    # Builds an initialized server that advertises the `resources.subscribe` capability.
+    def subscription_server
+      server = Server.new(name: "test_server", capabilities: { resources: { subscribe: true } })
+      server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })
+      server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })
+      server
+    end
+
+    # Sends `method` (`resources/subscribe` or `resources/unsubscribe`) and returns the JSON-RPC result.
+    def handle_subscription(server, method)
+      server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: method,
+        params: { uri: "https://example.com/resource" },
+      })[:result]
+    end
+
+    test "#handle resources/subscribe passes a handler-returned _meta through to the result" do
+      server = subscription_server
+      server.resources_subscribe_handler { |_params| { _meta: { "acme.example/subscriptionId" => "sub-1" } } }
+
+      result = handle_subscription(server, "resources/subscribe")
+
+      assert_equal({ _meta: { "acme.example/subscriptionId" => "sub-1" } }, result)
+    end
+
+    test "#handle resources/unsubscribe passes a handler-returned _meta through to the result" do
+      server = subscription_server
+      server.resources_unsubscribe_handler { |_params| { _meta: { "acme.example/note" => "gone" } } }
+
+      result = handle_subscription(server, "resources/unsubscribe")
+
+      assert_equal({ _meta: { "acme.example/note" => "gone" } }, result)
+    end
+
+    test "#handle resources/subscribe drops a handler-returned field that is not _meta" do
+      # The spec's result defines no member other than `_meta`, so a top-level field the handler adds is not
+      # a subscription protocol; it stays out of the response.
+      server = subscription_server
+      server.resources_subscribe_handler { |_params| { subscriptionId: "sub-1" } }
+
+      result = handle_subscription(server, "resources/subscribe")
+
+      assert_equal({}, result)
+    end
+
+    test "#handle resources/subscribe accepts a string _meta key from the handler" do
+      server = subscription_server
+      server.resources_subscribe_handler { |_params| { "_meta" => { "k" => "v" } } }
+
+      result = handle_subscription(server, "resources/subscribe")
+
+      assert_equal({ _meta: { "k" => "v" } }, result)
+    end
+
+    test "#handle resources/subscribe ignores a handler-returned _meta that is not a hash" do
+      server = subscription_server
+      server.resources_subscribe_handler { |_params| { _meta: "not-a-hash" } }
+
+      result = handle_subscription(server, "resources/subscribe")
+
+      assert_equal({}, result)
+    end
+
+    test "#handle resources/subscribe keeps an empty result when the handler returns a non-hash" do
+      server = subscription_server
+      server.resources_subscribe_handler { |_params| nil }
+
+      result = handle_subscription(server, "resources/subscribe")
+
+      assert_equal({}, result)
+    end
+
     test "#handle resources/subscribe without uri does not invoke a custom handler" do
       server = Server.new(
         name: "test_server",
