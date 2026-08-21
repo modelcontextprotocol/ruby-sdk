@@ -16,6 +16,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - `rake test` - Run all tests
 - `rake rubocop` - Run linter
 - `rake` - Run tests and linting (default task)
+- `bundle exec rake conformance` - Run the MCP conformance suite (see conformance/README.md)
 - `ruby -I lib -I test test/path/to/specific_test.rb` - Run single test file
 - `gem build mcp.gemspec` - Build the gem
 
@@ -33,6 +34,14 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - Follow Ruby community conventions
 - Keep dependencies minimal
 - Use lowercase HTTP response header names (e.g. `mcp-session-id`); the Rack 3 SPEC requires this, and the MCP spec's `Mcp-Session-Id` casing is prose convention only
+
+## Documentation
+
+- User-facing documentation lives in `docs/`, one page per topic, published at https://ruby.sdk.modelcontextprotocol.io (deploys only when a release is published)
+- Pages live in the `docs/_server/`, `docs/_client/`, and `docs/_extensions/` collections
+- Keep README.md slim: quick start and pointers only; document features on the relevant docs page
+- Internal links are absolute and extensionless (e.g. `/server/tools/`); front matter is followed by a blank line before the h1
+- Callout tiers: `.note` (supplementary), `.important` (spec constraints), `.warning` (deprecated features)
 
 ## Commit message conventions
 

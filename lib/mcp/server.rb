@@ -1578,7 +1578,7 @@ module MCP
       # Transports parse incoming JSON with `symbolize_names: true`, so `arguments` already arrives symbolized
       # at every nesting level. This top-level transform only guards callers that hand in string-keyed top-level arguments;
       # it does not recurse, and nested object keys remain symbols. Tools therefore receive symbol keys all the way down.
-      # See docs/building-servers.md ("Tool argument keys").
+      # See docs/server/tools.md ("Tool argument keys").
       args = arguments&.transform_keys(&:to_sym) || {}
 
       if accepts_server_context?(tool.method(:call))

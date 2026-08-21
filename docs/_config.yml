@@ -2,18 +2,44 @@
 title: "MCP Ruby SDK"
 description: "The official Ruby SDK for Model Context Protocol servers and clients."
 remote_theme: just-the-docs/just-the-docs
+color_scheme: ruby-light
 
-# Include generated files and directories which may start with underscores
-include:
-  - "_*"
+plugins:
+  - jekyll-redirect-from
+
+# Sidebar sections: each collection renders as a plain category heading
+# with its pages listed beneath it, instead of a clickable parent page.
+collections:
+  server:
+    permalink: "/server/:name/"
+    output: true
+  client:
+    permalink: "/client/:name/"
+    output: true
+  extensions:
+    permalink: "/extensions/:name/"
+    output: true
+
+just_the_docs:
+  collections:
+    server:
+      name: Building Servers
+    client:
+      name: Building Clients
+    extensions:
+      name: Extensions
 
 # Search
 search_enabled: true
 
-# Footer
-gh_edit_link: true
-gh_edit_link_text: "Edit this page on GitHub."
-gh_edit_repository: "https://github.com/modelcontextprotocol/ruby-sdk"
-gh_edit_branch: "main"
-gh_edit_source: "docs"
-gh_edit_view_mode: "edit"
+# Callouts
+callouts:
+  note:
+    title: Note
+    color: blue
+  important:
+    title: Important
+    color: yellow
+  warning:
+    title: Warning
+    color: red

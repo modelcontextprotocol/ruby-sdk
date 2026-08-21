@@ -65,13 +65,85 @@
 /*
  * Applied before the dark stylesheet finishes loading, so browsers that
  * do not support blocking="render" avoid a light-colored first paint.
- * Values match $grey-dk-300 and $grey-lt-300 from the dark color scheme.
+ * Values match $body-background-color from the ruby-dark color scheme
+ * and $grey-lt-300 for the text.
  */
 :root[data-theme="dark"] body {
-  background-color: #27262b;
+  background-color: #252525;
   color: #e6e1e8;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
+}
+
+/*
+ * Center the sidebar-plus-content block as one unit, splitting the leftover viewport equally
+ * on both sides. The theme instead widens the sidebar to absorb the whole left overflow,
+ * and its margin rule lives on `.side-bar + .main`, which a bare `.main` selector cannot override.
+ */
+$docs-content-width: 64rem;
+
+@media (min-width: 66.5rem) {
+  .side-bar {
+    /* Capitalized Max/Min pass through the Sass compiler as plain CSS. */
+    left: Max(0px, calc((100% - #{$nav-width + $docs-content-width}) / 2));
+    width: $nav-width;
+  }
+
+  .side-bar + .main {
+    max-width: $docs-content-width;
+    margin-left: Max(#{$nav-width}, calc((100% - #{$nav-width + $docs-content-width}) / 2 + #{$nav-width}));
+  }
+
+  /* Breathing room between the sidebar and the content. */
+  .main-content-wrap {
+    padding-left: 3rem;
+  }
+
+  .main-header {
+    padding-left: 1rem;
+  }
+}
+
+/* Previous/Next pager in the page footer. */
+.docs-pager {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.docs-pager-link {
+  display: flex;
+  flex-direction: column;
+  max-width: 48%;
+  text-decoration: none;
+}
+
+.docs-pager-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.docs-pager-direction {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: $body-text-color;
+  opacity: 0.6;
+}
+
+.docs-pager-title {
+  font-weight: 600;
+}
+
+/*
+ * Category headings read as section labels, not separators: no underline,
+ * spaced apart from the preceding group and letter-spaced instead.
+ */
+.nav-category {
+  margin-top: 1.5rem;
+  letter-spacing: 0.08em;
+  border-bottom: none;
+  opacity: 0.65;
 }

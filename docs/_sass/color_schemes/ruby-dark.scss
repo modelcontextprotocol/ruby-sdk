@@ -1,0 +1,17 @@
+// Dark counterpart of ruby-light: the link color is lightened from
+// the #b61d1d accent so it keeps WCAG AA contrast, and the theme's
+// purple-tinted dark greys become neutral ones.
+@import "./color_schemes/dark";
+
+$link-color: #f0776c;
+$btn-primary-color: #b61d1d;
+
+// The dark scheme derives $feedback-color before these overrides apply,
+// so it is restated.
+$body-background-color: #252525;
+$sidebar-color: #252525;
+$feedback-color: #1e1e1e;
+$search-background-color: #202020;
+$table-background-color: #202020;
+$base-button-color: #202020;
+$border-color: #3f3f3f;

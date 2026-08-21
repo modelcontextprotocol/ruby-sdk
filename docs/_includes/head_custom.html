@@ -1,3 +1,5 @@
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
 <script>
 (function() {
   const storageKey = "mcp-ruby-sdk-docs-theme";
@@ -63,8 +65,9 @@
   /*
    * Swap the color stylesheet without going through jtd.setTheme, which
    * rewrites the href of the render-blocking link and lets the page paint
-   * unstyled until the replacement CSS arrives. The site has no color_scheme,
-   * so the default stylesheet equals the light one and needs no swap at all;
+   * unstyled until the replacement CSS arrives. The site's color_scheme is
+   * the light variant, so the default stylesheet equals the light one
+   * and needs no swap at all;
    * for dark, keep the old sheet applied until the new one has loaded.
    */
   function setColorStylesheet(theme) {
@@ -187,4 +190,20 @@
     mediaQuery.addListener(applySystemPreference);
   }
 })();
+</script>
+
+<script>
+  /*
+   * Open external links (GitHub, the MCP specification, rubydoc, and so on)
+   * in a new tab, keeping the docs page the reader came from. Line comments
+   * would swallow the script here: the theme compresses the HTML to one line.
+   */
+  document.addEventListener("DOMContentLoaded", function () {
+    for (const anchor of document.querySelectorAll("a[href^='http']")) {
+      if (anchor.hostname !== window.location.hostname) {
+        anchor.target = "_blank";
+        anchor.rel = "noopener";
+      }
+    }
+  });
 </script>
