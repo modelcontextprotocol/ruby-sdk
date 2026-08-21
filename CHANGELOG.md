@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-22
+
+User-facing documentation now lives on the documentation site at https://ruby.sdk.modelcontextprotocol.io,
+and README.md keeps the quick start. Two entries under "Changed" reject traffic that earlier releases accepted
+and ship in a minor release under the exceptions described in [VERSIONING.md](VERSIONING.md).
+
+### Added
+
+- Add a `resources_list_handler` for context-dependent resource lists (#509)
+- Pass a handler-returned `_meta` through the subscribe result (#510)
+
+### Changed
+
+- Bound OAuth response bodies in the client (#520)
+- Reject duplicate in-flight JSON-RPC request ids (#521)
+- Move the documentation from README.md to the documentation site (#523)
+
 ## [1.2.0] - 2026-08-15
 
 This release completes the SEP-2575 stateless lifecycle of the 2026-07-28 specification, together with
