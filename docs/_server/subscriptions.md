@@ -1,10 +1,12 @@
 ---
 layout: default
-title: Notification Subscriptions
+title: Subscriptions
 nav_order: 12
+redirect_from:
+  - /server/notification-subscriptions/
 ---
 
-# Notification Subscriptions
+# Subscriptions
 
 `subscriptions/listen` is the long-lived notification subscription stream of MCP 2026-07-28 (SEP-2575),
 replacing the legacy HTTP GET listening stream.

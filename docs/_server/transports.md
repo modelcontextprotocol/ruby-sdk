@@ -76,10 +76,10 @@ The following examples show two common integration styles in Rails.
 > routed to the same instance.
 >
 > Stateless mode (`stateless: true`) does not use sessions and works with any server configuration.
-> Requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) (MCP 2026-07-28) are likewise sessionless single exchanges and work
-> with any configuration, with two caveats: a [`subscriptions/listen`](/server/notification-subscriptions/) stream
+> Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28) are likewise sessionless single exchanges and work
+> with any configuration, with two caveats: a [`subscriptions/listen`](/server/subscriptions/) stream
 > is held in memory by the process that accepted it, so only notifications emitted in that process reach it,
-> and the [multi round-trip](/server/multi-round-trip-results/) `requestState` crosses workers only when they
+> and the [multi round-trip](/server/mrtr/) `requestState` crosses workers only when they
 > share a `RequestStateSecurity` key.
 
 {: .important }
@@ -103,7 +103,7 @@ The following examples show two common integration styles in Rails.
 > so both `"mcp.example.com"` and `"mcp.example.com:8443"` work. Pass `dns_rebinding_protection: false`
 > to disable the check entirely (e.g., when an upstream proxy or middleware already validates `Host`/`Origin`).
 > The check runs before any lifecycle dispatch, so it protects requests of
-> the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) as well.
+> the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) as well.
 
 ### Rails (mount)
 
@@ -179,7 +179,7 @@ and repeated `initialize` requests are permitted. Request-scoped notifications s
 (there is no stream to deliver them), while server-to-client requests (`sampling/createMessage`, `roots/list`, `elicitation/create`) raise an error.
 
 {: .note }
-> This transport option is distinct from the sessionless [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) of MCP 2026-07-28.
+> This transport option is distinct from the sessionless [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) of MCP 2026-07-28.
 > The option governs how handshake-lifecycle clients are served; modern requests carry their own `_meta` envelope
 > and are served as single exchanges whether or not `stateless: true` is set.
 
@@ -203,7 +203,7 @@ This mode is suitable for simple tool servers that do not need server-initiated 
 
 {: .note }
 > Like [stateless mode](#stateless-mode), this option applies to handshake-lifecycle clients only.
-> Requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) of MCP 2026-07-28 ignore `enable_json_response:`
+> Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) of MCP 2026-07-28 ignore `enable_json_response:`
 > and are served as SSE-framed single exchanges, so request-scoped notifications still reach the client.
 
 ### Session Limits
@@ -224,8 +224,8 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session
 ```
 
 Stateless mode (`stateless: true`) retains no sessions, so neither limit applies to it. The same holds
-for requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle), which never create a session;
-their long-lived [`subscriptions/listen`](/server/notification-subscriptions/) streams are bounded separately
+for requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle), which never create a session;
+their long-lived [`subscriptions/listen`](/server/subscriptions/) streams are bounded separately
 by `max_listen_subscriptions:`.
 
 ### Session Ownership
@@ -253,7 +253,7 @@ it also records the `Origin` header at `initialize` and rejects a later request 
 when both are present - a non-browser client that omits `Origin` (e.g. `curl` or a script) is not stopped by this check.
 Enforcing ownership against a determined attacker requires supplying the validator with an authenticated principal.
 
-Requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) carry no `Mcp-Session-Id` and touch no stored session,
+Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) carry no `Mcp-Session-Id` and touch no stored session,
 so there is no session to steal, and neither the validator nor the recorded-`Origin` comparison runs for them
 (the per-request `Origin` validation of the DNS rebinding protection above still applies);
 on that path, authorization is enforced per request by the deploying application.
@@ -271,4 +271,4 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, max_req
 ```
 
 Unlike the deployment options above, these bounds apply to both lifecycles:
-requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) are read through the same byte and nesting limits.
+requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) are read through the same byte and nesting limits.

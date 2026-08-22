@@ -1,10 +1,12 @@
 ---
 layout: default
-title: Completions
+title: Completion
 nav_order: 16
+redirect_from:
+  - /server/completions/
 ---
 
-# Completions
+# Completion
 
 MCP spec includes [Completions](https://modelcontextprotocol.io/specification/latest/server/utilities/completion),
 which enable servers to provide autocompletion suggestions for prompt arguments and resource URIs.
