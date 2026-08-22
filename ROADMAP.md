@@ -19,11 +19,15 @@ which also defines the Semantic Versioning scheme and breaking-change policy.
 ## Deprecated Features
 
 The 2026-07-28 spec revision deprecates Roots, Sampling, and Logging (SEP-2577).
-These features remain fully supported throughout 1.x, and the SDK emits deprecation warnings when they are used
-with protocol version 2026-07-28 or newer.
-Under Semantic Versioning their removal requires a major release, but no removal is scheduled yet:
-whether 2.0.0 removes them depends on how future MCP spec revisions treat these features
-and on adoption of their replacements.
+These features remain supported throughout 1.x: on the legacy lifecycle they work unchanged
+(the deprecations do not apply there), and the 2026-07-28 lifecycle carries them through its own mechanisms:
+roots-shaped and sampling-shaped input requests embedded in `InputRequiredResult` responses
+(the SEP-2322 multi round-trip requests pattern) and per-request log delivery through the envelope's `logLevel`.
+The replacements SEP-2577 names live outside the protocol: tool parameters or configuration for roots,
+direct LLM provider APIs for sampling, and stderr or OpenTelemetry for logging.
+The client emits a deprecation warning when a modern connect declares the deprecated Roots or Sampling capabilities.
+Under Semantic Versioning their removal requires a major release, but no removal is scheduled yet: whether 2.0.0 removes
+them depends on how future MCP spec revisions treat these features and on adoption of their replacements.
 
 ## Conformance
 
