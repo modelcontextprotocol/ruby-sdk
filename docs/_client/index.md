@@ -25,9 +25,9 @@ This class supports:
 - Resource reading via the `resources/read` method (`MCP::Client#read_resource`)
 - Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
 - Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
-- Completion requests via the `completion/complete` method (`MCP::Client#complete`); see [Completions](/server/completions/)
+- Completion requests via the `completion/complete` method (`MCP::Client#complete`); see [Completion](/server/completion/)
 - Automatic driving of multi round-trip `input_required` results once `on_elicitation`, `on_sampling`,
-  or `on_roots` handlers are registered; see [Multi-Round-Trip Results](/client/multi-round-trip-results/)
+  or `on_roots` handlers are registered; see [Multi Round-Trip Requests](/client/mrtr/)
 - Cancellation of in-flight requests via the `cancellation:` keyword; see [Cancellation](/client/cancellation/)
 - Cursor-based page iteration on the `list_*` methods and whole-collection fetching with
   the `max_pages` guard; see [Pagination](/client/pagination/)

@@ -201,6 +201,6 @@ If an invalid `protocol_version` value is set, an `ArgumentError` is raised.
 The pin scopes the `initialize` handshake, so it accepts handshake versions (`2025-11-25` and earlier) only. Per the SEP-2575 era model,
 `2026-07-28` carries its version on every request and has no handshake at all, so there is nothing for a pin to configure there and setting it raises `ArgumentError`;
 a client asking `initialize` for a modern version is counter-offered the pinned version (or the latest handshake version), matching the TypeScript and Python SDKs.
-Clients reach `2026-07-28` through [`server/discover`](/server/discovery/) and the per-request `_meta` envelope, which the bundled transports serve alongside the handshake with no configuration needed.
+Clients reach `2026-07-28` through [`server/discover`](/server/discover/) and the per-request `_meta` envelope, which the bundled transports serve alongside the handshake with no configuration needed.
 
 Be sure to check the [MCP spec](https://modelcontextprotocol.io/specification/versioning) for the protocol version to understand the supported features for the version being set.

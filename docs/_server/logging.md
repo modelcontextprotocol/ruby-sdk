@@ -15,7 +15,7 @@ The `notifications/message` notification is used for structured logging between 
 > while remaining fully supported under `2025-11-25`. Use stderr or OpenTelemetry for new servers.
 
 {: .note }
-> On the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle), where `logging/setLevel` does not exist, the level
+> On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle), where `logging/setLevel` does not exist, the level
 > comes per request from the `io.modelcontextprotocol/logLevel` `_meta` member: it authorizes
 > `notifications/message` for that request only, delivered on the request's own response stream.
 > A request without the member (or with an unrecognized level) receives no log messages.

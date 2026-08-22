@@ -26,8 +26,8 @@ No extra configuration is needed.
 - **`notify_tools_list_changed`**, **`notify_prompts_list_changed`**, and **`notify_resources_list_changed`** are always broadcast to all connected clients,
 as they represent server-wide state changes. These should be called on the `server` instance directly.
 
-On the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) (MCP 2026-07-28), clients receive these broadcasts through the `subscriptions/listen` stream;
-see [Notification Subscriptions](/server/notification-subscriptions/).
+On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28), clients receive these broadcasts through the `subscriptions/listen` stream;
+see [Subscriptions](/server/subscriptions/).
 
 ## Notification Format
 

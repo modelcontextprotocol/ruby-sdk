@@ -32,7 +32,7 @@ only when the server does not serve the modern lifecycle, or when `mode: :legacy
 ## Lifecycle Negotiation
 
 `MCP::Client#connect` selects the protocol lifecycle automatically by default: on the bundled
-`MCP::Client::HTTP` and `MCP::Client::Stdio` transports it probes [`server/discover`](/server/discovery/) first and adopts
+`MCP::Client::HTTP` and `MCP::Client::Stdio` transports it probes [`server/discover`](/server/discover/) first and adopts
 the stateless modern lifecycle (MCP 2026-07-28, SEP-2575) when the server serves it, falling back to
 the classic `initialize` handshake otherwise. Custom transports whose `connect` does not declare
 a `mode:` keyword always receive the classic call shape, unchanged.
@@ -69,7 +69,7 @@ Pass `mode: :legacy` for an immediate return to the previous behavior, or switch
 `MCP::Client#discover` sends `server/discover` directly: sessionless capability discovery
 that works before (or instead of) `connect`. It returns an `MCP::Client::DiscoverResult` struct
 exposing `supported_versions`, `capabilities`, `server_info`, `instructions`, and
-the `ttl_ms` / `cache_scope` cache hints; see the server [Discovery](/server/discovery/) page
+the `ttl_ms` / `cache_scope` cache hints; see the server [Discovery](/server/discover/) page
 for the wire shapes.
 
 ```ruby

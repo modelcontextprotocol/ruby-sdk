@@ -13,9 +13,9 @@ Elicitation is a **server-to-client request**. The server sends a request and bl
 
 {: .note }
 > Unlike [roots](/server/roots/) and [sampling](/server/sampling/), elicitation carries no SEP-2577 deprecation
-> and remains fully available. On the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) (MCP 2026-07-28), which forbids server-initiated requests,
+> and remains fully available. On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28), which forbids server-initiated requests,
 > an `elicitation/create` request is embedded in an `input_required` result instead;
-> see [Multi-Round-Trip Results](/server/multi-round-trip-results/).
+> see [Multi Round-Trip Requests](/server/mrtr/).
 
 {: .important }
 > Per SEP-2260, server-to-client requests (`roots/list`, `sampling/createMessage`, `elicitation/create`) must be associated with

@@ -1,12 +1,14 @@
 ---
 layout: default
-title: Multi-Round-Trip Results
+title: Multi Round-Trip Requests
 nav_order: 10
+redirect_from:
+  - /server/multi-round-trip-results/
 ---
 
-# Multi-Round-Trip Results
+# Multi Round-Trip Requests
 
-The [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) (MCP 2026-07-28) forbids server-initiated requests. Instead, per SEP-2322, a `tools/call`, `prompts/get`, or `resources/read` handler that
+The [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28) forbids server-initiated requests. Instead, per SEP-2322, a `tools/call`, `prompts/get`, or `resources/read` handler that
 opts in to [`server_context:`](/server/server-context/) may return `MCP::Server::InputRequiredResult.new(input_requests:, request_state:)` to ask the client for
 additional input (`elicitation/create`, `sampling/createMessage`, or `roots/list` shapes):
 
@@ -82,4 +84,4 @@ the modern client driver follows. The shim is on by default (matching the TypeSc
 ## Client Side
 
 `call_tool`, `get_prompt`, and `read_resource` drive `input_required` results automatically once the matching handlers are registered;
-see the client [Multi-Round-Trip Results](/client/multi-round-trip-results/) page.
+see the client [Multi Round-Trip Requests](/client/mrtr/) page.
