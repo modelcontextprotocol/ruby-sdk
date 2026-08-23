@@ -22,7 +22,7 @@ The SDK supports the following MCP protocol versions:
 Per the SEP-2575 era model, an era is a property of the protocol version itself:
 
 - **The modern version** (`2026-07-28`) has no handshake at all: clients discover the server through
-  [`server/discover`](/server/discovery/), and every request carries its version in the `_meta` envelope,
+  [`server/discover`](/server/discover/), and every request carries its version in the `_meta` envelope,
   validated per request.
 - **Handshake versions** (`2025-11-25` and earlier) establish a session through the `initialize` handshake.
   The server offers `2025-11-25` by default, and the version can be pinned with `MCP::Configuration.new(protocol_version:)`;

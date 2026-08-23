@@ -31,11 +31,11 @@ It implements the Model Context Protocol specification, handling model context r
 
 - `initialize` - Initializes the protocol and returns server capabilities
 - `server/discover` - Sessionless capability discovery (MCP 2026-07-28, SEP-2575): returns the server's capabilities
-  before `initialize` and without an `Mcp-Session-Id`, and anchors the stateless modern lifecycle; see [Discovery](/server/discovery/)
+  before `initialize` and without an `Mcp-Session-Id`, and anchors the stateless modern lifecycle; see [Discovery](/server/discover/)
 - `subscriptions/listen` - Long-lived notification subscription stream (MCP 2026-07-28, SEP-2575), replacing the legacy HTTP GET
-  listening stream; see [Notification Subscriptions](/server/notification-subscriptions/)
+  listening stream; see [Subscriptions](/server/subscriptions/)
 - Multi round-trip `input_required` results (MCP 2026-07-28, SEP-2322): handlers return `MCP::Server::InputRequiredResult` to ask
-  the client for additional input instead of performing a server-initiated request; see [Multi-Round-Trip Results](/server/multi-round-trip-results/)
+  the client for additional input instead of performing a server-initiated request; see [Multi Round-Trip Requests](/server/mrtr/)
 - `ping` - Simple health check
 - `logging/setLevel` - Configures the minimum log level for the server
 - `tools/list` - Lists all registered tools and their schemas

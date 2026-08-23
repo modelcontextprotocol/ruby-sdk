@@ -51,7 +51,7 @@ The `server_context.report_progress` method accepts:
 string tokens are supported.
 
 {: .note }
-> On the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle), progress notifications emitted during a request ride
+> On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle), progress notifications emitted during a request ride
 > the request's own SSE response stream. The bundled transport buffers them and flushes after
 > the handler returns, so they preserve order but arrive together with the final response rather
 > than in real time.
