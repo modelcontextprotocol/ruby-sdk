@@ -129,6 +129,12 @@ module MCP
         #   on a `subscriptions/listen` stream; the periodic write frees the stream's slot when the peer
         #   has gone away. Defaults to `DEFAULT_LISTEN_KEEPALIVE_INTERVAL` (15); pass `nil` to disable
         #   when an upstream proxy already keeps the stream alive.
+        # @param serve_subscriptions_listen [Boolean] whether `subscriptions/listen` opens a stream.
+        #   A host that buffers responses and cannot serve an open SSE stream (e.g. the Rails controller pattern,
+        #   which builds a fresh transport per request and renders the body) passes `false`:
+        #   the method then answers 404 with JSON-RPC `-32601` like any unimplemented method,
+        #   and `Server#discover` stops advertising the `listChanged`/`subscribe` capability flags,
+        #   keeping the advertisement and the actual behavior in agreement. Defaults to `true`.
         # @param server_to_client_request_timeout [Numeric] seconds a server-to-client request waits for its
         #   response before the transport stops waiting and raises `MCP::Server::RequestTimeoutError`.
         #   Defaults to `DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT` (600); individual calls override it with `timeout:`.
@@ -145,6 +151,7 @@ module MCP
           max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
           max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
+          serve_subscriptions_listen: true,
           server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT
         )
           super(server)
@@ -211,6 +218,7 @@ module MCP
           end
 
           @listen_keepalive_interval = listen_keepalive_interval
+          @serve_subscriptions_listen = serve_subscriptions_listen
 
           unless server_to_client_request_timeout.is_a?(Numeric) && server_to_client_request_timeout.positive?
             raise ArgumentError, "server_to_client_request_timeout must be a positive number"
@@ -260,10 +268,12 @@ module MCP
           handle_request(Rack::Request.new(env))
         end
 
-        # The `subscriptions/listen` notification stream (SEP-2575) is served on the modern path,
-        # so `Server#discover` may advertise `listChanged`/`subscribe` capability flags.
+        # Whether this transport serves the `subscriptions/listen` notification stream (SEP-2575).
+        # Gates both the route (a refusing transport answers the method as unimplemented) and
+        # the `listChanged`/`subscribe` capability flags `Server#discover` advertises,
+        # so the two always agree. Set via the `serve_subscriptions_listen:` constructor keyword.
         def serves_subscriptions_listen?
-          true
+          @serve_subscriptions_listen
         end
 
         def handle_request(request)
@@ -723,8 +733,13 @@ module MCP
           return mismatch_error if mismatch_error
 
           # `subscriptions/listen` is a long-lived notification stream served at the transport layer;
-          # it never dispatches through `Server#handle`.
-          return handle_subscriptions_listen(body) if body[:method] == Methods::SUBSCRIPTIONS_LISTEN
+          # it never dispatches through `Server#handle`. A transport constructed with
+          # `serve_subscriptions_listen: false` skips the interception, so the method falls through
+          # to the dispatcher as unimplemented (404 with `-32601`) - the refusal a host that cannot
+          # serve an open SSE stream needs, instead of a `Proc` body it can never call.
+          if body[:method] == Methods::SUBSCRIPTIONS_LISTEN && serves_subscriptions_listen?
+            return handle_subscriptions_listen(body)
+          end
 
           session = modern_session
           notifications = @mutex.synchronize { @modern_request_sinks[session.session_id] = [] }
@@ -881,10 +896,34 @@ module MCP
           )
         end
 
-        # The proc registers the stream and returns, leaving the response open like
+        # The Rack streaming body of a `subscriptions/listen` response. It responds to `call`
+        # and deliberately not to `each`, so Rack keeps classifying it as a streaming body;
+        # `first` exists only to turn the buffered-host mistake (e.g. `render(json: body.first)`
+        # in the Rails controller pattern) from a bare `NoMethodError` into guidance naming the fix.
+        class ListenStreamBody
+          def initialize(&block)
+            @block = block
+          end
+
+          def call(stream)
+            @block.call(stream)
+          end
+
+          def first
+            raise <<~MESSAGE
+              subscriptions/listen returned a streaming SSE body, which cannot be buffered into a JSON response. \
+              A host that cannot hold an SSE response open should construct the transport with `serve_subscriptions_listen: false`, \
+              so the method is answered as unimplemented instead.
+              See the Rails (controller) section at https://ruby.sdk.modelcontextprotocol.io/server/transports/ for the hosting patterns.
+            MESSAGE
+          end
+        end
+        private_constant :ListenStreamBody
+
+        # The body registers the stream and returns, leaving the response open like
         # the legacy GET stream (`create_sse_body`).
         def listen_sse_body(request_id, honored)
-          proc do |stream|
+          ListenStreamBody.new do |stream|
             rejected = false
             @mutex.synchronize do
               if @listen_subscriptions.key?(request_id) ||

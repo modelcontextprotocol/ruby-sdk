@@ -6156,6 +6156,56 @@ module MCP
           transport.close
         end
 
+        test "a buffered read of the listen stream body raises guidance instead of NoMethodError" do
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+
+          error = assert_raises(RuntimeError) { response[2].first }
+          assert_includes error.message, "serve_subscriptions_listen: false"
+
+          # The cited page is a published-URL contract, like the kwarg name above.
+          assert_includes error.message, "https://ruby.sdk.modelcontextprotocol.io/server/transports/"
+
+          # Responding to `each` would make Rack classify the body as enumerable and break streaming.
+          refute_respond_to response[2], :each
+        end
+
+        test "subscriptions/listen is refused as unimplemented when the transport does not serve it" do
+          transport = StreamableHTTPTransport.new(@server, serve_subscriptions_listen: false)
+
+          status, headers, body = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+
+          assert_equal 404, status
+          assert_equal "application/json", headers["content-type"]
+
+          # The documented Rails controller pattern renders `body.first`, so the refusal must be an Array body,
+          # never the streaming Proc.
+          assert_kind_of Array, body
+          assert_equal(-32601, JSON.parse(body.first).dig("error", "code"))
+        ensure
+          transport.close
+        end
+
+        test "discover stops advertising subscription capabilities when listen is not served" do
+          server = Server.new(
+            name: "listen_test",
+            capabilities: { tools: { listChanged: true }, resources: { listChanged: true, subscribe: true } },
+          )
+          transport = StreamableHTTPTransport.new(server, serve_subscriptions_listen: false)
+
+          response = transport.handle_request(modern_rack_request(modern_body("server/discover", {})))
+          capabilities = JSON.parse(response[2].first).dig("result", "capabilities")
+
+          assert_nil capabilities.dig("tools", "listChanged")
+          assert_nil capabilities.dig("resources", "listChanged")
+          assert_nil capabilities.dig("resources", "subscribe")
+        ensure
+          transport.close
+        end
+
         test "subscriptions/listen past the concurrent stream cap is rejected with 503" do
           transport = StreamableHTTPTransport.new(@server, max_listen_subscriptions: 1)
           open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
