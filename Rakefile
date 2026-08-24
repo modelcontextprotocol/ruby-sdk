@@ -51,6 +51,42 @@ task :conformance_server do
   Conformance::Server.new(**options).start
 end
 
+namespace :docs do
+  desc "Serve the documentation site locally at http://localhost:4000 (PORT)"
+  task :preview do
+    docs_dir = File.expand_path("docs", __dir__)
+    generate_docs_versions_data(docs_dir)
+
+    env = {
+      "BUNDLE_GEMFILE" => File.join(docs_dir, "Gemfile"),
+      "RUBYOPT" => "-r#{File.join(docs_dir, "_preview", "taint_shim.rb")}",
+    }
+    port = ENV.fetch("PORT", "4000")
+
+    Bundler.with_unbundled_env do
+      system(env, "bundle", "install", "--quiet", chdir: docs_dir, exception: true)
+      system(env, "bundle", "exec", "jekyll", "serve", "--port", port, chdir: docs_dir, exception: true)
+    rescue Interrupt
+      # Ctrl-C is the way to stop the preview, not an error.
+    end
+  end
+end
+
+# Mirrors bin/generate-gh-pages.sh: the released site receives `_data/versions.yml` from
+# the version tags at deploy time, and the preview generates the same data so the nav footer
+# shows the released-gem version line.
+def generate_docs_versions_data(docs_dir)
+  versions = %x(git tag --list).split("\n").filter_map { |tag|
+    tag[/\A[^0-9]*(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\z/, 1]
+  }.sort_by { |version|
+    Gem::Version.new(version)
+  }.reverse
+  return if versions.empty?
+
+  mkdir_p(File.join(docs_dir, "_data"))
+  File.write(File.join(docs_dir, "_data", "versions.yml"), versions.map { |version| "- #{version}\n" }.join)
+end
+
 def npx_available?(task_name)
   return true if system("which", "npx", out: File::NULL, err: File::NULL)
 
