@@ -6108,6 +6108,24 @@ module MCP
           transport.close
         end
 
+        test "notifications are delivered only after the listen acknowledgement" do
+          # Inject an entry in the registered-but-not-yet-acknowledged state: the window between
+          # the registry insert and the acknowledgement write, which happens outside the lock.
+          io = StringIO.new
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
+            stream: io, filter: { toolsListChanged: true }, active: false
+          }
+
+          @server.notify_tools_list_changed
+
+          assert_empty sse_events(io)
+
+          @transport.send(:activate_listen_subscription, "listen-1")
+          @server.notify_tools_list_changed
+
+          assert_equal ["notifications/tools/list_changed"], sse_events(io).map { |event| event["method"] }
+        end
+
         test "subscriptions/listen streams for different subscriptions receive their own subscriptionId" do
           first = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
           second = open_listen_stream(id: "listen-2", notifications: { toolsListChanged: true })
