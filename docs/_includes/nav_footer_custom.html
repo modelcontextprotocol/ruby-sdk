@@ -1,0 +1,14 @@
+{%- comment -%}
+  Replaces the theme's "This site uses Just the Docs" attribution, shown at
+  the bottom of the sidebar on desktop and in the page footer on mobile.
+  _data/versions.yml exists only on the deployed gh-pages tree, where
+  bin/generate-gh-pages.sh generates it; without it (local previews of
+  the docs/ source) only the license sentence renders.
+{%- endcomment -%}
+{% if site.data.versions %}
+Documentation for <a href="https://rubygems.org/gems/mcp/versions/{{ site.data.versions | first }}">mcp {{ site.data.versions | first }}</a>,
+licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>.
+{% else %}
+Documentation licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>.
+{% endif %}
+See <a href="https://github.com/modelcontextprotocol/ruby-sdk/blob/main/LICENSE">LICENSE</a> for the code.
