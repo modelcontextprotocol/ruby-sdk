@@ -169,7 +169,7 @@ module MCP
           @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
 
-          # Maps a `subscriptions/listen` request id to `{ stream: stream_object, filter: honored_subscription_filter }` (SEP-2575).
+          # Maps a `subscriptions/listen` request id to `{ stream: stream_object, filter: honored_subscription_filter, active: boolean }` (SEP-2575).
           # In-process only; a multi-worker deployment needs an external event bus to fan notifications out across processes,
           # which is a follow-up.
           @listen_subscriptions = {}
@@ -922,6 +922,12 @@ module MCP
 
         # The body registers the stream and returns, leaving the response open like
         # the legacy GET stream (`create_sse_body`).
+        #
+        # Registration and activation are split on purpose: the entry is inserted inactive
+        # (reserving the id and the cap slot atomically), the acknowledgement is written outside the lock,
+        # and only then does the entry become eligible for delivery. A concurrent notification between
+        # the insert and the acknowledgement write skips the inactive entry,
+        # enforcing the SEP-2575 rule that no notification precedes the acknowledgement.
         def listen_sse_body(request_id, honored)
           ListenStreamBody.new do |stream|
             rejected = false
@@ -930,7 +936,7 @@ module MCP
                   (@max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions)
                 rejected = true
               else
-                @listen_subscriptions[request_id] = { stream: stream, filter: honored }
+                @listen_subscriptions[request_id] = { stream: stream, filter: honored, active: false }
               end
             end
 
@@ -948,12 +954,22 @@ module MCP
 
               begin
                 send_to_stream(stream, acknowledgement)
+                activate_listen_subscription(request_id)
                 start_listen_keepalive_thread(request_id)
               rescue *STREAM_WRITE_ERRORS
                 remove_listen_subscription(request_id)
                 close_stream_safely(stream)
               end
             end
+          end
+        end
+
+        # Marks a listen subscription eligible for delivery once its acknowledgement write has completed.
+        # The entry may already be gone when the transport closed concurrently.
+        def activate_listen_subscription(request_id)
+          @mutex.synchronize do
+            subscription = @listen_subscriptions[request_id]
+            subscription[:active] = true if subscription
           end
         end
 
@@ -1038,6 +1054,10 @@ module MCP
           # a slow or stalled subscriber must not block the transport, matching the legacy delivery paths.
           matched = @mutex.synchronize do
             @listen_subscriptions.filter_map do |request_id, subscription|
+              # An inactive entry has not finished writing its acknowledgement yet;
+              # delivering to it would put a notification ahead of the acknowledgement.
+              next unless subscription[:active]
+
               hit = if field
                 subscription[:filter][field]
               else
