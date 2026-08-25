@@ -153,14 +153,28 @@ class McpController < ActionController::API
       prompts: [MyPrompt],
       server_context: { user_id: current_user.id },
     )
-    # Since the `MCP-Session-Id` is not shared across requests, `stateless: true` is set.
-    transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stateless: true)
+    # Since the `MCP-Session-Id` is not shared across requests, `stateless: true` is set,
+    # and since `render` buffers the whole body, `subscriptions/listen` streams are declined.
+    transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+      server,
+      stateless: true,
+      serve_subscriptions_listen: false,
+    )
     status, headers, body = transport.handle_request(request)
 
     render(json: body.first, status: status, headers: headers)
   end
 end
 ```
+
+{: .important }
+> The controller pattern builds a fresh transport per request and `render` buffers the whole body,
+> so it cannot serve the open SSE stream that [`subscriptions/listen`](/server/subscriptions/) needs:
+> without `serve_subscriptions_listen: false`, that request returns a streaming `Proc` body
+> that `body.first` cannot render, and a modern client's notification stream fails with a 500.
+> With the flag, the method answers 404 with JSON-RPC `-32601`, and `server/discover` stops
+> advertising the `listChanged`/`subscribe` capability flags, so well-behaved clients do not ask.
+> To actually serve listen streams, use the [mount approach](#rails-mount).
 
 ### Stateless Mode
 
