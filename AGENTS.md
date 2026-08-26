@@ -17,6 +17,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 - `rake rubocop` - Run linter
 - `rake` - Run tests and linting (default task)
 - `bundle exec rake conformance` - Run the MCP conformance suite (see conformance/README.md)
+- `bundle exec rake docs:preview` - Serve the documentation site locally at http://localhost:4000 (PORT to override)
 - `ruby -I lib -I test test/path/to/specific_test.rb` - Run single test file
 - `gem build mcp.gemspec` - Build the gem
 
