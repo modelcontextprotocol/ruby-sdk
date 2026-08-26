@@ -169,7 +169,8 @@ module MCP
           @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
 
-          # Maps a `subscriptions/listen` request id to `{ stream: stream_object, filter: honored_subscription_filter, active: boolean }` (SEP-2575).
+          # Maps a `subscriptions/listen` request id to
+          # `{ stream: stream_object, filter: honored_subscription_filter, active: boolean, write_mutex: Mutex }` (SEP-2575).
           # In-process only; a multi-worker deployment needs an external event bus to fan notifications out across processes,
           # which is a follow-up.
           @listen_subscriptions = {}
@@ -936,7 +937,7 @@ module MCP
                   (@max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions)
                 rejected = true
               else
-                @listen_subscriptions[request_id] = { stream: stream, filter: honored, active: false }
+                @listen_subscriptions[request_id] = { stream: stream, filter: honored, active: false, write_mutex: Mutex.new }
               end
             end
 
@@ -1066,24 +1067,32 @@ module MCP
                 uris.is_a?(Array) && uris.include?(uri)
               end
 
-              [request_id, subscription[:stream]] if hit
+              [request_id, subscription] if hit
             end
           end
 
-          matched.each do |request_id, stream|
+          matched.each do |request_id, subscription|
             meta = { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id }
             notification_params = (params || {}).merge(_meta: meta)
             notification = { jsonrpc: "2.0", method: method, params: notification_params }
 
             begin
-              send_to_stream(stream, notification)
+              # The per-stream write mutex orders this write against a concurrent graceful teardown:
+              # once teardown has marked the entry closed and written its `SubscriptionsListenResult`,
+              # a delivery that snapshotted the entry before the registry was cleared skips it instead
+              # of writing after the final message.
+              subscription[:write_mutex].synchronize do
+                next if subscription[:closed]
+
+                send_to_stream(subscription[:stream], notification)
+              end
             rescue *STREAM_WRITE_ERRORS => e
               MCP.configuration.exception_reporter.call(
                 e,
                 { subscription_id: request_id, error: "Failed to send notification" },
               )
               remove_listen_subscription(request_id)
-              close_stream_safely(stream)
+              close_stream_safely(subscription[:stream])
             end
           end
         end
@@ -1102,20 +1111,27 @@ module MCP
           end
 
           removed.each do |request_id, subscription|
-            begin
-              send_to_stream(subscription[:stream], {
-                jsonrpc: "2.0",
-                id: request_id,
-                result: {
-                  # `SubscriptionsListenResult` is served at the transport layer and never
-                  # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
-                  # stamped at its construction site.
-                  resultType: ResultType::COMPLETE,
-                  _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
-                },
-              })
-            rescue *STREAM_WRITE_ERRORS
-              nil
+            # Marking the entry closed and writing the result under the stream's write mutex orders
+            # this against in-flight deliveries: each one either lands before the result or observes
+            # `closed` and skips, keeping the graceful result the stream's final message.
+            subscription[:write_mutex].synchronize do
+              subscription[:closed] = true
+
+              begin
+                send_to_stream(subscription[:stream], {
+                  jsonrpc: "2.0",
+                  id: request_id,
+                  result: {
+                    # `SubscriptionsListenResult` is served at the transport layer and never
+                    # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
+                    # stamped at its construction site.
+                    resultType: ResultType::COMPLETE,
+                    _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
+                  },
+                })
+              rescue *STREAM_WRITE_ERRORS
+                nil
+              end
             end
             close_stream_safely(subscription[:stream])
           end

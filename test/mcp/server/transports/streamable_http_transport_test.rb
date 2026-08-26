@@ -6113,7 +6113,7 @@ module MCP
           # the registry insert and the acknowledgement write, which happens outside the lock.
           io = StringIO.new
           @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
-            stream: io, filter: { toolsListChanged: true }, active: false
+            stream: io, filter: { toolsListChanged: true }, active: false, write_mutex: Mutex.new
           }
 
           @server.notify_tools_list_changed
@@ -6124,6 +6124,23 @@ module MCP
           @server.notify_tools_list_changed
 
           assert_equal ["notifications/tools/list_changed"], sse_events(io).map { |event| event["method"] }
+        end
+
+        test "a delivery racing the graceful teardown cannot write after the final result" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          entry = @transport.instance_variable_get(:@listen_subscriptions)["listen-1"]
+
+          @transport.close
+
+          # Simulate an in-flight delivery that snapshotted the entry before teardown cleared
+          # the registry: the closed flag set under the write mutex makes it a no-op.
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = entry
+          @server.notify_tools_list_changed
+
+          events = sse_events(io)
+
+          assert_equal "complete", events.last.dig("result", "resultType")
+          refute(events.any? { |event| event["method"] == "notifications/tools/list_changed" })
         end
 
         test "subscriptions/listen streams for different subscriptions receive their own subscriptionId" do
@@ -6264,7 +6281,7 @@ module MCP
             ping = data
           end
           stream.define_singleton_method(:flush) {}
-          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = { stream: stream, filter: {} }
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = { stream: stream, filter: {}, write_mutex: Mutex.new }
 
           @transport.send(:send_listen_keepalive_ping, "listen-1")
 
