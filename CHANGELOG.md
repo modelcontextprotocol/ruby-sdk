@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-28
+
+This release repairs the `subscriptions/listen` stream. A host that buffers its responses,
+the documented Rails controller pattern among them, can decline the method with
+`serve_subscriptions_listen: false` instead of answering a modern client with a streaming body
+it cannot render, and the stream's ordering guarantees are enforced: no notification reaches
+a client before the acknowledgement, and none follows the graceful closing result.
+
+### Added
+
+- Add `serve_subscriptions_listen:` for hosts that cannot hold an SSE stream open (#533)
+
+### Fixed
+
+- Deliver `subscriptions/listen` notifications only after the acknowledgement (#532)
+- Serialize `subscriptions/listen` writes so the graceful result is the final message (#535)
+
 ## [1.3.0] - 2026-08-22
 
 User-facing documentation now lives on the documentation site at https://ruby.sdk.modelcontextprotocol.io,
