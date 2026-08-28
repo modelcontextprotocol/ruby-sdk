@@ -1,10 +1,12 @@
 ---
 layout: default
-title: Multi-Round-Trip Results
+title: Multi Round-Trip Requests
 nav_order: 4
+redirect_from:
+  - /client/multi-round-trip-results/
 ---
 
-# Multi-Round-Trip Results
+# Multi Round-Trip Requests
 
 MCP 2026-07-28 replaces in-flight server-to-client requests with Multi Round-Trip Requests (SEP-2322): instead of issuing `sampling/createMessage`, `roots/list`,
 or `elicitation/create` while a request is being processed, a server may answer with a result whose `resultType` is `"input_required"`, carrying an `inputRequests` map
@@ -57,4 +59,4 @@ Servers on legacy protocol versions never send `resultType`, so existing behavio
 ## Server Side
 
 Authoring `input_required` results with `InputRequiredResult`, securing `requestState`, `resultType` stamping, and the legacy fulfillment
-shim that serves pre-2026 clients are documented on the server [Multi-Round-Trip Results](/server/multi-round-trip-results/) page.
+shim that serves pre-2026 clients are documented on the server [Multi Round-Trip Requests](/server/mrtr/) page.

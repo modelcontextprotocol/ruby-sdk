@@ -1,10 +1,12 @@
 ---
 layout: default
-title: Notification Subscriptions
+title: Subscriptions
 nav_order: 12
+redirect_from:
+  - /server/notification-subscriptions/
 ---
 
-# Notification Subscriptions
+# Subscriptions
 
 `subscriptions/listen` is the long-lived notification subscription stream of MCP 2026-07-28 (SEP-2575),
 replacing the legacy HTTP GET listening stream.
@@ -50,6 +52,9 @@ The first SSE event on the stream is the acknowledgement:
 ## Transport Support
 
 The stream is served on the Streamable HTTP modern path; stdio answers `-32601`.
+A host that cannot hold an SSE response open (such as the [Rails controller pattern](/server/transports/#rails-controller),
+which buffers the body) declines the method with `serve_subscriptions_listen: false`, answering `-32601` and dropping
+the `listChanged`/`subscribe` flags from discovery.
 
 ## Limits and Keepalives
 

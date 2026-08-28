@@ -20,7 +20,7 @@ is never cancellable per the spec.
 {: .note }
 > Cancellation by notification belongs to the handshake lifecycle, where the session correlates
 > `notifications/cancelled` with the in-flight request it targets. Requests of the
-> [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) are sessionless single POST exchanges, so a separately
+> [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) are sessionless single POST exchanges, so a separately
 > POSTed cancel notification cannot reach them; a modern client abandons a request by closing
 > the connection instead.
 

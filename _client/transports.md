@@ -166,7 +166,7 @@ a JSON-RPC `-32601` (method not found) error. To handle methods other than `elic
 
 On a [modern](/client/lifecycle/) connection servers cannot send requests at all; the same
 registered handlers instead drive the requests embedded in `input_required` results,
-as documented on [Multi-Round-Trip Results](/client/multi-round-trip-results/).
+as documented on [Multi Round-Trip Requests](/client/mrtr/).
 
 ### Server-to-Client Requests (Sampling)
 

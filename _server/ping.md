@@ -13,11 +13,11 @@ A `ping` request has no parameters, and the receiver MUST respond promptly with 
 
 {: .note }
 > `ping` belongs to the handshake lifecycle: MCP 2026-07-28 removes the method altogether (SEP-2575),
-> since requests of the [modern lifecycle](/server/discovery/#the-stateless-modern-lifecycle) are single POST exchanges whose connection
+> since requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) are single POST exchanges whose connection
 > itself signals liveness, leaving nothing to probe between requests. The server answers `ping` on
 > the handshake lifecycle only - a modern request naming it is rejected with `-32601` Method not found -
 > and calling `ping` on a `server_context` while serving a modern request raises an error. The long-lived
-> [`subscriptions/listen`](/server/notification-subscriptions/) stream is kept alive by SSE keepalive
+> [`subscriptions/listen`](/server/subscriptions/) stream is kept alive by SSE keepalive
 > frames instead.
 
 Servers respond to incoming `ping` requests automatically - no setup is required.

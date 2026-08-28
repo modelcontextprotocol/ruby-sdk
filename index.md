@@ -13,7 +13,7 @@ The official Ruby SDK for the [Model Context Protocol](https://modelcontextproto
 - Build [MCP servers](/server/) that expose tools, prompts, and resources to any MCP host
 - Build [MCP clients](/client/) that connect to any MCP server, with automatic lifecycle negotiation and OAuth 2.1 authorization
 - Speak every standard transport: stdio and Streamable HTTP (including SSE), with a Rails integration
-- Cover the full protocol surface: server-to-client requests, multi round-trip results, notifications, progress, logging, cancellation, completions, and pagination
+- Cover the full protocol surface: server-to-client requests, multi round-trip requests, notifications, progress, logging, cancellation, completions, and pagination
 
 ## Quick Start
 
@@ -110,8 +110,8 @@ For comprehensive documentation, see:
 - [Installation](/installation/) - installing the gem and optional feature dependencies
 - [Examples](/examples/) - runnable example scripts and a complete Rails application
 - [Protocol Versions](/protocol-versions/) - supported versions, the era model, and client negotiation
-- [Building Servers](server/) - transports, discovery, tools, prompts, resources, server-to-client requests, multi round-trip results, notifications, protocol utilities, and configuration
-- [Building Clients](client/) - transports, lifecycle negotiation, multi round-trip results, and OAuth 2.1 authorization
+- [Building Servers](server/) - transports, discovery, tools, prompts, resources, server-to-client requests, multi round-trip requests, notifications, protocol utilities, and configuration
+- [Building Clients](client/) - transports, lifecycle negotiation, multi round-trip requests, and OAuth 2.1 authorization
 - [Extensions](/extensions/) - capability extensions and MCP Apps
 
 ## API Documentation

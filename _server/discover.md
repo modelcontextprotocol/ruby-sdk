@@ -2,6 +2,8 @@
 layout: default
 title: Discovery
 nav_order: 3
+redirect_from:
+  - /server/discovery/
 ---
 
 # Discovery
