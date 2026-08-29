@@ -4,7 +4,7 @@ require "net/http"
 require "json"
 require "uri"
 
-# Simple HTTP client example for interacting with the MCP HTTP server
+# Simple HTTP client example for interacting with the MCP HTTP server.
 class MCPHTTPClient
   def initialize(base_url = "http://localhost:9292")
     @base_url = base_url
@@ -30,19 +30,51 @@ class MCPHTTPClient
 
     response = http.request(request)
 
-    # Store session ID if provided
+    # Store session ID if provided.
     if response["Mcp-Session-Id"]
       @session_id = response["Mcp-Session-Id"]
       puts "Session ID: #{@session_id}"
     end
 
-    JSON.parse(response.body)
+    parse_response_body(response)
+  end
+
+  # In the transport's default SSE mode, POST responses on an established session arrive as
+  # a Server-Sent Events stream whose `data:` line carries the JSON-RPC response; unwrap it
+  # before parsing.
+  def parse_response_body(response)
+    body = response.body
+
+    if response["Content-Type"]&.start_with?("text/event-stream")
+      data_lines = body.lines.select { |line| line.start_with?("data:") }
+      body = data_lines.map { |line| line.sub(/\Adata:\s*/, "") }.join
+    end
+
+    JSON.parse(body)
+  end
+
+  def send_notification(method, params = nil)
+    uri = URI(@base_url)
+    http = Net::HTTP.new(uri.host, uri.port)
+
+    request = Net::HTTP::Post.new(uri.path.empty? ? "/" : uri.path)
+    request["Content-Type"] = "application/json"
+    request["Mcp-Session-Id"] = @session_id if @session_id
+
+    # Notifications carry no `id` and receive no JSON-RPC response body.
+    request.body = {
+      jsonrpc: "2.0",
+      method: method,
+      params: params,
+    }.compact.to_json
+
+    http.request(request)
   end
 
   def initialize_session
     puts "=== Initializing session ==="
     result = send_request("initialize", {
-      protocolVersion: "2024-11-05",
+      protocolVersion: "2025-11-25",
       capabilities: {},
       clientInfo: {
         name: "example_client",
@@ -52,6 +84,14 @@ class MCPHTTPClient
     puts "Response: #{JSON.pretty_generate(result)}"
 
     result
+  end
+
+  def notify_initialized
+    puts "=== Sending notifications/initialized ==="
+    response = send_notification("notifications/initialized")
+    puts "Response status: #{response.code} #{response.message}"
+
+    response
   end
 
   def ping
@@ -147,37 +187,40 @@ def main
   client = MCPHTTPClient.new
 
   begin
-    # Initialize session
+    # Initialize session.
     client.initialize_session
 
-    # Test ping
+    # Complete the handshake.
+    client.notify_initialized
+
+    # Test ping.
     client.ping
 
-    # List available tools
+    # List available tools.
     client.list_tools
 
-    # Call the example_tool (note: snake_case name)
+    # Call the example_tool (note: snake_case name).
     client.call_tool("example_tool", { a: 5, b: 3 })
 
-    # Call the echo tool
+    # Call the echo tool.
     client.call_tool("echo", { message: "Hello from client!" })
 
-    # List prompts
+    # List prompts.
     client.list_prompts
 
-    # Get a prompt (note: snake_case name)
+    # Get a prompt (note: snake_case name).
     client.get_prompt("example_prompt", { message: "This is a test message" })
 
-    # List resources
+    # List resources.
     client.list_resources
 
-    # Read a resource
-    client.read_resource("test_resource")
+    # Read a resource (the URI registered by http_server.rb).
+    client.read_resource("https://test_resource.invalid")
   rescue => e
     puts "Error: #{e.message}"
     puts e.backtrace
   ensure
-    # Clean up session
+    # Clean up session.
     client.close_session
   end
 end
