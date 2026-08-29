@@ -1433,6 +1433,94 @@ module MCP
           assert_requested(:post, "#{@auth_base}/token", times: 1)
         end
 
+        def test_send_request_reauthorizes_when_the_authorization_server_did_not_issue_the_stored_tokens
+          # The refusal in `refresh!` is only half the answer; this is the other half.
+          # A renamed authorization server makes the refresh fail, the transport falls through to a full authorization,
+          # and that is where the embedding application is asked about the new one.
+          stub_request(:post, @mcp_url).with { |req|
+            req.headers["Authorization"] != "Bearer fresh-at"
+          }.to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+          stub_request(:post, @mcp_url).with(
+            headers: { "Authorization" => "Bearer fresh-at" }
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+          )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: @mcp_url, authorization_servers: [@auth_base]),
+          )
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "reauthorized-client"),
+          )
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "fresh-at", token_type: "Bearer"),
+          )
+
+          seen = []
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            authorization_request_validator: ->(request) {
+              seen << request.authorization_server
+              true
+            },
+          )
+
+          # Registered and refreshable, so the refresh path is genuinely reachable and the issuer binding is
+          # what stops it rather than a missing client identity.
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens(
+            "access_token" => "stale-at",
+            "refresh_token" => "saved-rt",
+            "issuer" => "https://issued-by.example.com",
+          )
+
+          HTTP.new(url: @mcp_url, oauth: provider).send_request(
+            request: { jsonrpc: "2.0", id: "1", method: "tools/call", params: {} },
+          )
+
+          # The refresh token was never presented to the authorization server now being named.
+          assert_not_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["grant_type"] == "refresh_token"
+          end
+          assert_equal([@auth_base], seen)
+          assert_equal(@auth_base, provider.tokens["issuer"])
+        end
+
         private
 
         # Stubs PRM, AS metadata, /register, and /token so a full authorization

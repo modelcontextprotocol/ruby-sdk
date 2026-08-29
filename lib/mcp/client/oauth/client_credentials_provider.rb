@@ -60,7 +60,8 @@ module MCP
           private_key: nil,
           signing_algorithm: nil,
           scope: nil,
-          storage: nil
+          storage: nil,
+          authorization_request_validator: nil
         )
           if blank?(client_id)
             raise InvalidCredentialsError, "client_id is required for the client_credentials grant."
@@ -103,6 +104,7 @@ module MCP
           @signing_algorithm = signing_algorithm
           @scope = scope
           @storage = storage || InMemoryStorage.new
+          @authorization_request_validator = authorization_request_validator
           @storage.save_client_information(client_information)
         end
 

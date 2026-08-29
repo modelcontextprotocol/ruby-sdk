@@ -93,10 +93,14 @@ Required keyword arguments to `Provider.new`:
 Optional keyword arguments:
 
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
+- `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
+  Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
 - `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
   which keeps credentials in process memory only. Persisted `client_information` is stamped with an `"issuer"` member binding it to the authorization server that
   issued it (SEP-2352): when the server's authorization server changes, the SDK discards the stale registration and its tokens and re-registers automatically
-  (portable CIMD `client_id`s are kept). Treat the hash as opaque and persist it as-is.
+  (portable CIMD `client_id`s are kept). Saved `tokens` carry an `"issuer"` member of their own, recording the authorization server that minted them, which is what
+  lets a later refresh refuse a server the MCP server has since renamed. Treat both hashes as opaque and persist them as-is; a storage that writes out selected members
+  instead drops these bindings with no error.
 - `client_id_metadata_document_url`: URL where you publish a Client ID Metadata Document
   (`draft-ietf-oauth-client-id-metadata-document` and the MCP authorization specification).
   When the authorization server advertises `client_id_metadata_document_supported: true`,
@@ -182,7 +186,7 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
-- `scope`, `storage`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
 
 ### Cross-App Access (JWT Bearer) Grant
 
@@ -219,7 +223,7 @@ Keyword arguments:
 - `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
   `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
   Passing both through to `IDJAGTokenExchange.request` covers the common case.
-- `scope`, `storage`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
 
 ### Communication Security
 
@@ -258,3 +262,70 @@ The SDK also bounds what those endpoints may return. A discovery, dynamic client
 measured as the body arrives rather than after it has been buffered, so a compressed body that expands past the limit is refused partway through the expansion.
 Unlike the transport's `max_message_bytes:`, this limit is not configurable: these documents run to kilobytes in normal operation, and a connection supplied through
 `http_client_factory:` is bounded as well, so there is no way to opt out of it.
+
+### Reviewing the authorization request
+
+The checks above constrain where the SDK will send a request. What they cannot decide is whether the authorization server an MCP server names is one you want
+your users signing in to. That choice belongs to the MCP server: it publishes `authorization_servers` in its Protected Resource Metadata and states the scopes
+it wants in `scopes_supported` or in the `WWW-Authenticate` challenge. An authorization server is legitimately a different origin from the resource it protects,
+so no origin rule can settle the question, and validating that a token was issued for the intended audience is a responsibility the specification places on
+MCP servers rather than on clients.
+
+`authorization_request_validator` is where an application that *does* know which providers its users deal with can say so:
+
+```ruby
+ALLOWED_ISSUERS = ["https://login.example.com", "https://accounts.google.com"]
+
+provider = MCP::Client::OAuth::Provider.new(
+  # client_metadata:, redirect_uri:, redirect_handler:, and callback_handler: as in the first example.
+  authorization_request_validator: ->(request) {
+    ALLOWED_ISSUERS.include?(request.authorization_server)
+  },
+)
+```
+
+The argument is an `MCP::Client::OAuth::AuthorizationRequest` carrying `authorization_server` (the selected issuer), `scopes` (an Array, empty when neither
+the challenge nor the metadata named any), `server_url`, and `resource`. It is one object rather than keyword arguments so that later revisions of the specification
+can add to it without changing the shape you wrote. Only the named readers are the contract. The positional access a `Struct` also happens to provide
+(`request[0]`, `to_a`, `each`) is not, and can break when the representation changes.
+
+`server_url` is the URL the transport was configured with, verbatim; `resource` is the value actually sent as the RFC 8707 `resource`, which is that URL canonicalized
+(fragment and userinfo dropped, scheme and host lowercased, a default port removed) or, when the Protected Resource Metadata advertises one,
+the canonicalized value from there. That advertised value may name a parent path, so a server at `https://api.example.com/mcp` can legitimately produce
+a `resource` of `https://api.example.com`. Match on `server_url` when you mean the server you configured.
+
+Compare the issuer as a whole string, the way the SDK compares it everywhere else, rather than picking its host out: multi-tenant providers tell tenants apart by path,
+and a legacy authorization server whose metadata never named an issuer arrives as `nil`, which an exact comparison refuses instead of raising.
+
+The provider is only half of the decision. The MCP server chose the scopes too, so a request naming a provider you allow can still ask for more than that server has
+any business asking for. `scopes` rides on the request so that a host with a policy per server can apply it:
+
+```ruby
+ALLOWED_SCOPES = { "https://api.example.com/mcp" => ["mcp:read", "mcp:write"] }
+
+provider = MCP::Client::OAuth::Provider.new(
+  # client_metadata:, redirect_uri:, redirect_handler:, and callback_handler: as in the first example.
+  authorization_request_validator: ->(request) {
+    ALLOWED_ISSUERS.include?(request.authorization_server) && request.scopes.all? { |scope| ALLOWED_SCOPES.fetch(request.server_url, []).include?(scope) }
+  },
+)
+```
+
+A host with a user to ask can put the decision to them instead. The request carries what such a prompt has to name: the provider, the scopes, and the server that asked for them.
+
+It runs on all three grants, after that server's metadata has been fetched (which is where the validated issuer comes from) and before any registration, credential,
+or user reaches it: on the authorization-code grant before dynamic client registration and before any browser is opened,
+and on the JWT bearer grant before `assertion_provider` is invoked, since obtaining an ID-JAG tells your identity provider which authorization server
+the assertion is for. Refusing therefore leaves nothing registered at, and no assertion minted for, the authorization server you rejected.
+Returning a falsy value raises `Flow::AuthorizationRefusedError`. It subclasses `Flow::AuthorizationError`, so a rescue written for that still catches it,
+while rescuing the narrower class tells a refusal by your own policy apart from a network or metadata failure.
+
+The hook decides whether to proceed, not what to ask for: the scopes are passed to the authorization server unchanged either way, because the specification
+requires a client to treat the scopes in the challenge as authoritative for the operation. Leaving it unset authorizes whatever the server asked for,
+which is what every MCP SDK does today.
+
+It is asked when a new grant is requested, not on every token refresh, which happens unattended and against an authorization server you already answered for.
+An authorization server that changes between authorization and refresh is caught instead: the SDK records which one issued the tokens, and `refresh!` refuses to
+present a refresh token to a different one, even when the client identity is portable across authorization servers as a Client ID Metadata Document URL is.
+The transport answers that refusal by running a full authorization, which brings the new authorization server back here for you to accept or refuse.
+Tokens stored before this behavior shipped carry no issuer and keep refreshing; the binding applies from their next authorization.
