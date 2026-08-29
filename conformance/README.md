@@ -12,7 +12,7 @@ Validates the Ruby SDK's conformance to the MCP specification using [`@modelcont
 ### Run all scenarios
 
 ```bash
-bundle exec rake conformance
+bundle exec rake conformance:test
 ```
 
 Runs both server and client conformance tests in sequence. Server conformance starts the
@@ -31,20 +31,20 @@ are allowed to fail without affecting the exit code.
 
 ```bash
 # Run a single server scenario
-bundle exec rake conformance SCENARIO=ping
+bundle exec rake conformance:test SCENARIO=ping
 
 # Use a different port with verbose output
-bundle exec rake conformance PORT=3000 VERBOSE=1
+bundle exec rake conformance:test PORT=3000 VERBOSE=1
 
 # Start the server on a specific port
-bundle exec rake conformance_server PORT=3000
+bundle exec rake conformance:server PORT=3000
 ```
 
 ### Start the server and test separately
 
 ```bash
 # Terminal 1: start the server
-bundle exec rake conformance_server
+bundle exec rake conformance:server
 
 # Terminal 2: run all scenarios
 npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp
@@ -59,7 +59,7 @@ on a single scenario. Stop the server with Ctrl+C when done.
 ### List available scenarios
 
 ```bash
-bundle exec rake conformance_list
+bundle exec rake conformance:list
 ```
 
 Prints all scenario names that can be passed to `SCENARIO`.
@@ -76,7 +76,7 @@ repository with the conformance server running:
 
 ```bash
 # Terminal 1 (this repository): start the conformance server
-bundle exec rake conformance_server
+bundle exec rake conformance:server
 
 # Terminal 2 (conformance repository): run the tier audit skill as a slash command in Claude Code
 /mcp-sdk-tier-audit /path/to/modelcontextprotocol/ruby-sdk http://localhost:9292/mcp
@@ -102,4 +102,4 @@ conformance/
 
 Known-failing scenarios are registered in `conformance/expected_failures.yml`. They are allowed to
 fail without affecting the exit code and are tracked to catch regressions.
-These are shown in the output of `bundle exec rake conformance`.
+These are shown in the output of `bundle exec rake conformance:test`.
