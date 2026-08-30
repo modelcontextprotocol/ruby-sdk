@@ -14,42 +14,50 @@ require "rubocop/rake_task"
 
 RuboCop::RakeTask.new
 
-task default: [:rubocop, :test, :conformance]
+task default: [:rubocop, :test, "conformance:test"]
 
-desc "Run MCP conformance tests (PORT, SCENARIO, SPEC_VERSION, VERBOSE)"
-task :conformance do |t|
-  next unless npx_available?(t.name)
+namespace :conformance do
+  desc "Run MCP conformance tests (PORT, SCENARIO, SPEC_VERSION, VERBOSE)"
+  task :test do |t|
+    next unless npx_available?(t.name)
 
-  require_relative "conformance/server_runner"
-  require_relative "conformance/client_runner"
+    require_relative "conformance/server_runner"
+    require_relative "conformance/client_runner"
 
-  options = {}
-  options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
-  options[:scenario] = ENV["SCENARIO"] if ENV["SCENARIO"]
-  options[:spec_version] = ENV["SPEC_VERSION"] if ENV["SPEC_VERSION"]
-  options[:verbose] = true if ENV["VERBOSE"]
+    options = {}
+    options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
+    options[:scenario] = ENV["SCENARIO"] if ENV["SCENARIO"]
+    options[:spec_version] = ENV["SPEC_VERSION"] if ENV["SPEC_VERSION"]
+    options[:verbose] = true if ENV["VERBOSE"]
 
-  Conformance::ServerRunner.new(**options).run
-  Conformance::ClientRunner.new(**options.reject { |key, _value| key == :port }).run
+    Conformance::ServerRunner.new(**options).run
+    Conformance::ClientRunner.new(**options.reject { |key, _value| key == :port }).run
+  end
+
+  desc "List available conformance scenarios"
+  task :list do |t|
+    next unless npx_available?(t.name)
+
+    system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--server")
+    system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--client")
+  end
+
+  desc "Start the conformance server (PORT)"
+  task :server do
+    require_relative "conformance/server"
+
+    options = {}
+    options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
+
+    Conformance::Server.new(**options).start
+  end
 end
 
-desc "List available conformance scenarios"
-task :conformance_list do |t|
-  next unless npx_available?(t.name)
-
-  system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--server")
-  system("npx", "--yes", "@modelcontextprotocol/conformance", "list", "--client")
-end
-
-desc "Start the conformance server (PORT)"
-task :conformance_server do
-  require_relative "conformance/server"
-
-  options = {}
-  options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
-
-  Conformance::Server.new(**options).start
-end
+# The other two former names now fail with a "Did you mean?" suggestion, but a bare `conformance`
+# would match the `conformance/` directory: Rake synthesizes a file task for it and exits 0 without
+# running anything. This keeps the name pointing at the suite instead of at that silent no-op.
+desc "Alias for conformance:test"
+task conformance: "conformance:test"
 
 namespace :docs do
   desc "Serve the documentation site locally at http://localhost:4000 (PORT)"
