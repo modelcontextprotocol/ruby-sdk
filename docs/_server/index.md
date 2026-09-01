@@ -22,8 +22,8 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports resource registration and retrieval
 - Supports stdio and Streamable HTTP (including SSE) transports
 - Supports notifications for list changes (tools, prompts, resources)
-- Supports roots (server-to-client filesystem boundary queries)
-- Supports sampling (server-to-client LLM completion requests)
+- Supports roots (server-to-client filesystem boundary queries; deprecated as of 2026-07-28)
+- Supports sampling (server-to-client LLM completion requests; deprecated as of 2026-07-28)
 - Supports cursor-based pagination for list operations
 - Supports cancellation of in-flight requests on both server and client (notifications/cancelled)
 
@@ -37,7 +37,7 @@ It implements the Model Context Protocol specification, handling model context r
 - Multi round-trip `input_required` results (MCP 2026-07-28, SEP-2322): handlers return `MCP::Server::InputRequiredResult` to ask
   the client for additional input instead of performing a server-initiated request; see [Multi Round-Trip Requests](/server/mrtr/)
 - `ping` - Simple health check
-- `logging/setLevel` - Configures the minimum log level for the server
+- `logging/setLevel` - Configures the minimum log level for the server (deprecated as of 2026-07-28)
 - `tools/list` - Lists all registered tools and their schemas
 - `tools/call` - Invokes a specific tool with provided arguments
 - `prompts/list` - Lists all registered prompts and their schemas
@@ -48,6 +48,6 @@ It implements the Model Context Protocol specification, handling model context r
 - `resources/subscribe` - Subscribes to updates for a specific resource
 - `resources/unsubscribe` - Unsubscribes from updates for a specific resource
 - `completion/complete` - Returns autocompletion suggestions for prompt arguments and resource URIs
-- `roots/list` - Requests filesystem roots from the client (server-to-client)
-- `sampling/createMessage` - Requests LLM completion from the client (server-to-client)
+- `roots/list` - Requests filesystem roots from the client (server-to-client; deprecated as of 2026-07-28)
+- `sampling/createMessage` - Requests LLM completion from the client (server-to-client; deprecated as of 2026-07-28)
 - `elicitation/create` - Requests user input from the client (server-to-client)
