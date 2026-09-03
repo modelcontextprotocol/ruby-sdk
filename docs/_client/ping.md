@@ -29,6 +29,16 @@ is not a Hash (matching the spec requirement that `result` be an object).
 Transport-level errors (for example, `MCP::Client::Stdio`'s `read_timeout:` firing)
 propagate as exceptions raised by the transport layer.
 
+## Answering Server Pings
+
+On handshake-lifecycle connections a server may ping the client the same way, and the client answers automatically with
+the empty result - no handler is needed. Registering `transport.on_server_request("ping")` on `MCP::Client::HTTP` replaces
+the automatic answer.
+Over stdio, a ping that arrives while a response is awaited is answered inline; between requests it is answered when
+the next request starts reading. The answer is best effort: a pong that cannot be written (for example, over a broken pipe) is
+dropped rather than failing the request whose response is being read. Independently of pings, consider setting `read_timeout:`
+on `MCP::Client::Stdio`, since a server that never answers otherwise holds the read until the process exits.
+
 ## Server Side
 
 How servers answer `ping` requests and ping the client themselves is documented on

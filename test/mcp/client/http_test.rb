@@ -1303,6 +1303,131 @@ module MCP
         assert_equal(100, received_params["maxTokens"])
       end
 
+      def test_send_request_answers_a_server_ping_with_an_empty_result
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "some_tool", arguments: {} },
+        }
+
+        server_ping = { jsonrpc: "2.0", id: 7, method: "ping" }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = <<~BODY
+          event: message
+          data: #{server_ping.to_json}
+
+          event: message
+          data: #{tool_result.to_json}
+
+        BODY
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        pong = { jsonrpc: "2.0", id: 7, result: {} }
+        pong_stub = stub_request(:post, url).with(
+          body: pong.to_json,
+        ).to_return(status: 202, body: "")
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(pong_stub)
+      end
+
+      def test_a_registered_ping_handler_overrides_the_default_pong
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "some_tool", arguments: {} },
+        }
+
+        server_ping = { jsonrpc: "2.0", id: 8, method: "ping" }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = <<~BODY
+          event: message
+          data: #{server_ping.to_json}
+
+          event: message
+          data: #{tool_result.to_json}
+
+        BODY
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_response = { jsonrpc: "2.0", id: 8, result: { custom: "pong" } }
+        response_stub = stub_request(:post, url).with(
+          body: expected_response.to_json,
+        ).to_return(status: 202, body: "")
+
+        client.on_server_request("ping") { { custom: "pong" } }
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(response_stub)
+      end
+
+      def test_a_ping_with_a_malformed_id_is_answered_with_method_not_found
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/call",
+          params: { name: "some_tool", arguments: {} },
+        }
+
+        # A Hash id is not a JSON-RPC id; the reference SDKs reject such frames at schema
+        # validation, so the default pong does not fire and the frame falls through.
+        server_ping = { jsonrpc: "2.0", id: { x: 1 }, method: "ping" }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = <<~BODY
+          event: message
+          data: #{server_ping.to_json}
+
+          event: message
+          data: #{tool_result.to_json}
+
+        BODY
+
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        expected_error = {
+          jsonrpc: "2.0",
+          id: { x: 1 },
+          error: {
+            code: JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND,
+            message: "Method not found: ping",
+          },
+        }
+        error_stub = stub_request(:post, url).with(
+          body: expected_error.to_json,
+        ).to_return(status: 202, body: "")
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        assert_requested(error_stub)
+      end
+
       def test_send_request_answers_unregistered_server_request_with_method_not_found
         request = {
           jsonrpc: "2.0",

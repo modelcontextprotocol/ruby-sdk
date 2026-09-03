@@ -233,6 +233,12 @@ http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp") do |f
 end
 ```
 
+{: .note }
+> Answers to server-to-client requests (a pong, an elicitation result) are POSTed from inside
+> the SSE streaming callback of another response, re-entering the connection on the same thread.
+> The default Net::HTTP adapter opens a connection per request, which makes this safe; an adapter
+> with persistent connections must tolerate that re-entry.
+
 ## Custom Transports
 
 If the transport layer you need is not included in the gem, you can build and pass your own instances so long as they conform to the following interface:

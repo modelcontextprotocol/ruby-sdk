@@ -436,6 +436,18 @@ module MCP
 
           parsed = JSON.parse(line.strip)
 
+          # A frame carrying `method` is a request or notification, never the awaited response,
+          # whatever its id says: JSON-RPC id spaces are per sender, so a server-chosen ping id
+          # may legitimately collide with the awaited one. Pings are answered;
+          # other server-to-client requests over stdio stay unsupported as documented,
+          # and notifications carry no id.
+          if parsed.is_a?(Hash) && parsed.key?("method")
+            # A JSON-RPC id is a String or a Number; the reference SDKs reject other shapes at
+            # schema validation, so a ping carrying one is skipped rather than echoed back.
+            answer_ping(parsed) if parsed["method"] == MCP::Methods::PING && json_rpc_id?(parsed["id"])
+            next
+          end
+
           # A JSON-RPC message is an object; skip a non-object frame (array or scalar)
           # the same way as a frame without an id.
           next unless parsed.is_a?(Hash) && parsed.key?("id")
@@ -449,6 +461,22 @@ module MCP
           error_type: :internal_error,
           original_error: e,
         )
+      end
+
+      # The ping receiver "MUST respond promptly with an empty response". Answered inline from
+      # the read loop, so a keepalive cannot stall unanswered while a response is awaited;
+      # between requests nothing reads stdout, and a queued ping is answered on the next read.
+      def answer_ping(parsed)
+        @write_mutex.synchronize do
+          write_message({ jsonrpc: JsonRpcHandler::Version::V2_0, id: parsed["id"], result: {} })
+        end
+      rescue RequestHandlerError
+        # Best effort: a pong cannot be delivered over a broken stdin, and the failure must not
+        # surface as an error of the unrelated request whose response the loop is reading.
+      end
+
+      def json_rpc_id?(id)
+        id.is_a?(String) || id.is_a?(Numeric)
       end
 
       def ensure_running!
