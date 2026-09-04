@@ -6307,10 +6307,13 @@ module MCP
         end
 
         test "listen keepalive is not started when the interval is nil" do
-          before = Thread.list.size
+          # The set of threads, not their count: `Thread.list` is process-wide, so a thread another test left running
+          # that finishes between the two samples moves the count in the direction this assertion does not care about.
+          # Only a thread that appears is evidence of a keepalive timer.
+          before = Thread.list
           open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
 
-          assert_equal before, Thread.list.size, "a nil interval must not spawn a keepalive thread"
+          assert_empty(Thread.list - before, "a nil interval must not spawn a keepalive thread")
         end
 
         test "listen_keepalive_interval rejects a non-positive value" do
