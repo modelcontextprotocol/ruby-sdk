@@ -23,6 +23,11 @@ module MCP
         # should leave the refresh token intact.
         class InvalidGrantError < AuthorizationError; end
 
+        # Raised when `authorization_request_validator` returns a falsy value. Separate from its parent
+        # so that a caller can tell a refusal by its own policy from a network, discovery,
+        # or authorization server metadata failure by rescuing a class rather than by matching the message text.
+        class AuthorizationRefusedError < AuthorizationError; end
+
         def initialize(provider:, http_client_factory: nil)
           @provider = provider
           @http_client_factory = http_client_factory || -> { default_http_client }
@@ -63,17 +68,22 @@ module MCP
 
           case provider_authorization_flow
           when :client_credentials
-            return run_client_credentials!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
+            return run_client_credentials!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope, server_url: server_url)
           when :jwt_bearer
-            return run_jwt_bearer!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope)
+            return run_jwt_bearer!(as_metadata: as_metadata, prm: prm, resource: resource, scope: scope, server_url: server_url)
           end
 
           ensure_pkce_supported!(as_metadata)
 
-          client_info = ensure_client_registered(as_metadata: as_metadata)
-
           effective_scope = resolve_scope(scope: scope, prm: prm || {})
           effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
+
+          # Asked before registering, not after: a refusal must not leave this client registered at an authorization server
+          # the embedding application has just rejected.
+          authorize_request!(as_metadata: as_metadata, scope: effective_scope, server_url: server_url, resource: resource)
+
+          client_info = ensure_client_registered(as_metadata: as_metadata)
+
           pkce = PKCE.generate
           state = SecureRandom.urlsafe_base64(32)
 
@@ -109,7 +119,7 @@ module MCP
             resource: resource,
           )
 
-          @provider.save_tokens(tokens)
+          save_tokens_issued_by(tokens, as_metadata: as_metadata)
           :authorized
         end
 
@@ -119,17 +129,19 @@ module MCP
         # and no `offline_access` augmentation because the grant does not issue a refresh token (OAuth 2.1 Section 4.3.3).
         # The pre-registered `client_id` / `client_secret` come from the provider's stored `client_information`.
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
-        def run_client_credentials!(as_metadata:, prm:, resource:, scope:)
+        def run_client_credentials!(as_metadata:, prm:, resource:, scope:, server_url:)
           client_info = client_credentials_client_info
           ensure_client_credentials_issuer!(client_info, as_metadata: as_metadata)
 
           form = { "grant_type" => "client_credentials" }
           effective_scope = resolve_scope(scope: scope, prm: prm)
+          authorize_request!(as_metadata: as_metadata, scope: effective_scope, server_url: server_url, resource: resource)
           form["scope"] = effective_scope if effective_scope
           form["resource"] = resource if resource
 
           tokens = post_to_token_endpoint(as_metadata: as_metadata, client_info: client_info, form: form)
-          @provider.save_tokens(tokens)
+          save_tokens_issued_by(tokens, as_metadata: as_metadata)
+
           :authorized
         end
 
@@ -173,11 +185,17 @@ module MCP
         # and security checks as `run!`; like `client_credentials`, there is no PKCE, redirect, or authorization request.
         # The assertion's audience is the issuer identifier that `ensure_issuer_matches!` validated.
         # https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990
-        def run_jwt_bearer!(as_metadata:, prm:, resource:, scope:)
+        def run_jwt_bearer!(as_metadata:, prm:, resource:, scope:, server_url:)
           client_info = @provider.client_information
           unless client_info.is_a?(Hash) && client_info_required_value(client_info, "client_id")
             raise AuthorizationError, "Cannot run the jwt-bearer grant: the provider has no stored `client_id`."
           end
+
+          # Asked before the assertion is minted, for the same reason registration waits on the authorization-code grant:
+          # obtaining an ID-JAG sends the identity provider an audience of this authorization server, which must not happen once
+          # the host has refused it.
+          effective_scope = resolve_scope(scope: scope, prm: prm)
+          authorize_request!(as_metadata: as_metadata, scope: effective_scope, server_url: server_url, resource: resource)
 
           assertion = @provider.jwt_bearer_assertion(audience: as_metadata["issuer"], resource: resource)
           if assertion.nil? || assertion.to_s.empty?
@@ -188,12 +206,11 @@ module MCP
             "grant_type" => "urn:ietf:params:oauth:grant-type:jwt-bearer",
             "assertion" => assertion,
           }
-          effective_scope = resolve_scope(scope: scope, prm: prm)
           form["scope"] = effective_scope if effective_scope
           form["resource"] = resource if resource
 
           tokens = post_to_token_endpoint(as_metadata: as_metadata, client_info: client_info, form: form)
-          @provider.save_tokens(tokens)
+          save_tokens_issued_by(tokens, as_metadata: as_metadata)
           :authorized
         end
 
@@ -242,6 +259,8 @@ module MCP
             server_url: server_url,
           )
 
+          ensure_token_issuer!(as_metadata: as_metadata)
+
           client_info = if have_stored_client_info
             # Pre-registered / DCR-issued `client_information` always wins: if the user picked an explicit identity,
             # do not silently swap it for the CIMD URL even when the AS also advertises CIMD support.
@@ -262,7 +281,7 @@ module MCP
             resource: resource,
           )
 
-          @provider.save_tokens(preserve_refresh_token(new_tokens, refresh_token))
+          save_tokens_issued_by(preserve_refresh_token(new_tokens, refresh_token), as_metadata: as_metadata)
           :refreshed
         end
 
@@ -499,6 +518,43 @@ module MCP
         # the authorization server on two loopback ports), and deployments that never leave a corporate network.
         # Only a server reachable on the public internet is barred from steering the client inward.
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
+        # Hands the embedding application the authorization server and the scopes that are about to be requested,
+        # and abandons the flow when it refuses them.
+        #
+        # Both values are chosen by the MCP server: it names its own authorization server in Protected
+        # Resource Metadata and states the scopes in `scopes_supported` or the `WWW-Authenticate` challenge.
+        # Neither the specification nor any MCP SDK binds that choice to the server's own identity,
+        # and validating that a token was issued for the intended audience is a responsibility the specification
+        # places on MCP servers rather than on clients.
+        # A host that knows which providers its user deals with can apply that knowledge here.
+        #
+        # The scopes are passed on unchanged whatever the host decides, because the specification requires
+        # a client to treat the challenged scopes as authoritative for the operation; the choice offered is
+        # to proceed or to stop, not to quietly ask for less. A provider without the hook proceeds as before.
+        #
+        # Only asked when a new grant is being requested. A refresh is not a new grant, and the host already answered
+        # this question for that authorization server, so `refresh!` enforces `ensure_token_issuer!` instead:
+        # an authorization server that has changed since the tokens were issued sends the flow back through here,
+        # where the host sees the new one and decides again.
+        def authorize_request!(as_metadata:, scope:, server_url:, resource:)
+          return unless @provider.respond_to?(:authorization_request_validator)
+          return unless (validator = @provider.authorization_request_validator)
+
+          request = AuthorizationRequest.new(
+            authorization_server: as_metadata["issuer"],
+            scopes: scope.to_s.split,
+            server_url: server_url,
+            resource: resource,
+          ).freeze
+
+          return if validator.call(request)
+
+          raise AuthorizationRefusedError, <<~MESSAGE
+            The authorization request was refused by `authorization_request_validator` \
+            (authorization server #{request.authorization_server.inspect}, scopes #{request.scopes.inspect}).
+          MESSAGE
+        end
+
         def ensure_routable_destination!(url, label:, server_url:)
           return unless private_network_url?(url)
           return if private_network_url?(server_url)
@@ -669,6 +725,39 @@ module MCP
         # the error and falls back to the full flow, which discards the stale registration and re-registers.
         # Credentials without an `"issuer"` binding predate this check and are allowed through;
         # CIMD `client_id`s are portable.
+        # Records which authorization server minted these tokens, alongside the tokens themselves.
+        # SEP-2352 already binds *client credentials* to their issuer; this binds the *tokens*, which that
+        # SEP leaves unbound.
+        # Stored in the token hash so it travels through any `storage` a caller supplied, without widening
+        # the storage interface that custom implementations have to satisfy.
+        def save_tokens_issued_by(tokens, as_metadata:)
+          issuer = as_metadata["issuer"]
+          tokens = tokens.merge("issuer" => issuer) if tokens.is_a?(Hash) && issuer
+
+          @provider.save_tokens(tokens)
+        end
+
+        # Refuses to present a refresh token to an authorization server other than the one that issued it.
+        # `refresh!` rediscovers the authorization server from Protected Resource Metadata every time,
+        # so the server named for a session can differ from the one the stored tokens came from.
+        # Unlike `ensure_refreshable_client_information!` this holds whatever the client identity is,
+        # including a Client ID Metadata Document URL, which is portable across authorization servers precisely
+        # so that re-registration is unnecessary.
+        #
+        # Tokens stored before this shipped carry no issuer and are left alone, matching how SEP-2352 treats
+        # client information without one; the binding takes effect from their next authorization.
+        # The caller answers a refusal by running the full authorization flow, which is where the embedding application
+        # is asked about the new authorization server.
+        def ensure_token_issuer!(as_metadata:)
+          stored_issuer = read_token("issuer")
+          return if stored_issuer.nil? || stored_issuer == as_metadata["issuer"]
+
+          raise AuthorizationError, <<~MESSAGE
+            Cannot refresh: the stored tokens were issued by a different authorization server (stored issuer #{stored_issuer.inspect}, \
+            current #{as_metadata["issuer"].inspect}); re-authorization is required.
+          MESSAGE
+        end
+
         def ensure_refreshable_client_information!(client_info, as_metadata:)
           stored_issuer = client_info_required_value(client_info, "issuer")
           return if stored_issuer.nil?

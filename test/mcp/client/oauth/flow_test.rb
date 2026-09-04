@@ -363,6 +363,107 @@ module MCP
           Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
         end
 
+        # Runs the authorization-code flow with an `authorization_request_validator` that records what it
+        # was handed and answers `approve`.
+        private def run_flow_with_validator(approve:, recorder: [])
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              recorder << :redirected
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            authorization_request_validator: ->(request) {
+              recorder << request
+              approve
+            },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+        end
+
+        def test_run_hands_the_authorization_server_and_scopes_to_the_validator
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: [@auth_base],
+              scopes_supported: ["Mail.Read", "Files.ReadWrite.All"],
+            ),
+          )
+
+          recorder = []
+          run_flow_with_validator(approve: true, recorder: recorder)
+
+          request = recorder.first
+
+          assert_equal(@auth_base, request.authorization_server)
+          assert_equal(["Mail.Read", "Files.ReadWrite.All"], request.scopes)
+          assert_equal(@server_url, request.server_url)
+          assert_equal("https://srv.example.com/mcp", request.resource)
+        end
+
+        def test_run_refuses_the_flow_and_registers_nothing_when_the_validator_declines
+          recorder = []
+
+          error = assert_raises(Flow::AuthorizationRefusedError) do
+            run_flow_with_validator(approve: false, recorder: recorder)
+          end
+
+          assert_match(/refused by `authorization_request_validator`/, error.message)
+
+          # Refused before registration, so nothing of this client is left at the authorization server
+          # the host just rejected, and no browser was opened.
+          assert_not_requested(:post, "#{@auth_base}/register")
+          refute_includes(recorder, :redirected)
+        end
+
+        def test_run_client_credentials_consults_the_validator
+          provider = ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            client_secret: "cc-secret",
+            authorization_request_validator: ->(_request) { false },
+          )
+
+          error = assert_raises(Flow::AuthorizationRefusedError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/refused by `authorization_request_validator`/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_jwt_bearer_consults_the_validator
+          minted = false
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(audience:, resource:) {
+              minted = true
+              "id-jag-assertion"
+            },
+            authorization_request_validator: ->(_request) { false },
+          )
+
+          error = assert_raises(Flow::AuthorizationRefusedError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/refused by `authorization_request_validator`/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+
+          # Refused before the identity provider was asked for an assertion carrying this authorization server as its audience.
+          refute(minted, "the ID-JAG assertion must not be minted for a refused authorization server")
+        end
+
         def test_run_registers_native_application_type_for_loopback_redirect_uri
           run_authorization_flow
 
@@ -2264,6 +2365,64 @@ module MCP
           assert_equal("saved-rt", provider.tokens["refresh_token"])
         end
 
+        def test_run_records_the_issuer_that_minted_the_tokens
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(@auth_base, provider.tokens["issuer"])
+        end
+
+        def test_refresh_refuses_an_authorization_server_that_did_not_issue_the_tokens
+          # The stored tokens came from a different authorization server, so this refresh token must not reach the one named now.
+          stub_request(:post, "#{@auth_base}/token").to_raise(StandardError.new("must not reach the token endpoint."))
+
+          provider = refresh_only_provider
+          provider.save_tokens(
+            "access_token" => "stale-at",
+            "refresh_token" => "saved-rt",
+            "issuer" => "https://issued-by.example.com",
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issued by a different authorization server/, error.message)
+
+          # Left in place: it is still good at the server that issued it, and the caller answers this by running the full authorization flow.
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_proceeds_for_tokens_stored_before_the_issuer_was_recorded
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "fresh-at", token_type: "Bearer"),
+          )
+
+          provider = refresh_only_provider
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:refreshed, result)
+
+          # Recorded on the way out, so the binding takes effect from here on.
+          assert_equal(@auth_base, provider.tokens["issuer"])
+        end
+
         def test_refresh_succeeds_when_stored_issuer_matches
           stub_request(:post, "#{@auth_base}/token").with(
             body: hash_including("grant_type" => "refresh_token", "refresh_token" => "saved-rt"),
@@ -2912,6 +3071,20 @@ module MCP
           assert_requested(:post, "#{@auth_base}/token") do |req|
             URI.decode_www_form(req.body).to_h["resource"] == "https://srv.example.com/mcp"
           end
+        end
+
+        private
+
+        def refresh_only_provider
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) {},
+            callback_handler: -> { [nil, nil] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+
+          provider
         end
       end
     end

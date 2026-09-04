@@ -35,7 +35,7 @@ module MCP
 
         attr_reader :scope, :storage
 
-        def initialize(client_id:, client_secret:, assertion_provider:, scope: nil, storage: nil)
+        def initialize(client_id:, client_secret:, assertion_provider:, scope: nil, storage: nil, authorization_request_validator: nil)
           if blank?(client_id)
             raise InvalidConfigurationError, "client_id is required for the jwt-bearer grant."
           end
@@ -51,6 +51,7 @@ module MCP
           @assertion_provider = assertion_provider
           @scope = scope
           @storage = storage || InMemoryStorage.new
+          @authorization_request_validator = authorization_request_validator
           @storage.save_client_information(
             "client_id" => client_id,
             "client_secret" => client_secret,

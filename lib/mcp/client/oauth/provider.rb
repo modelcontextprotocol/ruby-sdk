@@ -86,7 +86,8 @@ module MCP
           callback_handler:,
           scope: nil,
           storage: nil,
-          client_id_metadata_document_url: nil
+          client_id_metadata_document_url: nil,
+          authorization_request_validator: nil
         )
           unless Discovery.secure_url?(redirect_uri)
             raise InsecureRedirectURIError,
@@ -115,6 +116,7 @@ module MCP
           @scope = scope
           @storage = storage || InMemoryStorage.new
           @client_id_metadata_document_url = client_id_metadata_document_url
+          @authorization_request_validator = authorization_request_validator
         end
 
         # Identifies the OAuth flow this provider drives.

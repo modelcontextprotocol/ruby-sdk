@@ -14,6 +14,13 @@ module MCP
       # `save_tokens(tokens)`, `client_information`, and `save_client_information(info)`
       # (see `InMemoryStorage`).
       module StorageBackedProvider
+        # Optional `->(request) { true | false }` hook, called with an `AuthorizationRequest`.
+        # An MCP server names its own authorization server and the scopes to ask for, so this is where
+        # an embedding application sees both before the request is made and can decline to proceed.
+        # `nil` (the default) authorizes whatever the server asked for, which is the behavior every
+        # MCP SDK has today.
+        attr_reader :authorization_request_validator
+
         def access_token
           tokens&.dig("access_token") || tokens&.dig(:access_token)
         end
