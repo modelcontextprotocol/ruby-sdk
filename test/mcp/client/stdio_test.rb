@@ -85,6 +85,245 @@ module MCP
         stderr_read.close
       end
 
+      def test_send_request_answers_a_server_ping_inline
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test-id",
+          method: "tools/list",
+        }
+
+        pong_line = nil
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification, then the tools/list request.
+          stdin_read.gets
+          stdin_read.gets
+
+          # Ping the client while it awaits the response; the receiver "MUST respond promptly".
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "srv-ping-1", method: "ping" }))
+          stdout_write.flush
+
+          pong_line = stdin_read.gets
+
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "test-id", result: { tools: [] } }))
+          stdout_write.flush
+        end
+
+        transport.connect
+        response = transport.send_request(request: request)
+        server_thread.join
+
+        assert_equal("test-id", response["id"])
+        pong = JSON.parse(pong_line)
+        assert_equal("srv-ping-1", pong["id"])
+        assert_equal({}, pong["result"])
+        refute(pong.key?("error"))
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_a_server_ping_reusing_the_awaited_id_is_answered_and_not_returned_as_the_response
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test-id",
+          method: "tools/list",
+        }
+
+        pong_line = nil
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification, then the tools/list request.
+          stdin_read.gets
+          stdin_read.gets
+
+          # JSON-RPC id spaces are per sender, so a server ping may reuse the id the client
+          # is awaiting; it must still be answered rather than treated as the response.
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "test-id", method: "ping" }))
+          stdout_write.flush
+
+          pong_line = stdin_read.gets
+
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "test-id", result: { tools: [] } }))
+          stdout_write.flush
+        end
+
+        transport.connect
+        response = transport.send_request(request: request)
+        server_thread.join
+
+        assert_equal("test-id", response["id"])
+        assert_empty(response.dig("result", "tools"))
+        pong = JSON.parse(pong_line)
+        assert_equal("test-id", pong["id"])
+        assert_equal({}, pong["result"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_a_pong_that_cannot_be_written_does_not_fail_the_awaited_request
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test-id",
+          method: "tools/list",
+        }
+
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification, then the tools/list request.
+          stdin_read.gets
+          stdin_read.gets
+
+          # Break the write path: the pong cannot be delivered, and that must not fail the request.
+          stdin_read.close
+
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "srv-ping-1", method: "ping" }))
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "test-id", result: { tools: [] } }))
+          stdout_write.flush
+        end
+
+        transport.connect
+        response = transport.send_request(request: request)
+
+        assert_equal("test-id", response["id"])
+        assert_empty(response.dig("result", "tools"))
+      ensure
+        server_thread.join
+        stdin_read.close unless stdin_read.closed?
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
+      def test_a_ping_with_a_malformed_id_is_not_answered
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, _ = IO.pipe
+
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+
+        request = {
+          jsonrpc: "2.0",
+          id: "test-id",
+          method: "tools/list",
+        }
+
+        pong_line = nil
+        server_thread = Thread.new do
+          init_line = stdin_read.gets
+          init_request = JSON.parse(init_line)
+          stdout_write.puts(JSON.generate({
+            jsonrpc: "2.0",
+            id: init_request["id"],
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "test-server", version: "1.0.0" },
+            },
+          }))
+          stdout_write.flush
+
+          # Read initialized notification, then the tools/list request.
+          stdin_read.gets
+          stdin_read.gets
+
+          # A Hash id is not a JSON-RPC id; the reference SDKs reject such frames outright.
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: { "x" => 1 }, method: "ping" }))
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "srv-ping-2", method: "ping" }))
+          stdout_write.flush
+
+          # The single pong that arrives must answer the well-formed ping, not the malformed one.
+          pong_line = stdin_read.gets
+
+          stdout_write.puts(JSON.generate({ jsonrpc: "2.0", id: "test-id", result: { tools: [] } }))
+          stdout_write.flush
+        end
+
+        transport.connect
+        response = transport.send_request(request: request)
+        server_thread.join
+
+        assert_equal("test-id", response["id"])
+        pong = JSON.parse(pong_line)
+        assert_equal("srv-ping-2", pong["id"])
+        assert_equal({}, pong["result"])
+      ensure
+        server_thread.join
+        stdin_read.close
+        stdin_write.close
+        stdout_read.close
+        stdout_write.close
+      end
+
       def test_send_request_skips_notifications
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe

@@ -1118,6 +1118,19 @@ module MCP
               },
             }
           end
+        elsif message["method"] == MCP::Methods::PING && (message["id"].is_a?(String) || message["id"].is_a?(Numeric))
+          # The ping receiver "MUST respond promptly with an empty response" (MCP ping utility),
+          # so an unhandled ping is answered with the empty result rather than Method not found.
+          # A JSON-RPC id is a String or a Number; the reference SDKs reject other shapes at
+          # schema validation, so a ping carrying one falls through to Method not found instead.
+          # The default lives here instead of in `@server_request_handlers`, whose `any?` opens
+          # the GET listening stream on connect: a built-in pong must not change listener behavior.
+          # A handler registered via `on_server_request("ping")` still wins through the branch above.
+          {
+            jsonrpc: JsonRpcHandler::Version::V2_0,
+            id: message["id"],
+            result: {},
+          }
         else
           {
             jsonrpc: JsonRpcHandler::Version::V2_0,
