@@ -38,6 +38,16 @@ $ gem install mcp
 You may need to add additional dependencies depending on which features you wish to access. For example, the HTTP client transport requires the `faraday` gem:
 
 ```ruby
-gem "mcp"
 gem "faraday", ">= 2.0"
 ```
+
+Reading SSE (`text/event-stream`) responses needs `event_stream_parser` as well.
+Whether a response is JSON or SSE is the server's choice, made for each response, and this SDK's own server picks SSE by default,
+so a client written for arbitrary servers needs both gems:
+
+```ruby
+gem "faraday", ">= 2.0"
+gem "event_stream_parser", ">= 1.0"
+```
+
+The [Transports](/client/transports/#http-transport-layer) page describes the one setup where `faraday` alone is enough.
