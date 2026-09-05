@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-05
+
+This release makes the client answer a server's `ping` with the empty result the specification requires.
+Earlier clients replied with Method not found over Streamable HTTP and stayed silent over stdio,
+so a server that checks liveness dropped their long-lived sessions. On the OAuth side,
+the embedding application can refuse an authorization request through `authorization_request_validator`,
+and stored tokens are refreshed only against the authorization server that issued them:
+when the server named for a session differs, the client reauthorizes instead of refreshing,
+and the validator sees the newly named server. Tokens stored by earlier releases carry no issuer and keep refreshing.
+
+### Added
+
+- Add `authorization_request_validator` to let the embedding application refuse an authorization request (#539)
+
+### Fixed
+
+- Answer server-to-client pings in the client (#541)
+
 ## [1.4.0] - 2026-08-28
 
 This release repairs the `subscriptions/listen` stream. A host that buffers its responses,
