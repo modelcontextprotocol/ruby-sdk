@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Server Context
-nav_order: 19
+nav_order: 20
 ---
 
 # Server Context
@@ -28,6 +28,14 @@ This hash is then passed as the `server_context` keyword argument to tool and pr
 Note that the exception reporter does not receive this user-defined hash, and instrumentation
 callbacks omit it unless you opt in with `instrument_server_context`.
 See the [Configuration](/server/configuration/) page for the arguments they receive.
+
+## Authenticated Identity
+
+When the Streamable HTTP transport verifies bearer tokens (see [Authorization](/server/authorization/)), the verified
+`MCP::Server::OAuth::AccessToken` is available to handlers as `server_context.auth_info` (`server_context[:auth_info]` when the context
+is a plain Hash), and `server_context.require_scopes!("some:scope")` rejects the current operation with a JSON-RPC error when the token
+lacks a scope. Without bearer authentication `auth_info` is `nil` and `require_scopes!` fails closed;
+see [Accessing the Token in Handlers](/server/authorization/#accessing-the-token-in-handlers).
 
 ## Request-specific `_meta` Parameter
 

@@ -35,7 +35,17 @@ Or install it yourself as:
 $ gem install mcp
 ```
 
-You may need to add additional dependencies depending on which features you wish to access. For example, the HTTP client transport requires the `faraday` gem:
+You may need to add additional dependencies depending on which features you wish to access.
+
+Verifying JWT access tokens on the server with `MCP::Server::OAuth::JWTVerifier` requires the `jwt` gem (and `jwt-eddsa` as well for EdDSA-signed tokens),
+which the verifier loads only when it is instantiated; `MCP::Server::OAuth::IntrospectionVerifier` needs nothing beyond the standard library.
+See [Authorization](/server/authorization/).
+
+```ruby
+gem "jwt"
+```
+
+The HTTP client transport requires the `faraday` gem:
 
 ```ruby
 gem "faraday", ">= 2.0"

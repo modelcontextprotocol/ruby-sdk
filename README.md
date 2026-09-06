@@ -6,7 +6,7 @@ Detailed guides are available at https://ruby.sdk.modelcontextprotocol.io.
 
 ## Features
 
-- Build [MCP servers](https://ruby.sdk.modelcontextprotocol.io/server/) that expose tools, prompts, and resources to any MCP host
+- Build [MCP servers](https://ruby.sdk.modelcontextprotocol.io/server/) that expose tools, prompts, and resources to any MCP host, with OAuth 2.1 resource-server protection
 - Build [MCP clients](https://ruby.sdk.modelcontextprotocol.io/client/) that connect to any MCP server, with automatic lifecycle negotiation and OAuth 2.1 authorization
 - Speak every standard transport: stdio and Streamable HTTP (including SSE), with a Rails integration
 - Cover the full protocol surface: server-to-client requests, multi round-trip requests, notifications, progress, logging, cancellation, completions, and pagination
