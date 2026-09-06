@@ -824,6 +824,7 @@ module MCP
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
+            validate_resource_read_params!(params)
             contents = read_resource_contents(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
 
             # An SEP-2322 `input_required` result must not be wrapped as `contents` or stamped with SEP-2549 cache hints.
@@ -1284,6 +1285,12 @@ module MCP
         serverInfo: info,
         instructions: response_instructions,
       }.compact
+    end
+
+    def validate_resource_read_params!(params)
+      unless params.is_a?(Hash) && params[:uri].is_a?(String)
+        raise RequestHandlerError.new("Missing or invalid uri", params, error_type: :invalid_params)
+      end
     end
 
     def validate_resource_subscription_params!(params)
