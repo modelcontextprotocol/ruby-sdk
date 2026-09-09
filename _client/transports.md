@@ -64,7 +64,14 @@ The stdio transport automatically handles:
 
 Use the `MCP::Client::HTTP` transport to interact with MCP servers using simple HTTP requests.
 
-You'll need to add `faraday` as a dependency in order to use the HTTP transport layer. Add `event_stream_parser` as well if the server uses SSE (`text/event-stream`) responses:
+You'll need to add `faraday` as a dependency in order to use the HTTP transport layer, and `event_stream_parser`
+to read SSE (`text/event-stream`) responses.
+Whether a response is JSON or SSE is the server's choice, made for each response, and a client must accept both,
+so a client written for arbitrary servers needs both gems. This SDK's own server picks SSE by default and always
+does on the modern lifecycle, and the listening stream that `on_elicitation` and `on_sampling` open is SSE as well.
+`event_stream_parser` is loaded on the first SSE response, so it can be left out only against a server known to
+answer with JSON alone, such as this SDK's server in [JSON response mode](/server/transports/#json-response-mode)
+serving handshake-lifecycle clients, and only while no listening stream is opened:
 
 ```ruby
 gem "mcp"
