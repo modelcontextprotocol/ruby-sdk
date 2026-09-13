@@ -49,6 +49,13 @@ The first SSE event on the stream is the acknowledgement:
 }
 ```
 
+## Delivery Semantics
+
+A stream delivers only the changes that happen after its acknowledgement; it is not a replay log.
+Nothing is queued while no stream is connected, and a dropped stream is gone together with anything it missed.
+Clients fetch the current state after subscribing and treat each notification as a cue to refetch,
+rather than as a payload.
+
 ## Transport Support
 
 The stream is served on the Streamable HTTP modern path; stdio answers `-32601`.
