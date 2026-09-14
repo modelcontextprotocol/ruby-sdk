@@ -14,7 +14,19 @@ module MCP
       # `Provider`; this class consumes a Provider plus signal data extracted from
       # the failing response (resource_metadata URL, scope challenge).
       class Flow
-        class AuthorizationError < StandardError; end
+        TOKEN_ENDPOINT_ERROR_MAX_LENGTH = 128
+        TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH = 512
+
+        class AuthorizationError < StandardError
+          attr_reader :http_status, :error, :error_description
+
+          def initialize(message = nil, http_status: nil, error: nil, error_description: nil)
+            super(message)
+            @http_status = http_status
+            @error = error
+            @error_description = error_description
+          end
+        end
 
         # Raised specifically when the token endpoint rejects a grant with
         # `error: "invalid_grant"` (RFC 6749 §5.2). Callers use this to
@@ -1062,11 +1074,7 @@ module MCP
           end
 
           if response.status < 200 || response.status >= 300
-            if token_endpoint_error_code(response) == "invalid_grant"
-              raise InvalidGrantError, "Token endpoint rejected the grant: invalid_grant."
-            end
-
-            raise AuthorizationError, "Token endpoint returned status #{response.status}."
+            raise token_endpoint_error(response)
           end
 
           parsed = begin
@@ -1087,17 +1095,35 @@ module MCP
           parsed
         end
 
-        # Extracts the `error` code from an RFC 6749 §5.2 error response body
-        # when one is parseable. Returns nil on any parse failure or when
-        # the body is not JSON.
-        def token_endpoint_error_code(response)
-          body = response_body_string(response).to_s
-          return if body.empty?
+        # Surface only RFC 6749 §5.2 diagnostic fields, never the raw response,
+        # which may contain tokens or other credentials. Classify the original
+        # code so sanitization cannot turn malformed input into invalid_grant.
+        def token_endpoint_error(response)
+          message = "Token endpoint returned status #{response.status}."
+          error_class = AuthorizationError
+          parsed = JSON.parse(response_body_string(response))
+          parsed = {} unless parsed.is_a?(Hash)
 
-          parsed = JSON.parse(body)
-          parsed["error"] if parsed.is_a?(Hash)
-        rescue JSON::ParserError
-          nil
+          error_class = parsed["error"] == "invalid_grant" ? InvalidGrantError : AuthorizationError
+          error = token_endpoint_diagnostic(parsed["error"], limit: TOKEN_ENDPOINT_ERROR_MAX_LENGTH)
+          description = token_endpoint_diagnostic(parsed["error_description"], limit: TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH)
+          message += " #{[error, description].compact.join(": ")}" if error || description
+
+          error_class.new(message, http_status: response.status, error: error, error_description: description)
+        rescue StandardError
+          # Diagnostics must not mask the endpoint failure or change refresh recovery.
+          error_class.new("Token endpoint returned status #{response.status}.", http_status: response.status)
+        end
+
+        def token_endpoint_diagnostic(value, limit:)
+          return unless value.is_a?(String)
+
+          # RFC 6749 permits printable ASCII except double quotes and backslashes.
+          # Replace other characters to keep provider text on one log line.
+          value = value.scrub(" ").gsub(/[^\x20-\x21\x23-\x5B\x5D-\x7E]/, " ").strip
+          return if value.empty?
+
+          value.length > limit ? "#{value[0, limit - 3]}..." : value
         end
 
         # Per RFC 6749 Section 2.3.1, the `client_id` and `client_secret` MUST be
