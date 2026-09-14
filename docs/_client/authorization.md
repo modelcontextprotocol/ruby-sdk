@@ -78,7 +78,7 @@ transport = MCP::Client::HTTP.new(
   oauth: provider,
 )
 client = MCP::Client.new(transport: transport)
-client.connect # `initialize` is sent here; if the server replies 401 the OAuth flow runs and the handshake is retried with the acquired token
+client.connect # the lifecycle is established here; if the server replies 401 the OAuth flow runs and the request is retried with the acquired token
 client.tools
 ```
 

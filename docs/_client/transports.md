@@ -35,7 +35,7 @@ stdio_transport = MCP::Client::Stdio.new(
 )
 client = MCP::Client.new(transport: stdio_transport)
 
-# Perform the MCP initialization handshake before sending any requests.
+# Negotiate the protocol lifecycle before sending any requests.
 client.connect
 
 # List available tools.
@@ -57,7 +57,7 @@ stdio_transport.close
 The stdio transport automatically handles:
 
 - Spawning the server process with `Open3.popen3`
-- MCP protocol initialization handshake (`initialize` request + `notifications/initialized`)
+- Lifecycle negotiation (a `server/discover` probe, or `initialize` + `notifications/initialized` on the handshake lifecycle)
 - JSON-RPC 2.0 message framing over newline-delimited JSON
 - Answering server `ping` requests; see [Answering Server Pings](/client/ping/#answering-server-pings)
 
@@ -93,7 +93,7 @@ Example usage:
 http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 client = MCP::Client.new(transport: http_transport)
 
-# Perform the MCP initialization handshake before sending any requests.
+# Negotiate the protocol lifecycle before sending any requests.
 client.connect
 
 # List available tools
