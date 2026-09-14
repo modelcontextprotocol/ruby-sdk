@@ -2731,7 +2731,161 @@ module MCP
           provider.save_client_information("client_id" => "test-client")
           provider.save_tokens("access_token" => "stale-at", "refresh_token" => "revoked-rt")
 
-          assert_raises(Flow::InvalidGrantError) do
+          error = assert_raises(Flow::InvalidGrantError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+          assert_equal(400, error.http_status)
+          assert_equal("invalid_grant", error.error)
+          assert_equal("refresh token expired", error.error_description)
+          assert_equal("Token endpoint returned status 400. invalid_grant: refresh token expired", error.message)
+        end
+
+        def test_token_exchange_preserves_oauth_diagnostics
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 400,
+            body: JSON.generate(
+              error: "invalid_request",
+              error_description: "Client must not use multiple authentication methods",
+              access_token: "do-not-log-access-token",
+              refresh_token: "do-not-log-refresh-token",
+              client_secret: "do-not-log-client-secret",
+              error_uri: "https://auth.example.com/error?secret=do-not-log",
+            ),
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            capture_authorization_scope(grant_types: ["authorization_code"])
+          end
+
+          assert_equal(400, error.http_status)
+          assert_equal("invalid_request", error.error)
+          assert_equal("Client must not use multiple authentication methods", error.error_description)
+          assert_equal(
+            "Token endpoint returned status 400. invalid_request: Client must not use multiple authentication methods",
+            error.message,
+          )
+        end
+
+        def test_refresh_preserves_oauth_diagnostics
+          error = refresh_token_endpoint_error(
+            JSON.generate(error: "invalid_client", error_description: "Client authentication failed"),
+            status: 401,
+          )
+
+          assert_instance_of(Flow::AuthorizationError, error)
+          assert_equal(401, error.http_status)
+          assert_equal("invalid_client", error.error)
+          assert_equal("Client authentication failed", error.error_description)
+          assert_equal("Token endpoint returned status 401. invalid_client: Client authentication failed", error.message)
+        end
+
+        def test_token_endpoint_errors_fall_back_for_malformed_bodies
+          ["", "<html>secret</html>", "{broken", "null", "[]", '"secret"', "42"].each do |body|
+            error = refresh_token_endpoint_error(body)
+
+            assert_instance_of(Flow::AuthorizationError, error)
+            assert_equal(400, error.http_status)
+            assert_nil(error.error)
+            assert_nil(error.error_description)
+            assert_equal("Token endpoint returned status 400.", error.message)
+          end
+        end
+
+        def test_token_endpoint_errors_ignore_non_string_and_empty_fields
+          [nil, 42, true, [], { secret: "hidden" }, "", " \r\n\t"].each do |value|
+            error = refresh_token_endpoint_error(JSON.generate(error: value, error_description: value))
+
+            assert_nil(error.error)
+            assert_nil(error.error_description)
+            assert_equal("Token endpoint returned status 400.", error.message)
+          end
+        end
+
+        def test_token_endpoint_errors_preserve_optional_fields_independently
+          error = refresh_token_endpoint_error(JSON.generate(error: "provider_extension"))
+          assert_equal("provider_extension", error.error)
+          assert_nil(error.error_description)
+          assert_equal("Token endpoint returned status 400. provider_extension", error.message)
+
+          error = refresh_token_endpoint_error(JSON.generate(error_description: "Details without a code"))
+          assert_nil(error.error)
+          assert_equal("Details without a code", error.error_description)
+          assert_equal("Token endpoint returned status 400. Details without a code", error.message)
+        end
+
+        def test_token_endpoint_errors_sanitize_without_changing_grant_classification
+          error = refresh_token_endpoint_error(
+            JSON.generate(error: "invalid_grant\n", error_description: "expired\r\n\t\e\u0000\"\\\u2028token"),
+          )
+
+          assert_instance_of(Flow::AuthorizationError, error)
+          assert_equal("invalid_grant", error.error)
+          assert_equal("expired        token", error.error_description)
+          assert_equal("Token endpoint returned status 400. invalid_grant: expired        token", error.message)
+        end
+
+        def test_invalid_grant_with_invalid_utf8_description_preserves_classification
+          error = refresh_token_endpoint_error(
+            "{\"error\":\"invalid_grant\",\"error_description\":\"bad \xFF byte\"}".b,
+          )
+
+          assert_instance_of(Flow::InvalidGrantError, error)
+          assert_equal(400, error.http_status)
+          assert_equal("invalid_grant", error.error)
+          assert_equal("bad   byte", error.error_description)
+          assert_equal("Token endpoint returned status 400. invalid_grant: bad   byte", error.message)
+        end
+
+        def test_token_endpoint_errors_scrub_invalid_utf8_in_both_fields
+          error = refresh_token_endpoint_error(
+            "{\"error\":\"invalid_grant\xFF\",\"error_description\":\"bad \xFF byte\"}".b,
+          )
+
+          assert_instance_of(Flow::AuthorizationError, error)
+          assert_equal(400, error.http_status)
+          assert_equal("invalid_grant", error.error)
+          assert_equal("bad   byte", error.error_description)
+          assert_equal("Token endpoint returned status 400. invalid_grant: bad   byte", error.message)
+        end
+
+        def test_token_endpoint_errors_fall_back_when_diagnostic_extraction_raises
+          Flow.any_instance.stubs(:token_endpoint_diagnostic).raises(ArgumentError, "sensitive provider text")
+
+          { "invalid_grant" => Flow::InvalidGrantError, "invalid_client" => Flow::AuthorizationError }.each do |code, klass|
+            error = refresh_token_endpoint_error(JSON.generate(error: code, error_description: "details"))
+
+            assert_instance_of(klass, error)
+            assert_equal(400, error.http_status)
+            assert_nil(error.error)
+            assert_nil(error.error_description)
+            assert_equal("Token endpoint returned status 400.", error.message)
+          end
+        end
+
+        def test_token_endpoint_errors_bound_diagnostic_lengths
+          error = refresh_token_endpoint_error(JSON.generate(error: "e" * 200, error_description: "d" * 1000))
+
+          assert_equal("#{"e" * 125}...", error.error)
+          assert_equal("#{"d" * 509}...", error.error_description)
+          assert_equal("Token endpoint returned status 400. #{error.error}: #{error.error_description}", error.message)
+        end
+
+        def test_other_authorization_errors_have_no_token_endpoint_diagnostics
+          error = Flow::AuthorizationError.new("Discovery failed")
+
+          assert_equal("Discovery failed", error.message)
+          assert_nil(error.http_status)
+          assert_nil(error.error)
+          assert_nil(error.error_description)
+        end
+
+        def refresh_token_endpoint_error(body, status: 400)
+          stub_request(:post, "#{@auth_base}/token").to_return(status: status, body: body)
+          provider = ssrf_test_provider
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          assert_raises(Flow::AuthorizationError) do
             Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
           end
         end

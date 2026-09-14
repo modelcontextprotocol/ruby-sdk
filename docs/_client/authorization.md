@@ -159,6 +159,27 @@ provider = MCP::Client::OAuth::Provider.new(
 )
 ```
 
+### Token Endpoint Errors
+
+When a token exchange or refresh fails, `MCP::Client::OAuth::Flow::AuthorizationError` includes the HTTP status and
+the authorization server's `error` and `error_description` from [RFC 6749 Section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
+For example:
+
+```text
+Token endpoint returned status 400. invalid_request: Client must not use multiple authentication methods
+```
+
+The exception exposes `http_status`, `error`, and `error_description` readers for structured diagnostics. Missing or non-string
+diagnostic fields are `nil`; non-JSON responses retain the status-only message. Other authorization failures have `nil` readers.
+An `invalid_grant` response still raises `Flow::InvalidGrantError`, a subclass of `Flow::AuthorizationError`, so refresh-token
+recovery behavior is unchanged.
+
+Diagnostic fields are limited to 128 characters for `error` and 512 for `error_description`, including a trailing `...` when
+truncated. Characters outside the RFC's printable ASCII set are replaced with spaces, and surrounding whitespace is removed.
+The SDK excludes all other response fields, including `error_uri`, and does not include the raw response body in these errors.
+Descriptions are provider-controlled text, not guaranteed to be free of sensitive information; apply your application's logging
+and redaction policy before persisting them or displaying them to users.
+
 ### Client Credentials Grant
 
 For a confidential machine-to-machine client (no user, no browser redirect), use `MCP::Client::OAuth::ClientCredentialsProvider` instead of `Provider`.
