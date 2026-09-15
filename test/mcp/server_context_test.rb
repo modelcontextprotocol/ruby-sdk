@@ -1101,6 +1101,74 @@ module MCP
         response[:result][:messages][0][:content][:text]
     end
 
+    test "ServerContext#auth_info exposes the verified access token" do
+      access_token = Server::OAuth::AccessToken.new(token: "abc", subject: "alice", scopes: ["mcp:tools"])
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock, auth_info: access_token)
+
+      assert_same access_token, server_context.auth_info
+      assert_predicate server_context, :authenticated?
+    end
+
+    test "ServerContext#auth_info is nil and authenticated? false without a token" do
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock)
+
+      assert_nil server_context.auth_info
+      refute_predicate server_context, :authenticated?
+    end
+
+    test "ServerContext#require_scopes! passes when the token carries every scope" do
+      access_token = Server::OAuth::AccessToken.new(token: "abc", scopes: ["mcp:tools", "mcp:admin"])
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock, auth_info: access_token)
+
+      assert_nil server_context.require_scopes!("mcp:tools", "mcp:admin")
+    end
+
+    test "ServerContext#require_scopes! honors the scope matcher attached to the token" do
+      matcher = ->(required, granted) { granted.include?("mcp:all") || granted.include?(required) }
+      access_token = Server::OAuth::AccessToken.new(token: "abc", scopes: ["mcp:all"]).with_scope_matcher(matcher)
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock, auth_info: access_token)
+
+      assert_nil server_context.require_scopes!("mcp:tools", "mcp:admin")
+    end
+
+    test "ServerContext#require_scopes! raises naming the missing scopes" do
+      access_token = Server::OAuth::AccessToken.new(token: "abc", scopes: ["mcp:tools"])
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock, auth_info: access_token)
+
+      error = assert_raises(Server::OAuth::InsufficientScopeError) do
+        server_context.require_scopes!("mcp:admin")
+      end
+
+      assert_equal "Token is missing required scopes: mcp:admin", error.message
+      assert_equal ["mcp:admin"], error.required_scopes
+    end
+
+    test "ServerContext#require_scopes! raises when the request is unauthenticated" do
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock)
+
+      assert_raises(Server::OAuth::InsufficientScopeError) { server_context.require_scopes!("mcp:tools") }
+    end
+
+    test "ServerContext#require_scopes! requires at least one scope" do
+      progress = Progress.new(notification_target: mock, progress_token: nil)
+
+      server_context = ServerContext.new(nil, progress: progress, notification_target: mock)
+
+      assert_raises(ArgumentError) { server_context.require_scopes! }
+    end
+
     private
 
     def build_modern_server_context(notification_target, log_level: nil)

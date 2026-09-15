@@ -350,3 +350,8 @@ An authorization server that changes between authorization and refresh is caught
 present a refresh token to a different one, even when the client identity is portable across authorization servers as a Client ID Metadata Document URL is.
 The transport answers that refusal by running a full authorization, which brings the new authorization server back here for you to accept or refuse.
 Tokens stored before this behavior shipped carry no issuer and keep refreshing; the binding applies from their next authorization.
+
+## Server Side
+
+Protecting a server as an OAuth 2.1 resource server, verifying bearer tokens and serving the Protected Resource Metadata that this client discovers,
+is documented on the server [Authorization](/server/authorization/) page.

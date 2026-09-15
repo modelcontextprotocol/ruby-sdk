@@ -27,6 +27,7 @@ gem "yard-sorbet", "~> 0.9" if RUBY_VERSION >= "3.1"
 group :test do
   gem "event_stream_parser", ">= 1.0"
   gem "faraday", ">= 2.0"
+  gem "jwt"
   gem "minitest", "~> 5.1", require: false
   gem "mocha"
   gem "webmock"

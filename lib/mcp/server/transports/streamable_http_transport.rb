@@ -93,6 +93,15 @@ module MCP
         # 15-second default; pass `listen_keepalive_interval: nil` when an upstream proxy pings the stream.
         DEFAULT_LISTEN_KEEPALIVE_INTERVAL = 15
 
+        # How long an authenticated SSE stream may stay open before it is closed and the client has to present its token again.
+        # Bearer enforcement is per HTTP request, and a stream is one request, so without this an open stream outlives
+        # every later token check. The token's own expiry usually arrives first; the cap is what bounds a stream whose token reports
+        # no expiry at all (`exp` is optional in an RFC 7662 introspection response). Neither the specification nor the reference SDKs
+        # put a ceiling on a stream, so the value comes from this transport instead: it matches `DEFAULT_SESSION_IDLE_TIMEOUT`,
+        # because a handshake session already ends after that long without a request, which would leave a longer cap inert,
+        # and a sessionless `subscriptions/listen` stream has no other bound at all.
+        DEFAULT_MAX_STREAM_LIFETIME = DEFAULT_SESSION_IDLE_TIMEOUT
+
         # Creates a Streamable HTTP transport that can be mounted as a Rack app.
         #
         # @param server [MCP::Server] the server whose requests this transport dispatches.
@@ -138,6 +147,28 @@ module MCP
         # @param server_to_client_request_timeout [Numeric] seconds a server-to-client request waits for its
         #   response before the transport stops waiting and raises `MCP::Server::RequestTimeoutError`.
         #   Defaults to `DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT` (600); individual calls override it with `timeout:`.
+        # @param token_verifier [#verify, nil] enables built-in OAuth 2.1 bearer enforcement: anything responding to
+        #   `verify(token) -> MCP::Server::OAuth::AccessToken | nil` (see `MCP::Server::OAuth::TokenVerifier` for
+        #   the contract and the built-in JWT/introspection implementations). Every POST, GET, and DELETE is verified
+        #   per HTTP request; SSE streams are verified when opened, matching the per-request model of the Python and
+        #   TypeScript SDKs. The verified token reaches handlers as `server_context.auth_info`. Without a verifier
+        #   the transport still honors a token placed in `env["mcp.auth_info"]` by `MCP::Server::OAuth::Middleware`
+        #   or a custom integration.
+        # @param required_scopes [Array<String>] scopes the token must include, all of them; a shortfall is
+        #   rejected with HTTP 403 `insufficient_scope` (step-up). Requires `token_verifier`.
+        # @param resource_metadata [MCP::Server::OAuth::ProtectedResourceMetadata, nil] the RFC 9728 document describing
+        #   this resource; its well-known URL and `scopes_supported` feed the `WWW-Authenticate` challenges.
+        #   The document itself is served above the transport by `MCP::Server::OAuth::ProtectedResourceMetadataMiddleware`.
+        #   Requires `token_verifier`.
+        # @param resource_metadata_url [String, nil] explicit challenge URL when the metadata document is served elsewhere;
+        #   wins over `resource_metadata.well_known_url`. Requires `token_verifier`.
+        # @param scope_matcher [#call, nil] optional `(required_scope, granted_scopes) -> Boolean` for hierarchical scope schemes;
+        #   defaults to exact membership. Requires `token_verifier`.
+        # @param max_stream_lifetime [Numeric, nil] seconds an authenticated SSE stream may stay open before it is closed
+        #   and the client must present its token again, `DEFAULT_MAX_STREAM_LIFETIME` (1800) by default. The token's own
+        #   expiry closes the stream earlier when it comes first; the cap is what bounds a stream whose token reports no
+        #   expiry. `nil` removes the cap, leaving such a stream open until either side disconnects. Streams opened without
+        #   a token are never capped.
         def initialize(
           server,
           stateless: false,
@@ -152,7 +183,13 @@ module MCP
           max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
           serve_subscriptions_listen: true,
-          server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT
+          server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT,
+          token_verifier: nil,
+          required_scopes: [],
+          resource_metadata: nil,
+          resource_metadata_url: nil,
+          scope_matcher: nil,
+          max_stream_lifetime: DEFAULT_MAX_STREAM_LIFETIME
         )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
@@ -227,6 +264,28 @@ module MCP
 
           @server_to_client_request_timeout = server_to_client_request_timeout
 
+          if token_verifier
+            @oauth_authenticator = OAuth::Authenticator.new(
+              token_verifier: token_verifier,
+              required_scopes: required_scopes,
+              resource_metadata: resource_metadata,
+              resource_metadata_url: resource_metadata_url,
+              scope_matcher: scope_matcher,
+            )
+          elsif !Array(required_scopes).empty? || resource_metadata || resource_metadata_url || scope_matcher
+            # OAuth options without a verifier would look protected while enforcing nothing.
+            raise ArgumentError,
+              "required_scopes, resource_metadata, resource_metadata_url, and scope_matcher require token_verifier"
+          else
+            @oauth_authenticator = nil
+          end
+
+          unless max_stream_lifetime.nil? || (max_stream_lifetime.is_a?(Numeric) && max_stream_lifetime.positive?)
+            raise ArgumentError, "max_stream_lifetime must be a positive number or nil"
+          end
+
+          @max_stream_lifetime = max_stream_lifetime
+
           start_reaper_thread if @session_idle_timeout
         end
 
@@ -280,6 +339,11 @@ module MCP
         def handle_request(request)
           rebinding_error = validate_dns_rebinding(request)
           return rebinding_error if rebinding_error
+
+          # Bearer enforcement runs after the DNS-rebinding rejection (which must stay the cheapest gate and
+          # never trigger verifier work) and before any body read, so an unauthenticated request costs no parsing.
+          auth_error = authenticate_request(request)
+          return auth_error if auth_error
 
           # Header-primary era routing (SEP-2575). An `MCP-Protocol-Version` header naming a version outside
           # every supported list routes to the sessionless modern path, so an unknown future version receives
@@ -739,13 +803,13 @@ module MCP
           # to the dispatcher as unimplemented (404 with `-32601`) - the refusal a host that cannot
           # serve an open SSE stream needs, instead of a `Proc` body it can never call.
           if body[:method] == Methods::SUBSCRIPTIONS_LISTEN && serves_subscriptions_listen?
-            return handle_subscriptions_listen(body)
+            return handle_subscriptions_listen(body, auth_info: request.env[OAuth::ENV_KEY])
           end
 
           session = modern_session
           notifications = @mutex.synchronize { @modern_request_sinks[session.session_id] = [] }
           begin
-            response = @server.handle(body, session: session)
+            response = @server.handle(body, session: session, auth_info: request.env[OAuth::ENV_KEY])
           ensure
             @mutex.synchronize { @modern_request_sinks.delete(session.session_id) }
           end
@@ -837,7 +901,7 @@ module MCP
         # (= the listen request id) in `_meta`. A graceful teardown (transport `close`) sends a `SubscriptionsListenResult`
         # response; an abrupt disconnect sends nothing. A keepalive comment frame is written every
         # `listen_keepalive_interval` seconds so a dropped connection frees its slot.
-        def handle_subscriptions_listen(body)
+        def handle_subscriptions_listen(body, auth_info: nil)
           request_id = body[:id]
           params = body[:params]
 
@@ -879,7 +943,7 @@ module MCP
             return too_many_listen_subscriptions_response(request_id)
           end
 
-          [200, SSE_HEADERS.dup, listen_sse_body(request_id, honored_filter(filter))]
+          [200, SSE_HEADERS.dup, listen_sse_body(request_id, honored_filter(filter), auth_info)]
         end
 
         def listen_subscriptions_full?
@@ -929,7 +993,7 @@ module MCP
         # and only then does the entry become eligible for delivery. A concurrent notification between
         # the insert and the acknowledgement write skips the inactive entry,
         # enforcing the SEP-2575 rule that no notification precedes the acknowledgement.
-        def listen_sse_body(request_id, honored)
+        def listen_sse_body(request_id, honored, auth_info = nil)
           ListenStreamBody.new do |stream|
             rejected = false
             @mutex.synchronize do
@@ -937,7 +1001,15 @@ module MCP
                   (@max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions)
                 rejected = true
               else
-                @listen_subscriptions[request_id] = { stream: stream, filter: honored, active: false, write_mutex: Mutex.new }
+                # The expiry of the token that authenticated the listen request is kept with the stream
+                # so the keepalive loop can close the stream once that token expires.
+                @listen_subscriptions[request_id] = {
+                  stream: stream,
+                  filter: honored,
+                  active: false,
+                  write_mutex: Mutex.new,
+                  expires_at: stream_token_expiry(auth_info),
+                }
               end
             end
 
@@ -983,6 +1055,10 @@ module MCP
 
           Thread.new do
             while listen_subscription_active?(request_id)
+              # Checked ahead of each tick so the stream does not outlive the token that opened it.
+              # Revocation is not re-checked: the reference SDKs verify a stream at open only.
+              break if listen_subscription_token_expired?(request_id)
+
               sleep(@listen_keepalive_interval)
               send_listen_keepalive_ping(request_id)
             end
@@ -1002,6 +1078,40 @@ module MCP
 
         def listen_subscription_active?(request_id)
           @mutex.synchronize { @listen_subscriptions.key?(request_id) }
+        end
+
+        def listen_subscription_token_expired?(request_id)
+          expires_at = @mutex.synchronize do
+            subscription = @listen_subscriptions[request_id]
+            subscription && subscription[:expires_at]
+          end
+
+          token_expiry_passed?(expires_at)
+        end
+
+        # The deadline at which a stream authenticated by `auth_info` is closed: whichever comes first of the token's own
+        # expiry and `max_stream_lifetime:` seconds from now. Only the deadline is retained with the stream,
+        # never the `AccessToken` itself, which would park the raw bearer credential in `@sessions` or `@listen_subscriptions`
+        # for the life of the stream. The cap is what bounds a stream whose token reports no expiry (`exp` is optional in
+        # an RFC 7662 introspection response), so "a stream does not outlive its credential" holds even when the credential
+        # never says when it ends. A stream opened without a token is not capped: there is no credential to bound,
+        # and capping it would change a transport used without `token_verifier:`.
+        def stream_token_expiry(auth_info)
+          return unless auth_info
+
+          deadlines = []
+          token_expiry = auth_info.expires_at if auth_info.respond_to?(:expires_at)
+          # A custom verifier that breaks the `AccessToken` contract with an expiry that is not a number must not fail
+          # the stream while it is being set up: the value is ignored and only the cap applies.
+          deadlines << token_expiry if token_expiry.is_a?(Numeric)
+          deadlines << Time.now.to_i + @max_stream_lifetime if @max_stream_lifetime
+
+          deadlines.min
+        end
+
+        # Same rule as `AccessToken#expired?`: no expiry means the token never expires here.
+        def token_expiry_passed?(expires_at)
+          !expires_at.nil? && expires_at <= Time.now.to_i
         end
 
         # Resolves the stream under the lock, then writes outside it so a stalled reader cannot block
@@ -1258,8 +1368,10 @@ module MCP
             # Ownership gate for every request against an existing session, applied uniformly to notifications, client responses,
             # and regular requests. This covers write paths beyond tool calls - notably `notifications/cancelled`, which would
             # otherwise let a stolen session ID cancel a victim's in-flight request. `initialize` is exempt (it establishes the session).
-            if !@stateless && session_id && !validate_session_request(request, session_id)
-              return forbidden_response
+            if !@stateless && session_id
+              rejection = session_request_rejection(request, session_id)
+
+              return rejection if rejection
             end
 
             if notification?(body)
@@ -1268,14 +1380,14 @@ module MCP
               # branches; without it a custom notification handler could run without a live session.
               return session_not_found_response if !@stateless && !session_active?(session_id)
 
-              dispatch_notification(body_string, session_id)
+              dispatch_notification(body_string, session_id, auth_info: request.env[OAuth::ENV_KEY])
               handle_accepted
             elsif response?(body)
               return session_not_found_response if !@stateless && !session_exists?(session_id)
 
               handle_response(body, session_id: session_id)
             else
-              handle_regular_request(body_string, session_id, related_request_id: body[:id])
+              handle_regular_request(body_string, session_id, related_request_id: body[:id], auth_info: request.env[OAuth::ENV_KEY])
             end
           end
         rescue StandardError => e
@@ -1299,16 +1411,20 @@ module MCP
 
           return missing_session_id_response unless session_id
 
+          # The ownership gate runs before the session is touched, so a rejected request cannot refresh the idle timer of a session it does not own.
+          # The visible outcome is unchanged: an unknown session passes the gate and fails the lookup, and an expired one fails it, both with the same 404.
+          rejection = session_request_rejection(request, session_id)
+          return rejection if rejection
+
           error_response = validate_and_touch_session(session_id)
           return error_response if error_response
-          return forbidden_response unless validate_session_request(request, session_id)
 
           protocol_version_error = validate_protocol_version_header(request)
           return protocol_version_error if protocol_version_error
 
           return session_already_connected_response if get_session_stream(session_id)
 
-          setup_sse_stream(session_id)
+          setup_sse_stream(session_id, request.env[OAuth::ENV_KEY])
         end
 
         def handle_delete(request)
@@ -1324,7 +1440,8 @@ module MCP
 
           return missing_session_id_response unless (session_id = extract_session_id(request))
           return session_not_found_response unless session_exists?(session_id)
-          return forbidden_response unless validate_session_request(request, session_id)
+          rejection = session_request_rejection(request, session_id)
+          return rejection if rejection
 
           protocol_version_error = validate_protocol_version_header(request)
           return protocol_version_error if protocol_version_error
@@ -1388,23 +1505,47 @@ module MCP
 
         # Session-ownership gate for requests against an existing session (the spec's session-binding guidance).
         # The session ID alone is unguessable but not proof of ownership, so a stolen ID must not silently grant access.
-        # Two layers, both returning `false` to trigger a 403:
+        # Three layers, each answering with the rejection response it returns. The built-in layers run before
+        # the custom validator so a permissive `session_request_validator` cannot bypass them:
         #
         # - Built-in Origin consistency (defense in depth, not authentication): if the session recorded an `Origin`
-        #   at `initialize` and this request carries a different one, reject. Both must be present to compare,
+        #   at `initialize` and this request carries a different one, reject with 403. Both must be present to compare,
         #   so non-browser clients that send no `Origin` are unaffected.
-        # - The application-supplied `session_request_validator`, which can enforce true ownership when it has
-        #   an authenticated principal.
-        def validate_session_request(request, session_id)
+        # - Built-in principal binding (active when bearer authentication is in play): a session initialized under
+        #   one token identity refuses requests verified as a different one. The answer is the same 404 an unknown session gets,
+        #   so a guessed session ID is not confirmed to exist; it carries no `WWW-Authenticate` challenge either,
+        #   because the token itself is valid and re-authorization would not help.
+        # - The application-supplied `session_request_validator`, which can enforce ownership policy beyond the built-in layers;
+        #   a falsy return rejects with 403.
+        #
+        # Returns nil when the request may proceed.
+        def session_request_rejection(request, session_id)
           session = @mutex.synchronize { @sessions[session_id] }
-          return true unless session
+          return unless session
 
           session_origin = session[:origin]
           request_origin = request.env["HTTP_ORIGIN"]
-          return false if session_origin && request_origin && session_origin != request_origin
-          return @session_request_validator.call(request, session_id) if @session_request_validator
+          return forbidden_response if session_origin && request_origin && session_origin != request_origin
+          return session_not_found_response unless session_principal_matches?(session, request)
 
-          true
+          if @session_request_validator && !@session_request_validator.call(request, session_id)
+            return forbidden_response
+          end
+
+          nil
+        end
+
+        # A session bound to a principal at `initialize` only accepts requests verified as the same `issuer`, `subject`,
+        # and `client_id` triple (client-credentials tokens without a `sub` bind on `client_id` alone; nil members compare equal).
+        # The issuer takes part so a subject and client id pair repeated across identity providers behind a custom verifier
+        # does not collide. A token whose subject and client id are both nil records no binding, because there is no identity to compare.
+        def session_principal_matches?(session, request)
+          return true if session[:auth_subject].nil? && session[:auth_client_id].nil?
+
+          token = request.env[OAuth::ENV_KEY]
+          return false if token.nil?
+
+          token.issuer == session[:auth_issuer] && token.subject == session[:auth_subject] && token.client_id == session[:auth_client_id]
         end
 
         def validate_accept_header(request, required_types)
@@ -1541,7 +1682,7 @@ module MCP
 
         # Dispatches a client-originated notification (e.g. `notifications/cancelled`,
         # `notifications/initialized`) through the server so it can update session state.
-        def dispatch_notification(body_string, session_id)
+        def dispatch_notification(body_string, session_id, auth_info: nil)
           server_session = nil
           if @stateless
             server_session = ephemeral_session
@@ -1552,7 +1693,7 @@ module MCP
             end
           end
 
-          dispatch_handle_json(body_string, server_session)
+          dispatch_handle_json(body_string, server_session, auth_info: auth_info)
         rescue => e
           MCP.configuration.exception_reporter.call(e, { error: "Failed to dispatch notification" })
         end
@@ -1581,6 +1722,7 @@ module MCP
 
         def handle_initialization(request, body_string, body)
           session_id = nil
+          auth_info = request.env[OAuth::ENV_KEY]
 
           if @stateless
             server_session = ephemeral_session
@@ -1606,9 +1748,15 @@ module MCP
                 get_sse_stream: nil,
                 server_session: server_session,
                 last_active_at: Process.clock_gettime(Process::CLOCK_MONOTONIC),
-                # Captured for the built-in Origin-consistency defense in `validate_session_request`.
+                # Captured for the built-in Origin-consistency defense in `session_request_rejection`.
                 # Not authentication.
                 origin: request.env["HTTP_ORIGIN"],
+                # Principal binding per the spec's session-binding guidance: the session is bound to the token identity that initialized it,
+                # and `session_request_rejection` rejects later requests presenting a token for a different principal. All three fields are nil
+                # when the request was not bearer-authenticated, which disables the check.
+                auth_issuer: auth_info&.issuer,
+                auth_subject: auth_info&.subject,
+                auth_client_id: auth_info&.client_id,
               }
               true
             end
@@ -1617,7 +1765,7 @@ module MCP
             return too_many_sessions_response unless inserted
           end
 
-          response = server_session.handle_json(body_string)
+          response = server_session.handle_json(body_string, auth_info: auth_info)
 
           # `initialize_request?` matches on the method alone, so an `initialize` sent without
           # an id (framed as a notification) reaches here. `Server#init` marks the session initialized,
@@ -1660,7 +1808,7 @@ module MCP
           )
         end
 
-        def handle_regular_request(body_string, session_id, related_request_id: nil)
+        def handle_regular_request(body_string, session_id, related_request_id: nil, auth_info: nil)
           server_session = nil
 
           if @stateless
@@ -1684,9 +1832,9 @@ module MCP
           end
 
           if session_id && !@stateless && !@enable_json_response
-            handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id)
+            handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: related_request_id, auth_info: auth_info)
           else
-            response = dispatch_handle_json(body_string, server_session)
+            response = dispatch_handle_json(body_string, server_session, auth_info: auth_info)
 
             # `Server#handle_json` returns `nil` when cancellation has suppressed the JSON-RPC response per spec.
             # Mirror the notification path and ack with 202 instead of returning a 200 with a `nil` Rack body,
@@ -1700,7 +1848,7 @@ module MCP
         # Returns the POST response as an SSE stream so the server can send
         # JSON-RPC requests and notifications during request processing.
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
-        def handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: nil)
+        def handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: nil, auth_info: nil)
           body = proc do |stream|
             @mutex.synchronize do
               session = @sessions[session_id]
@@ -1715,7 +1863,7 @@ module MCP
             end
 
             begin
-              response = dispatch_handle_json(body_string, server_session)
+              response = dispatch_handle_json(body_string, server_session, auth_info: auth_info)
 
               send_to_stream(stream, response) if response
             ensure
@@ -1754,11 +1902,11 @@ module MCP
           end
         end
 
-        def dispatch_handle_json(body_string, server_session)
+        def dispatch_handle_json(body_string, server_session, auth_info: nil)
           if server_session
-            server_session.handle_json(body_string)
+            server_session.handle_json(body_string, auth_info: auth_info)
           else
-            @server.handle_json(body_string)
+            @server.handle_json(body_string, auth_info: auth_info)
           end
         end
 
@@ -1827,6 +1975,27 @@ module MCP
           end
 
           active
+        end
+
+        # Built-in OAuth 2.1 bearer enforcement (active when `token_verifier:` is configured).
+        # Returns nil on success, storing the verified `AccessToken` in `env["mcp.auth_info"]` where the dispatch paths
+        # and `session_request_rejection` read it; returns the RFC 6750 challenge response on failure. OPTIONS is exempt:
+        # CORS preflights never carry credentials, and rejecting them here would fail CORS closed for browser clients
+        # while the transport still answers the preflight itself with 405 (an upstream CORS middleware normally intercepts it).
+        def authenticate_request(request)
+          return if @oauth_authenticator.nil?
+          return if request.env["REQUEST_METHOD"] == "OPTIONS"
+
+          request.env[OAuth::ENV_KEY] = @oauth_authenticator.authenticate(request.env)
+          nil
+        rescue OAuth::Error => e
+          @oauth_authenticator.challenge_response(e)
+        rescue => e
+          # A misbehaving verifier (e.g. an unreachable JWKS or introspection endpoint) is an internal failure:
+          # report it and answer 500 without a challenge, so the client does not discard a perfectly good token.
+          MCP.configuration.exception_reporter.call(e, { transport: self.class.name })
+
+          [500, { "content-type" => "application/json" }, [{ error: "server_error" }.to_json]]
         end
 
         # Per MCP 2025-11-25, servers MUST validate the `Origin` header and SHOULD bind only to localhost
@@ -1955,24 +2124,30 @@ module MCP
           )
         end
 
-        def setup_sse_stream(session_id)
-          body = create_sse_body(session_id)
+        def setup_sse_stream(session_id, auth_info = nil)
+          body = create_sse_body(session_id, auth_info)
 
           [200, SSE_HEADERS.dup, body]
         end
 
-        def create_sse_body(session_id)
+        def create_sse_body(session_id, auth_info = nil)
           proc do |stream|
-            stored = store_stream_for_session(session_id, stream)
+            stored = store_stream_for_session(session_id, stream, auth_info)
             start_keepalive_thread(session_id) if stored
           end
         end
 
-        def store_stream_for_session(session_id, stream)
+        # The expiry of the token that authenticated the GET is kept with the stream so the keepalive loop can close
+        # the stream once that token expires.
+        def store_stream_for_session(session_id, stream, auth_info = nil)
           @mutex.synchronize do
             session = @sessions[session_id]
             if session && !session[:get_sse_stream]
               session[:get_sse_stream] = stream
+              session[:get_sse_stream_expires_at] = stream_token_expiry(auth_info)
+              # The expiry is nil for a stream opened without a token, and callers read a falsy return as "not stored",
+              # so the stream itself is the return value.
+              stream
             else
               # Either session was removed, or another request already established a stream.
               stream.close
@@ -1985,19 +2160,51 @@ module MCP
 
         def start_keepalive_thread(session_id)
           Thread.new do
+            token_expired = false
             while session_active_with_stream?(session_id)
+              # Checked ahead of each tick so the stream does not outlive the token that opened it.
+              # Revocation is not re-checked: the reference SDKs verify a stream at open only.
+              if get_stream_token_expired?(session_id)
+                token_expired = true
+                break
+              end
+
               sleep(30)
               send_keepalive_ping(session_id)
             end
           rescue StandardError => e
             MCP.configuration.exception_reporter.call(e, { session_id: session_id })
           ensure
-            cleanup_session(session_id)
+            # An expired token ends the stream alone: every other request of the session is verified on its own,
+            # and the client may reopen the stream with a fresh token.
+            token_expired ? close_get_stream(session_id) : cleanup_session(session_id)
           end
         end
 
         def session_active_with_stream?(session_id)
           @mutex.synchronize { @sessions.key?(session_id) && @sessions[session_id][:get_sse_stream] }
+        end
+
+        def get_stream_token_expired?(session_id)
+          expires_at = @mutex.synchronize do
+            session = @sessions[session_id]
+            session && session[:get_sse_stream_expires_at]
+          end
+
+          token_expiry_passed?(expires_at)
+        end
+
+        # Detaches and closes the session's GET stream, leaving the session in place.
+        def close_get_stream(session_id)
+          stream = @mutex.synchronize do
+            session = @sessions[session_id]
+            next unless session
+
+            session.delete(:get_sse_stream_expires_at)
+            session.delete(:get_sse_stream)
+          end
+
+          close_stream_safely(stream) if stream
         end
 
         def send_keepalive_ping(session_id)
