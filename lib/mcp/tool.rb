@@ -149,7 +149,7 @@ module MCP
           raise ArgumentError, "Tool names should be between 1 and 128 characters in length (inclusive)."
         end
 
-        unless tool_name.match?(/\A[A-Za-z\d_\-\.]+\z/)
+        unless tool_name.match?(/\A[A-Za-z\d_\-.]+\z/)
           raise ArgumentError, <<~MESSAGE
             Tool names only allowed characters: uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.).
           MESSAGE
