@@ -40,6 +40,8 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
   as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` without the RFC 8414 issuer byte-match (which the legacy spec predates),
   and when even that is absent the spec's default endpoints `/authorize`, `/token`, and `/register` at the origin are used with PKCE S256 assumed.
 - On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
+  `ClientCredentialsProvider` and `CrossAppAccessProvider` refresh the same way and fall back to their own grant instead;
+  their refresh also requires the `issuer` the SDK records on the tokens, so tokens stored without it run the grant again.
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
   The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
@@ -192,7 +194,8 @@ and redaction policy before persisting them or displaying them to users.
 
 For a confidential machine-to-machine client (no user, no browser redirect), use `MCP::Client::OAuth::ClientCredentialsProvider` instead of `Provider`.
 The transport discovers the authorization server the same way, then exchanges the OAuth 2.1 `client_credentials` grant (RFC 6749 Section 4.4) at
-the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant does not issue a refresh token.
+the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant is not expected to issue a refresh token (RFC 6749 Section 4.4.3);
+a refresh token the authorization server issues anyway is used on the next `401`.
 
 ```ruby
 provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
@@ -224,6 +227,7 @@ Keyword arguments:
 For enterprise MCP deployments where an identity provider (IdP) governs authorization (SEP-990), use `MCP::Client::OAuth::CrossAppAccessProvider` instead of `Provider`.
 The client exchanges an IdP-issued ID token for an Identity Assertion Authorization Grant (ID-JAG) at the IdP via RFC 8693 token exchange, then presents the ID-JAG
 to the MCP authorization server with the RFC 7523 `jwt-bearer` grant, authenticating with `client_secret_basic`. There is no authorization request, PKCE, DCR, or `offline_access`.
+A refresh token the authorization server issues is exchanged on the next `401` with the stored client secret, without calling `assertion_provider` again.
 Mirrors `CrossAppAccessProvider` and `requestJwtAuthorizationGrant` in the TypeScript SDK.
 
 `MCP::Client::OAuth::IDJAGTokenExchange.request` performs the RFC 8693 exchange at the IdP token endpoint. Wrap it in a callable so the same provider can plug into
