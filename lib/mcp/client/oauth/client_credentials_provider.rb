@@ -37,11 +37,15 @@ module MCP
       #   also take the algorithm as an explicit option).
       # - `scope`   - String of space-separated scopes to request when the server's
       #   `WWW-Authenticate` and the Protected Resource Metadata do not specify one.
-      # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
-      #   `client_information`, and `save_client_information(info)`. Defaults to
-      #   an `InMemoryStorage`. The `client_id` / `client_secret` are written
-      #   into it so the token exchange reads them through the same path as
-      #   a pre-registered authorization-code client.
+      # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`, `client_information`,
+      #   and `save_client_information(info)`. Defaults to an `InMemoryStorage`.
+      #   The `client_id` / `client_secret` are written into it so the token exchange reads
+      #   them through the same path as a pre-registered authorization-code client.
+      # - `token_request_params` - Hash of String keys and values added to every
+      #   token request this provider makes, for parameters the authorization
+      #   server requires beyond the grant itself (Auth0's `audience`, for example).
+      #   A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS` raises `Flow::InvalidTokenRequestParamsError`.
+      #   The Hash is copied and frozen. See `StorageBackedProvider#token_request_params`.
       class ClientCredentialsProvider
         include StorageBackedProvider
 
@@ -61,7 +65,8 @@ module MCP
           signing_algorithm: nil,
           scope: nil,
           storage: nil,
-          authorization_request_validator: nil
+          authorization_request_validator: nil,
+          token_request_params: nil
         )
           if blank?(client_id)
             raise InvalidCredentialsError, "client_id is required for the client_credentials grant."
@@ -105,6 +110,7 @@ module MCP
           @scope = scope
           @storage = storage || InMemoryStorage.new
           @authorization_request_validator = authorization_request_validator
+          @token_request_params = frozen_token_request_params(token_request_params)
           @storage.save_client_information(client_information)
         end
 

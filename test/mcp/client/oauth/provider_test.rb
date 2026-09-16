@@ -187,6 +187,30 @@ module MCP
 
           assert_equal(:authorization_code, provider.authorization_flow)
         end
+
+        def test_token_request_params_is_nil_by_default
+          provider = Provider.new(**args_for("https://app.example.com/callback"))
+
+          assert_nil(provider.token_request_params)
+        end
+
+        def test_initialize_keeps_a_frozen_copy_of_token_request_params
+          params = { "audience" => +"https://api.example.com" }
+          provider = Provider.new(**args_for("https://app.example.com/callback"), token_request_params: params)
+
+          params["audience"] << "/changed"
+
+          assert_equal({ "audience" => "https://api.example.com" }, provider.token_request_params)
+          assert_predicate(provider.token_request_params, :frozen?)
+        end
+
+        def test_initialize_rejects_token_request_params_that_the_sdk_sets_itself
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            Provider.new(**args_for("https://app.example.com/callback"), token_request_params: { "code" => "x" })
+          end
+
+          assert_includes(error.message, '"code"')
+        end
       end
     end
   end

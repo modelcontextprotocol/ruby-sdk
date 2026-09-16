@@ -88,6 +88,42 @@ module MCP
           provider.clear_tokens!
           assert_nil(provider.tokens)
         end
+
+        def test_token_request_params_is_nil_by_default
+          assert_nil(build_provider.token_request_params)
+        end
+
+        def test_initialize_keeps_a_frozen_copy_of_token_request_params
+          params = { "audience" => +"https://api.example.com" }
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag" },
+            token_request_params: params,
+          )
+
+          params["audience"] << "/changed"
+
+          assert_equal({ "audience" => "https://api.example.com" }, provider.token_request_params)
+          assert_predicate(provider.token_request_params, :frozen?)
+        end
+
+        def test_initialize_writes_no_client_information_when_token_request_params_are_rejected
+          storage = InMemoryStorage.new
+
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            CrossAppAccessProvider.new(
+              client_id: "xaa-client",
+              client_secret: "xaa-secret",
+              assertion_provider: ->(**) { "id-jag" },
+              storage: storage,
+              token_request_params: { "assertion" => "x" },
+            )
+          end
+
+          assert_includes(error.message, '"assertion"')
+          assert_nil(storage.client_information)
+        end
       end
     end
   end

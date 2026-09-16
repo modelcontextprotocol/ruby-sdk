@@ -85,12 +85,60 @@ module MCP
           )
         end
 
-        def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic")
+        def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic", token_request_params: nil)
           ClientCredentialsProvider.new(
             client_id: "cc-client",
             client_secret: "cc-secret",
             token_endpoint_auth_method: token_endpoint_auth_method,
+            token_request_params: token_request_params,
           )
+        end
+
+        # An authorization-code provider that drives the code exchange and refresh with the given parameters.
+        def provider_with_token_request_params(params, redirect_handler: ->(_url) {}, callback_handler: -> { [nil, nil] })
+          Provider.new(**authorization_code_provider_arguments(redirect_handler, callback_handler), token_request_params: params)
+        end
+
+        # Overriding the reader bypasses the constructor's validation, leaving the flow's own check to be exercised.
+        def provider_returning_token_request_params(params, redirect_handler: ->(_url) {}, callback_handler: -> { [nil, nil] })
+          provider_class = Class.new(Provider) do
+            define_method(:token_request_params) { params }
+          end
+
+          provider_class.new(**authorization_code_provider_arguments(redirect_handler, callback_handler))
+        end
+
+        def authorization_code_provider_arguments(redirect_handler, callback_handler)
+          {
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: redirect_handler,
+            callback_handler: callback_handler,
+          }
+        end
+
+        # See `provider_returning_token_request_params`.
+        def client_credentials_provider_returning(token_request_params:)
+          provider_class = Class.new(ClientCredentialsProvider) do
+            define_method(:token_request_params) { token_request_params }
+          end
+
+          provider_class.new(client_id: "cc-client", client_secret: "cc-secret")
+        end
+
+        # `OpenSSL::PKey::EC.generate` only exists from the openssl gem 2.2 (Ruby 3.0);
+        # fall back to the pre-3.0 API on older Rubies.
+        def generate_es256_key
+          if OpenSSL::PKey::EC.respond_to?(:generate)
+            OpenSSL::PKey::EC.generate("prime256v1")
+          else
+            OpenSSL::PKey::EC.new("prime256v1").tap(&:generate_key)
+          end
         end
 
         # Runs the full authorization flow and returns the `scope` query parameter
@@ -250,17 +298,10 @@ module MCP
             ),
           )
 
-          # `OpenSSL::PKey::EC.generate` only exists from the openssl gem 2.2 (Ruby 3.0);
-          # fall back to the pre-3.0 API on older Rubies.
-          key = if OpenSSL::PKey::EC.respond_to?(:generate)
-            OpenSSL::PKey::EC.generate("prime256v1")
-          else
-            OpenSSL::PKey::EC.new("prime256v1").tap(&:generate_key)
-          end
           provider = ClientCredentialsProvider.new(
             client_id: "cc-client",
             token_endpoint_auth_method: "private_key_jwt",
-            private_key: key,
+            private_key: generate_es256_key,
             signing_algorithm: "ES256",
           )
 
@@ -283,6 +324,190 @@ module MCP
               claims["aud"] == @auth_base &&
               form["resource"] == "https://srv.example.com/mcp"
           end
+        end
+
+        def test_run_client_credentials_sends_token_request_params_with_client_secret_basic
+          provider = client_credentials_provider(token_request_params: { "audience" => "https://api.example.com" })
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "client_credentials" &&
+              form["resource"] == "https://srv.example.com/mcp" &&
+              form["audience"] == "https://api.example.com" &&
+              !form.key?("client_id") &&
+              req.headers["Authorization"] == "Basic " + Base64.strict_encode64("cc-client:cc-secret")
+          end
+        end
+
+        def test_run_client_credentials_sends_token_request_params_returned_by_a_provider_method
+          provider = client_credentials_provider_returning(token_request_params: { "audience" => "https://api.example.com" })
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).to_h["audience"] == "https://api.example.com"
+          end
+        end
+
+        def test_run_client_credentials_sends_the_same_request_for_empty_token_request_params
+          provider = client_credentials_provider(token_request_params: {})
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            URI.decode_www_form(req.body).map(&:first) == ["grant_type", "resource"]
+          end
+        end
+
+        def test_run_client_credentials_sends_token_request_params_with_client_secret_post
+          provider = client_credentials_provider(
+            token_endpoint_auth_method: "client_secret_post",
+            token_request_params: { "audience" => "https://api.example.com" },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["audience"] == "https://api.example.com" &&
+              form["client_id"] == "cc-client" &&
+              form["client_secret"] == "cc-secret"
+          end
+        end
+
+        def test_run_client_credentials_sends_token_request_params_with_private_key_jwt
+          provider = ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            token_endpoint_auth_method: "private_key_jwt",
+            private_key: generate_es256_key,
+            signing_algorithm: "ES256",
+            token_request_params: { "audience" => "https://api.example.com" },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["audience"] == "https://api.example.com" &&
+              form["client_assertion_type"] == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" &&
+              !form["client_assertion"].to_s.empty?
+          end
+        end
+
+        def test_run_sends_token_request_params_on_the_authorization_code_exchange
+          state_value = nil
+          provider = provider_with_token_request_params(
+            { "audience" => "https://api.example.com" },
+            redirect_handler: ->(url) { state_value = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_value] },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "authorization_code" &&
+              form["code"] == "test-auth-code" &&
+              form["audience"] == "https://api.example.com"
+          end
+        end
+
+        def test_refresh_sends_token_request_params
+          provider = provider_with_token_request_params({ "audience" => "https://api.example.com" })
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:refreshed, result)
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "refresh_token" &&
+              form["refresh_token"] == "saved-rt" &&
+              form["audience"] == "https://api.example.com"
+          end
+        end
+
+        def test_run_sends_token_request_params_on_the_jwt_bearer_grant
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag-assertion" },
+            token_request_params: { "audience" => "https://api.example.com" },
+          )
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer" &&
+              form["assertion"] == "id-jag-assertion" &&
+              form["audience"] == "https://api.example.com"
+          end
+        end
+
+        def test_run_refuses_token_request_params_that_name_a_reserved_parameter
+          provider = client_credentials_provider_returning(token_request_params: { "grant_type" => "password" })
+
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/"grant_type"/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_refuses_token_request_params_that_are_not_a_hash_of_strings
+          shapes = ["audience=x", { audience: "x" }, { "audience" => 1 }, { "audience" => nil }, { "audience" => "x" }.compare_by_identity]
+          shapes.each do |params|
+            provider = client_credentials_provider_returning(token_request_params: params)
+
+            assert_raises(Flow::InvalidTokenRequestParamsError, "should refuse #{params.inspect}") do
+              Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+            end
+          end
+
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_refresh_refuses_token_request_params_that_name_a_reserved_parameter
+          # Not an `AuthorizationError`: the transport treats a failed refresh as a reason
+          # to run the interactive flow, which would fail the same way afterwards.
+          provider = provider_returning_token_request_params({ "refresh_token" => "other" })
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/"refresh_token"/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_refuses_token_request_params_on_the_authorization_code_exchange
+          state_value = nil
+          provider = provider_returning_token_request_params(
+            { "code" => "other" },
+            redirect_handler: ->(url) { state_value = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_value] },
+          )
+
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/"code"/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
         end
 
         def test_run_uses_jwt_bearer_grant_for_cross_app_access_provider

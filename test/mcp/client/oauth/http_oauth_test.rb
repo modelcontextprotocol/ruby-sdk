@@ -627,6 +627,57 @@ module MCP
           assert_equal("refreshed-token", provider.access_token)
         end
 
+        def test_send_request_surfaces_a_bad_token_request_params_hook_instead_of_reauthorizing
+          # A provider whose `token_request_params` names a reserved key is misconfigured, not unauthorized:
+          # the refresh attempt must raise rather than fall through to the interactive flow,
+          # which would fail the same way after the user signed in.
+          stub_request(:post, @mcp_url).to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          redirected = false
+          provider_class = Class.new(Provider) do
+            define_method(:token_request_params) { { "grant_type" => "password" } }
+          end
+          provider = provider_class.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) { redirected = true },
+            callback_handler: -> { ["code", "state"] },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-token", "refresh_token" => "saved-rt")
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+
+          assert_raises(Flow::InvalidTokenRequestParamsError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+          end
+          refute(redirected)
+          assert_not_requested(:post, "#{@auth_base}/token")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
         def test_send_request_preserves_refresh_token_when_refresh_hits_a_transient_failure
           # A 5xx (or any non-`invalid_grant`) from the token endpoint indicates
           # a transient AS outage, NOT that the refresh token is dead.
