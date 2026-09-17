@@ -579,47 +579,46 @@ module MCP
               end.join("&")
           end
 
-          # Implements RFC 3986 Section 5.2.4 `remove_dot_segments`. Walks the input
-          # buffer one segment at a time, popping the previous output segment
-          # whenever a `..` is encountered, so that `/api/../mcp` collapses to
-          # `/mcp` and `/foo/./bar` collapses to `/foo/bar`.
+          # Implements RFC 3986 Section 5.2.4 `remove_dot_segments` over the path's segments, so that `/api/../mcp` collapses to
+          # `/mcp` and `/foo/./bar` collapses to `/foo/bar`. Each segment is visited once: the RFC's buffer rewriting,
+          # applied literally, copies the remaining input for every dot segment, and the path is the server's to choose.
+          #
+          # The output matches the RFC's algorithm for a relative path as well, including its quirk that a `..` popping
+          # the first segment leaves the result absolute (`a/../b` becomes `/b`), although `URI#path` never hands over a relative path.
+          # The rule letters below are the RFC's own: steps A through E of its loop.
           # https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4
           def remove_dot_segments(path)
             return path if path.nil? || path.empty?
 
-            input = path.dup
-            output = +""
-            until input.empty?
-              if input.start_with?("../")
-                input = input[3..]
-              elsif input.start_with?("./")
-                input = input[2..]
-              elsif input.start_with?("/./")
-                input = "/#{input[3..]}"
-              elsif input == "/."
-                input = "/"
-              elsif input.start_with?("/../")
-                input = "/#{input[4..]}"
-                output = remove_last_segment(output)
-              elsif input == "/.."
-                input = "/"
-                output = remove_last_segment(output)
-              elsif input == "." || input == ".."
-                input = ""
+            absolute = path.start_with?("/")
+            segments = path.split("/", -1)
+            segments.shift if absolute
+
+            output = []
+
+            # True until a segment other than `.` or `..` is kept: a relative path's leading `./` and `../` are dropped together with
+            # the slash after them (Rule A), so the segment that follows is still the slash-less first one.
+            leading = !absolute
+            segments.each_with_index do |segment, index|
+              last = index == segments.length - 1
+
+              # Rule A, and Rule D for a path that is nothing but `.` or `..`.
+              next if leading && (segment == "." || segment == "..")
+
+              if segment == "."
+                # Rule B: `/./` disappears; a final `/.` leaves its slash behind.
+                output << "/" if last
+              elsif segment == ".."
+                # Rule C: `/../` removes the previous segment; a final `/..` leaves its slash behind.
+                output.pop
+                output << "/" if last
               else
-                segment = input.match(%r{\A/?[^/]*})[0]
-                output << segment
-                input = input[segment.length..]
+                # Rule E: the first segment of a relative path carries no slash.
+                output << (leading ? segment : "/#{segment}")
               end
+              leading = false
             end
-            output
-          end
-
-          def remove_last_segment(output)
-            idx = output.rindex("/")
-            return +"" if idx.nil?
-
-            output[0...idx]
+            output.join
           end
         end
       end
