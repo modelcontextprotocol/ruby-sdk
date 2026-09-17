@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "ipaddr"
+require "strscan"
 require "uri"
 
 module MCP
@@ -43,6 +44,12 @@ module MCP
         # or a bare token, per RFC 7235.
         WWW_AUTH_PARAM_PATTERN = /\A([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/.freeze
 
+        # The whitespace and optional comma between two `key=value` pairs, or before the first one.
+        WWW_AUTH_PARAM_SEPARATOR_PATTERN = /\s*,?\s*/.freeze
+
+        # The `Bearer` challenge: at the start of the header or after a comma.
+        WWW_AUTH_BEARER_PATTERN = /(?:\A|,)\s*Bearer(?:\s+|\z)/i.freeze
+
         class << self
           # Parses a `WWW-Authenticate` header and returns the parameters of
           # the `Bearer` challenge as a hash with lower-cased keys (e.g. `resource_metadata`,
@@ -55,25 +62,21 @@ module MCP
           def parse_www_authenticate(header)
             return {} unless header
 
-            # Locate the Bearer challenge: at the start of the header or after a comma.
-            bearer = header.match(/(?:\A|,)\s*Bearer(?:\s+|\z)/i)
-            return {} unless bearer
-
             # Walk key=value pairs starting where Bearer's parameters begin.
-            # The loop stops at the first token that is not a key=value pair,
-            # which marks the next challenge (e.g. `, DPoP algs="..."`).
-            cursor = bearer.end(0)
+            # The loop stops at the first token that is not a key=value pair, which marks the next challenge (e.g. `, DPoP algs="..."`).
+            # The scanner keeps the walk linear in the header's length: slicing off the consumed prefix instead copies the remainder
+            # for every pair, and the server chooses how many pairs it sends. The header is also the server's to fill: a byte sequence
+            # that is not valid in the string's encoding would make the patterns raise `ArgumentError`, so such bytes are replaced first.
+            scanner = StringScanner.new(header.scrub)
+            return {} unless scanner.skip_until(WWW_AUTH_BEARER_PATTERN)
+
             params = {}
-            while cursor < header.length
-              prefix = header[cursor..]
-              prefix = prefix.sub(/\A\s*,?\s*/, "")
-              break if prefix.empty?
+            until scanner.eos?
+              scanner.skip(WWW_AUTH_PARAM_SEPARATOR_PATTERN)
+              break if scanner.eos?
+              break unless scanner.scan(WWW_AUTH_PARAM_PATTERN)
 
-              match = prefix.match(WWW_AUTH_PARAM_PATTERN)
-              break unless match
-
-              params[match[1].downcase] = match[2] ? unescape_quoted_pair(match[2]) : match[3]
-              cursor = header.length - prefix.length + match.end(0)
+              params[scanner[1].downcase] = scanner[2] ? unescape_quoted_pair(scanner[2]) : scanner[3]
             end
             params
           end
