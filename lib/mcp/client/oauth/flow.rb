@@ -16,6 +16,8 @@ module MCP
       class Flow
         TOKEN_ENDPOINT_ERROR_MAX_LENGTH = 128
         TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH = 512
+        METADATA_DIAGNOSTIC_MAX_LENGTH = 128
+        METADATA_URL_MAX_LENGTH = 2048
 
         # Token request parameters the flow sets itself. Its values win over a provider's `token_request_params`,
         # so a provider naming one of these is refused rather than left believing its value was sent.
@@ -56,6 +58,17 @@ module MCP
         # so that a caller can tell a refusal by its own policy from a network, discovery,
         # or authorization server metadata failure by rescuing a class rather than by matching the message text.
         class AuthorizationRefusedError < AuthorizationError; end
+
+        # Raised by metadata discovery when every candidate URL answered that nothing usable is published there
+        # (a `4xx` other than `429`, a redirect that was not followed, or a body that is not a JSON object).
+        # The only discovery failure that may select the legacy 2025-03-26 path.
+        class MetadataNotPublishedError < AuthorizationError; end
+
+        # Raised by metadata discovery when the answer says nothing about what is published: the request failed to
+        # reach the server, or a candidate answered `5xx` or `429`. Falling back on this would move
+        # the flow to a different authorization server because of a transient failure, so it is surfaced instead,
+        # as the TypeScript SDK does for network errors outside browsers and the Python SDK does for both.
+        class MetadataUnreachableError < AuthorizationError; end
 
         # Raised for a `token_request_params` value the SDK refuses: a reserved key, a Hash comparing keys by identity,
         # or anything but a Hash of Strings. An `ArgumentError` because the value is a configuration mistake,
@@ -375,7 +388,12 @@ module MCP
         #
         # Legacy path (2025-03-26 backwards compatibility): when the server publishes no PRM, `prm` is nil
         # and the MCP server's own origin acts as the authorization base URL, matching the TypeScript and Python SDKs.
-        # Any PRM discovery failure (404s, network errors, malformed documents) selects the legacy path, mirroring both SDKs' behavior.
+        # Only a discovery answer saying that nothing usable is published (`MetadataNotPublishedError`: a `4xx` other than `429`,
+        # a redirect that was not followed, or a body that is not a JSON object) selects the legacy path.
+        # A request that failed to reach the server, or returned a `5xx` or `429`, says nothing about what the server publishes,
+        # so once no candidate has served a usable document it is surfaced instead (`MetadataUnreachableError`),
+        # as both SDKs do for network errors (the TypeScript SDK outside browsers) and the Python SDK does for server errors.
+        # A body over the response cap is refused outright and never reaches the fallback either.
         # https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#fallbacks-for-servers-without-metadata-discovery
         def locate_authorization_server(server_url:, resource_metadata_url:)
           prm = begin
@@ -383,7 +401,7 @@ module MCP
               server_url: server_url,
               resource_metadata_url: resource_metadata_url,
             )
-          rescue AuthorizationError
+          rescue MetadataNotPublishedError
             nil
           end
 
@@ -504,44 +522,63 @@ module MCP
           first
         end
 
-        # Walks candidate metadata URLs and returns the parsed JSON body of
-        # the first 2xx response. Raises `AuthorizationError` for transport
-        # failures (`Faraday::Error`) and malformed bodies (`JSON::ParserError`)
-        # so callers do not have to handle raw Faraday/JSON exceptions.
+        # Walks candidate metadata URLs and returns the parsed body of the first 2xx response that is a JSON object;
+        # the caller checks its fields. Candidates are tried until one serves such a body, since a later one may still
+        # be usable when an earlier one is broken or down (the URL from `WWW-Authenticate` against the well-known path,
+        # or the OAuth document against the OpenID one). Once the candidates are exhausted, an answer that said nothing
+        # about what is published (a network error, a `5xx`, or a `429`) outranks the rest and raises
+        # `MetadataUnreachableError`; otherwise (any other status, such as a `4xx` other than `429` or a redirect that
+        # was not followed, a body that is not JSON, or not a JSON object) `MetadataNotPublishedError`.
+        # A body over the cap is refused outright by `bounded_request` with a plain `AuthorizationError`,
+        # before any classification. Each failure is listed with its URL stripped of userinfo, query and fragment
+        # and cut to `METADATA_URL_MAX_LENGTH`, but otherwise spelled as requested, so it can be matched against
+        # a server's access log, and with exception text bounded, since the message lands in every log destination
+        # the error passes through.
         def fetch_metadata_json(urls, label:)
-          last_error = nil
+          failures = []
+          inconclusive = false
           urls.each do |url|
             response = begin
               http_get(url)
             rescue Faraday::Error => e
-              last_error = "GET #{url} raised #{e.class}: #{e.message}"
+              detail = bounded_diagnostic(e.message, limit: METADATA_DIAGNOSTIC_MAX_LENGTH)
+              failures << "GET #{reported_url(url)} raised #{[e.class, detail].compact.join(": ")}"
+              inconclusive = true
               next
             end
 
-            if response.status >= 200 && response.status < 300
-              parsed = begin
-                JSON.parse(response_body_string(response))
-              rescue JSON::ParserError => e
-                raise AuthorizationError, "Failed to parse #{label} from #{url}: #{e.message}."
-              end
-
-              # Even valid JSON can be the wrong shape (a top-level array,
-              # a bare `null`, a string, ...). The discovery callers index by
-              # name (`prm["authorization_servers"]`, etc.), so anything that
-              # is not a Hash would raise `TypeError` / `NoMethodError`
-              # downstream. Surface that as `AuthorizationError` instead so
-              # callers see a single, documented error type.
-              unless parsed.is_a?(Hash)
-                raise AuthorizationError,
-                  "#{label} from #{url} is not a JSON object (got #{parsed.class})."
-              end
-
-              return parsed
+            unless response.status >= 200 && response.status < 300
+              failures << "GET #{reported_url(url)} returned #{response.status}"
+              inconclusive = true if response.status >= 500 || response.status == 429
+              next
             end
 
-            last_error = "GET #{url} returned #{response.status}"
+            parsed = begin
+              JSON.parse(response_body_string(response))
+            rescue JSON::ParserError => e
+              detail = bounded_diagnostic(e.message, limit: METADATA_DIAGNOSTIC_MAX_LENGTH) || e.class.name
+              failures << "GET #{reported_url(url)} returned a body that is not JSON: #{detail}"
+              next
+            end
+
+            # Even valid JSON can be the wrong shape (a top-level array, a bare `null`, a string, ...).
+            # The discovery callers index by name (`prm["authorization_servers"]`, etc.), so anything that
+            # is not a Hash would raise `TypeError` / `NoMethodError` downstream.
+            unless parsed.is_a?(Hash)
+              failures << "GET #{reported_url(url)} returned a body that is not a JSON object (got #{parsed.class})"
+              next
+            end
+
+            return parsed
           end
-          raise AuthorizationError, "Failed to fetch #{label}: #{last_error}."
+
+          message = "Failed to fetch #{label}: #{failures.join("; ")}."
+
+          if inconclusive
+            raise MetadataUnreachableError, message
+          else
+            raise MetadataNotPublishedError, message
+          end
         end
 
         def ensure_pkce_supported!(as_metadata)
@@ -1188,8 +1225,8 @@ module MCP
           parsed = {} unless parsed.is_a?(Hash)
 
           error_class = parsed["error"] == "invalid_grant" ? InvalidGrantError : AuthorizationError
-          error = token_endpoint_diagnostic(parsed["error"], limit: TOKEN_ENDPOINT_ERROR_MAX_LENGTH)
-          description = token_endpoint_diagnostic(parsed["error_description"], limit: TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH)
+          error = bounded_diagnostic(parsed["error"], limit: TOKEN_ENDPOINT_ERROR_MAX_LENGTH)
+          description = bounded_diagnostic(parsed["error_description"], limit: TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH)
           message += " #{[error, description].compact.join(": ")}" if error || description
 
           error_class.new(message, http_status: response.status, error: error, error_description: description)
@@ -1198,15 +1235,21 @@ module MCP
           error_class.new("Token endpoint returned status #{response.status}.", http_status: response.status)
         end
 
-        def token_endpoint_diagnostic(value, limit:)
+        def bounded_diagnostic(value, limit:)
           return unless value.is_a?(String)
 
-          # RFC 6749 permits printable ASCII except double quotes and backslashes.
-          # Replace other characters to keep provider text on one log line.
+          # RFC 6749 permits printable ASCII except double quotes and backslashes in token endpoint error fields.
+          # Replace other characters to keep text received off the network on one log line.
           value = value.scrub(" ").gsub(/[^\x20-\x21\x23-\x5B\x5D-\x7E]/, " ").strip
           return if value.empty?
 
           value.length > limit ? "#{value[0, limit - 3]}..." : value
+        end
+
+        # A candidate URL as it goes into a failure string: redacted, and cut so a URL the server chose cannot
+        # grow the message without limit.
+        def reported_url(url)
+          bounded_diagnostic(Discovery.redact_url(url), limit: METADATA_URL_MAX_LENGTH)
         end
 
         # Per RFC 6749 Section 2.3.1, the `client_id` and `client_secret` MUST be

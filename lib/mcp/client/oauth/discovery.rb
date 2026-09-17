@@ -336,6 +336,29 @@ module MCP
             uri.to_s
           end
 
+          # Drops userinfo, query and fragment from `url` and leaves the host and path spelled as given, for reporting
+          # a URL next to the request that failed, where it must still match the server's access log; `URI#to_s`
+          # still lowercases the scheme and drops an explicit default port. Unlike `canonicalize_origin_and_path`
+          # it neither normalizes nor resolves dot segments, so its cost stays linear in the URL length, which matters
+          # for a URL the server chose. A URL that does not parse is not echoed, since the raw value could carry
+          # the very credentials being dropped.
+          def redact_url(url)
+            uri = URI.parse(url.to_s)
+
+            uri.fragment = nil
+            uri.query = nil
+            # `URI::Generic#userinfo=` is a no-op on Ruby 2.7 (the project's minimum supported version),
+            # so clear the components individually.
+            if uri.respond_to?(:user) && (uri.user || uri.password)
+              uri.user = nil
+              uri.password = nil
+            end
+
+            uri.to_s
+          rescue URI::Error
+            "[unparseable URL]"
+          end
+
           # Returns true when `prm` (a PRM `resource` URL) covers `server` (the MCP endpoint URL):
           # same scheme/host/port, with PRM's path being a prefix of the server's path. When PRM
           # also advertises a query string, the server's query MUST be identical to it (otherwise

@@ -259,6 +259,19 @@ module MCP
           )
         end
 
+        def test_redact_url_drops_credentials_query_and_fragment_but_keeps_the_spelling
+          # Reported next to a failed request, the URL must still match the server's access log, so the host
+          # and path are left alone: no lowercasing of the host, no dot-segment resolution, no decoding.
+          assert_equal(
+            "https://Srv.Example.COM:8443/tenant/%2e%2e/prm%2Ejson",
+            Discovery.redact_url("https://user:pass@Srv.Example.COM:8443/tenant/%2e%2e/prm%2Ejson?token=abc#frag"),
+          )
+        end
+
+        def test_redact_url_does_not_echo_a_url_it_cannot_parse
+          assert_equal("[unparseable URL]", Discovery.redact_url("https://user:pass@srv.example.com/pr m.json?token=abc"))
+        end
+
         def test_canonicalize_url_normalizes_query_to_match_faraday
           # Faraday rewrites `env.url` before sending a request: it sorts
           # parameters by name, uppercases percent-encoded hex, and drops
