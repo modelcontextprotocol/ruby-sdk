@@ -917,22 +917,22 @@ module MCP
           stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
         end
 
-        def test_run_falls_back_to_server_origin_metadata_without_prm
-          # Legacy 2025-03-26 shape: no PRM, AS metadata served from the MCP server origin,
-          # OAuth endpoints under a path prefix whose `issuer` differs from the discovery origin.
-          # The legacy path must not apply the RFC 8414 issuer byte-match (the legacy spec predates it).
+        # Legacy 2025-03-26 shape: no PRM, AS metadata served from the MCP server origin with the given `issuer`
+        # and the OAuth endpoints under a path prefix.
+        def stub_legacy_metadata_with_prefixed_endpoints(issuer:, iss_supported: false)
           stub_prm_not_found
           stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
             body: JSON.generate(
-              issuer: "https://srv.example.com/oauth",
+              issuer: issuer,
               authorization_endpoint: "https://srv.example.com/oauth/authorize",
               token_endpoint: "https://srv.example.com/oauth/token",
               registration_endpoint: "https://srv.example.com/oauth/register",
               response_types_supported: ["code"],
               code_challenge_methods_supported: ["S256"],
               token_endpoint_auth_methods_supported: ["none"],
+              authorization_response_iss_parameter_supported: iss_supported,
             ),
           )
           stub_request(:post, "https://srv.example.com/oauth/register").to_return(
@@ -945,6 +945,11 @@ module MCP
             headers: { "Content-Type" => "application/json" },
             body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
           )
+        end
+
+        def test_run_falls_back_to_server_origin_metadata_without_prm
+          # The document names the origin, so the RFC 8414 Section 3.3 check passes and its prefixed endpoints are used.
+          stub_legacy_metadata_with_prefixed_endpoints(issuer: "https://srv.example.com")
 
           holder = {}
           provider = build_legacy_discovery_provider(holder)
@@ -953,9 +958,52 @@ module MCP
 
           assert_equal(:authorized, result)
           assert_equal("legacy-token", provider.access_token)
+          assert_equal("https://srv.example.com", provider.tokens["issuer"])
           assert_equal("/oauth/authorize", holder[:authorization_url].path)
           assert_requested(:post, "https://srv.example.com/oauth/register")
           assert_requested(:post, "https://srv.example.com/oauth/token")
+        end
+
+        def test_run_accepts_legacy_metadata_naming_the_origin_with_a_trailing_slash
+          # A root issuer rendered as `https://host/` names the same server; the TypeScript and Python SDKs accept it too,
+          # and the document's spelling is what the RFC 9207 `iss` and the recorded issuer carry.
+          stub_legacy_metadata_with_prefixed_endpoints(issuer: "https://srv.example.com/", iss_supported: true)
+
+          holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", holder[:state], "https://srv.example.com/"] },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("https://srv.example.com/", provider.tokens["issuer"])
+        end
+
+        def test_run_refuses_legacy_metadata_whose_issuer_is_not_the_origin
+          # RFC 8414 Section 3.3 applies on the legacy path as well: the 2025-03-26 spec places the metadata
+          # at the origin, so an issuer under a path prefix is a mismatch, as it is for the TypeScript and Python SDKs.
+          stub_legacy_metadata_with_prefixed_endpoints(issuer: "https://srv.example.com/oauth")
+
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url)
+          end
+
+          assert_match(/`issuer` does not match/, error.message)
+          assert_nil(holder[:authorization_url])
+          assert_not_requested(:post, "https://srv.example.com/oauth/register")
+          assert_not_requested(:post, "https://srv.example.com/oauth/token")
         end
 
         def test_run_falls_back_to_default_endpoints_without_any_metadata
@@ -1030,6 +1078,98 @@ module MCP
           end
 
           assert_match(/`issuer` does not match/, error.message)
+        end
+
+        # Legacy metadata served at the MCP server origin that claims the identity of another authorization server,
+        # with every endpoint at the origin itself. The claim fails the RFC 8414 check, so none of these endpoints is reached.
+        def stub_legacy_metadata_claiming(issuer)
+          stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: issuer,
+              authorization_endpoint: "https://srv.example.com/authorize",
+              token_endpoint: "https://srv.example.com/token",
+              registration_endpoint: "https://srv.example.com/register",
+              code_challenge_methods_supported: ["S256"],
+            ),
+          )
+          stub_request(:post, "https://srv.example.com/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "legacy-client"),
+          )
+          stub_request(:post, "https://srv.example.com/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
+          )
+        end
+
+        def test_run_refuses_legacy_metadata_claiming_another_authorization_server_before_the_validator
+          stub_legacy_metadata_claiming(@auth_base)
+          recorder = []
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) { recorder << :redirected },
+            callback_handler: -> { ["test-auth-code", "state"] },
+            authorization_request_validator: ->(request) {
+              recorder << request
+              true
+            },
+          )
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url)
+          end
+
+          assert_match(/`issuer` does not match/, error.message)
+          assert_empty(recorder)
+          assert_not_requested(:post, "https://srv.example.com/register")
+          assert_not_requested(:post, "https://srv.example.com/token")
+        end
+
+        def test_refresh_refuses_legacy_metadata_claiming_the_issuer_that_minted_the_tokens
+          # The tokens came from https://auth.example.com; a PRM-less server claiming that issuer at its own origin
+          # must not receive them, so the refresh token stays for the server that issued it.
+          stub_legacy_metadata_claiming(@auth_base)
+          provider = build_legacy_discovery_provider({})
+          provider.save_client_information("client_id" => "conf-client", "client_secret" => "conf-secret")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt", "issuer" => @auth_base)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url)
+          end
+
+          assert_match(/`issuer` does not match/, error.message)
+          assert_not_requested(:post, "https://srv.example.com/token")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_run_does_not_present_client_information_bound_elsewhere_when_legacy_metadata_claims_that_issuer
+          # Client information issued by https://auth.example.com is bound to it (SEP-2352); a PRM-less server claiming
+          # that issuer is refused before the credentials could be presented anywhere.
+          stub_legacy_metadata_claiming(@auth_base)
+          holder = {}
+          provider = build_legacy_discovery_provider(holder)
+          provider.save_client_information("client_id" => "conf-client", "client_secret" => "conf-secret", "issuer" => @auth_base)
+
+          assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url)
+          end
+
+          assert_nil(holder[:authorization_url])
+          assert_not_requested(:post, "https://srv.example.com/register")
+          assert_not_requested(:post, "https://srv.example.com/token")
+          assert_equal("conf-secret", provider.client_information["client_secret"])
+          assert_equal(@auth_base, provider.client_information["issuer"])
         end
 
         def test_run_raises_when_prm_authorization_servers_is_not_an_array

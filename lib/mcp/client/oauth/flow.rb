@@ -361,16 +361,26 @@ module MCP
 
         # Fetches and validates the authorization server's RFC 8414 metadata.
         #
-        # On the modern path the metadata `issuer` must be byte-identical to the discovery URL (RFC 8414 Section 3.3).
-        # On the legacy 2025-03-26 path that validation is skipped: the legacy spec predates the requirement,
-        # and a pre-PRM server may host its OAuth endpoints under a path prefix whose `issuer` legitimately differs from
-        # the origin the metadata was discovered at (neither the TypeScript nor the Python SDK validates the issuer on this path).
+        # The metadata `issuer` must be byte-identical to the discovery URL (RFC 8414 Section 3.3) on both paths.
+        # On the legacy 2025-03-26 path the discovery URL is the MCP server's origin, which that spec names as
+        # the authorization base URL and which a document may render with a trailing slash; the TypeScript and Python SDKs
+        # accept the same slash-only difference. A document naming any other issuer is refused: an unverified `issuer`
+        # would otherwise become the identity tokens and client information are bound to, assertions are minted for,
+        # and the validator is shown, so a server could claim another authorization server and unlock the credentials
+        # bound to it.
         # When even the metadata document is absent, the legacy spec's default endpoints are used.
         def authorization_server_metadata(authorization_server:, legacy:, server_url:)
           metadata = if legacy
-            begin
+            fetched = begin
               fetch_authorization_server_metadata(issuer_url: authorization_server)
             rescue AuthorizationError
+              nil
+            end
+
+            if fetched
+              ensure_legacy_issuer_matches!(expected: authorization_server, returned: fetched["issuer"])
+              fetched
+            else
               default_legacy_metadata(authorization_server)
             end
           else
@@ -413,6 +423,14 @@ module MCP
         def fetch_authorization_server_metadata(issuer_url:)
           urls = Discovery.authorization_server_metadata_urls(issuer_url)
           fetch_metadata_json(urls, label: "authorization server metadata")
+        end
+
+        # The legacy authorization base is an origin, which a document may render as `https://host/`;
+        # both name the same server, and nothing else does.
+        def ensure_legacy_issuer_matches!(expected:, returned:)
+          return if returned == "#{expected}/"
+
+          ensure_issuer_matches!(expected: expected, returned: returned)
         end
 
         # Reads `authorization_servers` from a PRM document and returns
