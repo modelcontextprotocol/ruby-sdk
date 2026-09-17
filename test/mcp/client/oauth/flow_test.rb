@@ -991,6 +991,75 @@ module MCP
           end
         end
 
+        def test_run_client_credentials_without_prm_uses_the_legacy_authorization_base
+          # A PRM-less server takes the legacy path for this grant too: metadata at the origin, no advertised scopes,
+          # so the provider's own scope is used and the tokens are bound to the origin.
+          stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: "https://srv.example.com",
+              token_endpoint: "https://srv.example.com/token",
+              token_endpoint_auth_methods_supported: ["client_secret_basic"],
+            ),
+          )
+          stub_request(:post, "https://srv.example.com/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
+          )
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", scope: "mcp:read")
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url)
+
+          assert_equal(:authorized, result)
+          assert_equal("legacy-token", provider.access_token)
+          assert_equal("https://srv.example.com", provider.tokens["issuer"])
+          assert_requested(:post, "https://srv.example.com/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "client_credentials" &&
+              form["scope"] == "mcp:read" &&
+              form["resource"] == "https://srv.example.com/mcp"
+          end
+        end
+
+        def test_run_jwt_bearer_without_any_metadata_uses_the_legacy_default_endpoints
+          stub_prm_not_found
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-authorization-server").to_return(status: 404)
+          stub_request(:get, "https://srv.example.com/.well-known/openid-configuration").to_return(status: 404)
+          stub_request(:post, "https://srv.example.com/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "legacy-token", token_type: "Bearer", expires_in: 3600),
+          )
+          received = nil
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(audience:, resource:) {
+              received = { audience: audience, resource: resource }
+              "id-jag-assertion"
+            },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url)
+
+          assert_equal(:authorized, result)
+          # The assertion is minted for the legacy authorization base, which is the only identity such a server has.
+          assert_equal({ audience: "https://srv.example.com", resource: "https://srv.example.com/mcp" }, received)
+          assert_equal("https://srv.example.com", provider.tokens["issuer"])
+          assert_requested(:post, "https://srv.example.com/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer" &&
+              form["assertion"] == "id-jag-assertion" &&
+              form["resource"] == "https://srv.example.com/mcp" &&
+              !form.key?("scope")
+          end
+        end
+
         def test_run_legacy_fallback_rejects_insecure_authorization_base
           # The Communication Security requirement still applies on the legacy path: a remote plain-http origin must not
           # become the authorization base URL.
