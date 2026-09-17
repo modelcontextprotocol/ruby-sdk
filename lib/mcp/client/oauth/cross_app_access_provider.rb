@@ -29,6 +29,8 @@ module MCP
       #   the authorization server requires beyond the grant itself. A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS` raises
       #   `Flow::InvalidTokenRequestParamsError`. The Hash is copied and frozen.
       #   See `StorageBackedProvider#token_request_params`.
+      # - `http_client_customizer` - Callable invoked with the `Faraday::Connection` the flow builds for its own requests;
+      #   see `StorageBackedProvider#http_client_customizer`.
       #
       # https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990
       class CrossAppAccessProvider
@@ -46,7 +48,8 @@ module MCP
           scope: nil,
           storage: nil,
           authorization_request_validator: nil,
-          token_request_params: nil
+          token_request_params: nil,
+          http_client_customizer: nil
         )
           if blank?(client_id)
             raise InvalidConfigurationError, "client_id is required for the jwt-bearer grant."
@@ -60,11 +63,14 @@ module MCP
             raise InvalidConfigurationError, "assertion_provider must be callable as `call(audience:, resource:)` and return the ID-JAG assertion."
           end
 
+          http_client_customizer = validated_http_client_customizer(http_client_customizer)
+
           @assertion_provider = assertion_provider
           @scope = scope
           @storage = storage || InMemoryStorage.new
           @authorization_request_validator = authorization_request_validator
           @token_request_params = frozen_token_request_params(token_request_params)
+          @http_client_customizer = http_client_customizer
           @storage.save_client_information(
             "client_id" => client_id,
             "client_secret" => client_secret,

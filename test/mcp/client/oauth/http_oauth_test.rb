@@ -11,6 +11,46 @@ module MCP
   class Client
     module OAuth
       class HTTPOAuthTest < Minitest::Test
+        # Records `[method, url]` for every request that passes through, standing in for the tracing
+        # middleware an application adds through `http_client_customizer`.
+        class RecordingMiddleware
+          def initialize(app, log)
+            @app = app
+            @log = log
+          end
+
+          def call(env)
+            @log << [env.method, env.url.to_s]
+            @app.call(env)
+          end
+        end
+
+        # Sends the request for `from` to `to` instead, the shape redirect-following middleware leaves behind.
+        class URLRewritingMiddleware
+          def initialize(app, from:, to:)
+            @app = app
+            @from = from
+            @to = to
+          end
+
+          def call(env)
+            env.url = URI(@to) if env.url.to_s == @from
+            @app.call(env)
+          end
+        end
+
+        # Hands the next middleware an environment rebuilt from Faraday's own members only, dropping whatever
+        # an earlier middleware recorded on the original.
+        class EnvRebuildingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            @app.call(Faraday::Env.from(env.to_h))
+          end
+        end
+
         def setup
           WebMock.enable!
           @mcp_url = "https://srv.example.com/mcp"
@@ -99,6 +139,91 @@ module MCP
 
           assert_equal({ "ok" => true }, response["result"])
           assert_equal("test-token-after-flow", provider.access_token)
+        end
+
+        def test_send_request_runs_the_oauth_flow_through_the_provider_customizer
+          stub_request(:post, @mcp_url).with { |req|
+            req.headers["Authorization"].nil?
+          }.to_return(
+            status: 401,
+            headers: {
+              "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}"),
+            },
+            body: "",
+          )
+
+          stub_request(:post, @mcp_url).with(
+            headers: { "Authorization" => "Bearer test-token-after-flow" }
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+          )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "test-client"),
+          )
+
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "test-token-after-flow", token_type: "Bearer", expires_in: 3600),
+          )
+
+          log = []
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              client_name: "ruby-sdk-test",
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) {
+              state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state")
+            },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            http_client_customizer: ->(faraday) { faraday.use(RecordingMiddleware, log) },
+          )
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+
+          assert_equal({ "ok" => true }, response["result"])
+          assert_equal(
+            [
+              [:get, @prm_url],
+              [:get, "#{@auth_base}/.well-known/oauth-authorization-server"],
+              [:post, "#{@auth_base}/register"],
+              [:post, "#{@auth_base}/token"],
+            ],
+            log,
+          )
         end
 
         def test_send_request_does_not_follow_a_resource_metadata_challenge_off_the_server_origin
@@ -676,6 +801,94 @@ module MCP
           refute(redirected)
           assert_not_requested(:post, "#{@auth_base}/token")
           assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_send_request_surfaces_a_refused_refresh_without_falling_back
+          # A customizer middleware that would carry the refresh request off the origin is refused before
+          # the request leaves, and that refusal is not one of the failures that start the interactive flow
+          # or discard the stored tokens.
+          stub_request(:post, @mcp_url).to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+          stub_request(:post, "https://other.example.com/token").to_raise(StandardError.new("the rewritten request must not leave."))
+
+          provider = build_provider(
+            http_client_customizer: ->(faraday) {
+              faraday.use(URLRewritingMiddleware, from: "#{@auth_base}/token", to: "https://other.example.com/token")
+            },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-token", "refresh_token" => "saved-rt")
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+
+          assert_raises(MCP::Client::OAuth::Flow::DestinationMismatchError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+          end
+
+          assert_not_requested(:post, "https://other.example.com/token")
+          assert_not_requested(:post, "#{@auth_base}/token")
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_send_request_surfaces_a_refresh_whose_environment_was_rebuilt_without_falling_back
+          # The missing-record refusal takes the same route as the origin mismatch: out of `send_request`,
+          # with no interactive fallback and the stored tokens intact.
+          stub_request(:post, @mcp_url).to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+          stub_request(:get, @prm_url).to_raise(StandardError.new("the rebuilt request must not leave."))
+          stub_request(:post, "#{@auth_base}/register").to_raise(StandardError.new("DCR should not be called."))
+
+          interactive_flow_started = false
+          provider = Provider.new(
+            client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(_url) { interactive_flow_started = true },
+            callback_handler: -> { ["code", "state"] },
+            http_client_customizer: ->(faraday) { faraday.use(EnvRebuildingMiddleware) },
+          )
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-token", "refresh_token" => "saved-rt")
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+
+          error = assert_raises(MCP::Client::OAuth::Flow::DestinationMismatchError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+          end
+
+          assert_match(/carries no record of the URL the flow asked for/, error.message)
+          refute(interactive_flow_started, "the refusal must not fall back to the interactive flow")
+          assert_not_requested(:get, @prm_url)
+          assert_not_requested(:post, "#{@auth_base}/token")
+          assert_not_requested(:post, "#{@auth_base}/register")
+          assert_equal({ "access_token" => "stale-token", "refresh_token" => "saved-rt" }, provider.tokens)
         end
 
         def test_send_request_preserves_refresh_token_when_refresh_hits_a_transient_failure
@@ -1656,12 +1869,13 @@ module MCP
           provider
         end
 
-        def build_provider
+        def build_provider(http_client_customizer: nil)
           Provider.new(
             client_metadata: { redirect_uris: ["http://localhost:0/callback"] },
             redirect_uri: "http://localhost:0/callback",
             redirect_handler: ->(_url) {},
             callback_handler: -> { ["code", "state"] },
+            http_client_customizer: http_client_customizer,
           )
         end
       end

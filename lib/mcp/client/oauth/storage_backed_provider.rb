@@ -28,6 +28,13 @@ module MCP
         # with `Flow::InvalidTokenRequestParamsError`.
         attr_reader :token_request_params
 
+        # Optional callable invoked with the `Faraday::Connection` the flow builds for its own requests,
+        # after the SDK's defaults and before its origin guard (see `Flow.build_http_client`), so an application can
+        # add middleware to discovery, registration, and token requests or swap their adapter. `nil` (the default)
+        # keeps the default connection. The transport's own connection and customizer block never serve these requests:
+        # they are bound to the MCP server URL and carry headers meant for that server.
+        attr_reader :http_client_customizer
+
         def access_token
           tokens&.dig("access_token") || tokens&.dig(:access_token)
         end
@@ -65,6 +72,14 @@ module MCP
           raise Flow::InvalidTokenRequestParamsError, "token_request_params #{problem}" if problem
 
           params.each_with_object({}) { |(key, value), copy| copy[key.dup.freeze] = value.dup.freeze }.freeze
+        end
+
+        # Returns `customizer` when it is `nil` or callable and raises otherwise, so a connection object passed
+        # in place of a callable fails at construction rather than at the first `401`.
+        def validated_http_client_customizer(customizer)
+          return customizer if customizer.nil? || customizer.respond_to?(:call)
+
+          raise ArgumentError, "http_client_customizer must respond to call (got #{customizer.class})."
         end
       end
     end

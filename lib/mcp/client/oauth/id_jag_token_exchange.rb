@@ -95,7 +95,7 @@ module MCP
             assertion
           end
 
-          # `Accept-Encoding` is deliberately left unset, for the same reason as `Flow#default_http_client`:
+          # `Accept-Encoding` is deliberately left unset, for the same reason as `Flow.build_http_client`:
           # claiming that header turns Net::HTTP's `decode_content` off and would move `BoundedBody`'s cap
           # onto compressed bytes.
           def default_http_client
