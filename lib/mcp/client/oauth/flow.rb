@@ -131,7 +131,7 @@ module MCP
 
           ensure_pkce_supported!(as_metadata)
 
-          effective_scope = resolve_scope(scope: scope, prm: prm || {})
+          effective_scope = resolve_scope(scope: scope, prm: prm)
           effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
 
           # Asked before registering, not after: a refusal must not leave this client registered at an authorization server
@@ -960,7 +960,8 @@ module MCP
         def resolve_scope(scope:, prm:)
           return scope if scope && !scope.empty?
 
-          supported = prm["scopes_supported"]
+          # `prm` is nil on the legacy path, where nothing advertises scopes.
+          supported = prm && prm["scopes_supported"]
           return supported.join(" ") if supported.is_a?(Array) && !supported.empty?
 
           return @provider.scope if @provider.scope && !@provider.scope.empty?
