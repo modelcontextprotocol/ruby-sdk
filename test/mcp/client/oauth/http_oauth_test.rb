@@ -627,6 +627,68 @@ module MCP
           assert_equal("refreshed-token", provider.access_token)
         end
 
+        def test_send_request_refreshes_for_a_cross_app_access_provider_holding_a_refresh_token
+          # Refresh serves every provider, not only the authorization-code one that has a CIMD URL reader.
+          stub_request(:post, @mcp_url).with { |req|
+            req.headers["Authorization"] != "Bearer refreshed-token"
+          }.to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+
+          stub_request(:post, @mcp_url).with(
+            headers: { "Authorization" => "Bearer refreshed-token" }
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+          )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              token_endpoint: "#{@auth_base}/token",
+              grant_types_supported: ["urn:ietf:params:oauth:grant-type:jwt-bearer", "refresh_token"],
+              token_endpoint_auth_methods_supported: ["client_secret_basic"],
+            ),
+          )
+
+          stub_request(:post, "#{@auth_base}/token").with(
+            body: hash_including("grant_type" => "refresh_token", "refresh_token" => "saved-rt")
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "refreshed-token", token_type: "Bearer", expires_in: 3600),
+          )
+
+          assertion_calls = 0
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) {
+              assertion_calls += 1
+              "id-jag-assertion"
+            },
+          )
+          provider.save_tokens("access_token" => "stale-token", "refresh_token" => "saved-rt", "issuer" => @auth_base)
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+
+          assert_equal({ "ok" => true }, response["result"])
+          assert_equal("refreshed-token", provider.access_token)
+          assert_equal(0, assertion_calls)
+        end
+
         def test_send_request_surfaces_a_bad_token_request_params_hook_instead_of_reauthorizing
           # A provider whose `token_request_params` names a reserved key is misconfigured, not unauthorized:
           # the refresh attempt must raise rather than fall through to the interactive flow,

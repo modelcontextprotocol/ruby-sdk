@@ -557,6 +557,138 @@ module MCP
           assert_not_requested(:post, "#{@auth_base}/token")
         end
 
+        def test_refresh_uses_the_stored_credentials_of_a_cross_app_access_provider
+          # RFC 7521 Section 4.1 makes a refresh token unusual for an assertion grant, not forbidden;
+          # when the authorization server issued one, it is exchanged with the stored client secret
+          # and no new ID-JAG assertion is minted.
+          assertion_calls = 0
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) {
+              assertion_calls += 1
+              "id-jag-assertion"
+            },
+          )
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt", "issuer" => @auth_base)
+
+          result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:refreshed, result)
+          assert_equal("test-token-from-flow", provider.access_token)
+          assert_equal(@auth_base, provider.tokens["issuer"])
+          assert_equal(0, assertion_calls)
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "refresh_token" &&
+              form["refresh_token"] == "saved-rt" &&
+              !form.key?("assertion") &&
+              req.headers["Authorization"] == "Basic " + Base64.strict_encode64("xaa-client:xaa-secret")
+          end
+        end
+
+        def test_refresh_uses_the_stored_credentials_of_a_client_credentials_provider
+          # RFC 6749 Section 4.4.3 says a refresh token SHOULD NOT be issued for this grant,
+          # so one in storage is unusual, but it must be exchanged rather than crash the refresh.
+          provider = client_credentials_provider
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt", "issuer" => @auth_base)
+
+          result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:refreshed, result)
+          assert_equal(@auth_base, provider.tokens["issuer"])
+          assert_requested(:post, "#{@auth_base}/token") do |req|
+            form = URI.decode_www_form(req.body).to_h
+
+            form["grant_type"] == "refresh_token" &&
+              form["refresh_token"] == "saved-rt" &&
+              req.headers["Authorization"] == "Basic " + Base64.strict_encode64("cc-client:cc-secret")
+          end
+        end
+
+        def test_refresh_refuses_an_authorization_server_that_did_not_issue_a_cross_app_access_token
+          # The token-level issuer binding is what protects these providers: their stored `client_information` carries no `issuer`,
+          # so `ensure_refreshable_client_information!` has nothing to compare.
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag-assertion" },
+          )
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt", "issuer" => "https://old-as.example.com")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/issued by a different authorization server/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_refuses_tokens_without_a_recorded_issuer_for_the_client_credentials_and_jwt_bearer_providers
+          # These providers had no refresh before their tokens recorded the issuer, so nothing older needs
+          # tolerating; without the record a refresh would go to whatever server discovery names, unasked.
+          cross_app = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag-assertion" },
+          )
+          [cross_app, client_credentials_provider].each do |provider|
+            provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+            error = assert_raises(Flow::AuthorizationError, "should refuse #{provider.class}") do
+              Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+            end
+
+            assert_match(/record no issuer/, error.message)
+            assert_equal("saved-rt", provider.tokens["refresh_token"])
+          end
+
+          assert_not_requested(:get, @prm_url)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_refresh_raises_cleanly_for_a_provider_with_neither_client_information_nor_a_cimd_url
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag-assertion" },
+          )
+          provider.storage.save_client_information(nil)
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt", "issuer" => @auth_base)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/no client_information/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_registers_through_dcr_for_a_provider_without_a_cimd_url_reader
+          # Registration reads the CIMD URL through the same duck-typed helper as refresh,
+          # so a provider that lacks the reader goes to Dynamic Client Registration.
+          provider_class = Class.new(Provider) { undef_method :client_id_metadata_document_url }
+          state_value = nil
+          provider = provider_class.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { state_value = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_value] },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:post, "#{@auth_base}/register")
+        end
+
         def test_run_uses_authorization_code_grant_for_default_provider
           # A standard `Provider` declares `authorization_flow == :authorization_code`,
           # so `Flow` runs the interactive grant regardless of what `client_metadata[:grant_types]` happens to list.

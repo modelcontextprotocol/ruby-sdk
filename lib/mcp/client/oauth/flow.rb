@@ -182,7 +182,7 @@ module MCP
         # Runs the OAuth 2.1 `client_credentials` grant (machine-to-machine, no user interaction) and persists
         # the resulting token. Shares the same discovery and security checks as `run!`; the only difference is
         # the grant exchanged at the token endpoint. There is no PKCE, redirect, or authorization request,
-        # and no `offline_access` augmentation because the grant does not issue a refresh token (OAuth 2.1 Section 4.3.3).
+        # and no `offline_access` augmentation because the grant is not expected to issue a refresh token (OAuth 2.1 Section 4.3.3).
         # The pre-registered `client_id` / `client_secret` come from the provider's stored `client_information`.
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
         def run_client_credentials!(as_metadata:, prm:, resource:, scope:, server_url:)
@@ -275,11 +275,14 @@ module MCP
         # checks before talking to it.
         #
         # Returns `:refreshed` on success. Raises `AuthorizationError` when the provider has no refresh token, no client information,
+        # when a `client_credentials` or `jwt-bearer` provider's tokens record no issuer,
         # or when the token endpoint refuses the refresh request.
         # https://www.rfc-editor.org/rfc/rfc6749#section-6
         def refresh!(server_url:, resource_metadata_url: nil)
           refresh_token = read_token("refresh_token")
           raise AuthorizationError, "Cannot refresh: no refresh_token in provider storage." unless refresh_token
+
+          ensure_refresh_token_issuer_recorded!
 
           stored_client_info = @provider.client_information
           have_stored_client_info = stored_client_info.is_a?(Hash) && client_info_required_value(stored_client_info, "client_id")
@@ -287,7 +290,7 @@ module MCP
           # A CIMD-configured provider stores no `client_information` on purpose
           # (the CIMD URL is re-resolved against the live AS metadata on every flow).
           # Allow refresh to proceed in that case so the `refresh_token` obtained via the CIMD flow remains usable.
-          have_cimd_url = !@provider.client_id_metadata_document_url.nil?
+          have_cimd_url = !provider_client_id_metadata_document_url.nil?
 
           unless have_stored_client_info || have_cimd_url
             raise AuthorizationError, "Cannot refresh: no client_information in provider storage."
@@ -323,7 +326,7 @@ module MCP
             ensure_refreshable_client_information!(stored_client_info, as_metadata: as_metadata)
             stored_client_info
           elsif as_metadata["client_id_metadata_document_supported"] == true
-            { "client_id" => @provider.client_id_metadata_document_url }
+            { "client_id" => provider_client_id_metadata_document_url }
           else
             raise AuthorizationError,
               "Cannot refresh: provider has a CIMD URL but the authorization server no longer advertises " \
@@ -702,7 +705,7 @@ module MCP
           # (or the operator may rotate the CIMD URL), and a stale `client_information` entry would otherwise
           # keep sending the old CIMD URL forever. Re-evaluating on every flow re-reads the current AS metadata
           # and the current `provider.client_id_metadata_document_url`.
-          cimd_url = @provider.client_id_metadata_document_url
+          cimd_url = provider_client_id_metadata_document_url
           if cimd_url && as_metadata["client_id_metadata_document_supported"] == true
             return { "client_id" => cimd_url }
           end
@@ -830,6 +833,18 @@ module MCP
             Cannot refresh: the stored tokens were issued by a different authorization server (stored issuer #{stored_issuer.inspect}, \
             current #{as_metadata["issuer"].inspect}); re-authorization is required.
           MESSAGE
+        end
+
+        # `Provider` tolerates tokens stored before the issuer was recorded (see `ensure_token_issuer!`).
+        # The `client_credentials` and `jwt-bearer` providers have no such tokens, since their refresh is new,
+        # and a refresh asks no validator, so a token without an `issuer` would be presented to whatever
+        # authorization server discovery names now. Refusing it sends the transport back through the grant,
+        # which does ask.
+        def ensure_refresh_token_issuer_recorded!
+          return if provider_authorization_flow == :authorization_code
+          return unless read_token("issuer").nil?
+
+          raise AuthorizationError, "Cannot refresh: the stored tokens record no issuer; re-authorization is required."
         end
 
         def ensure_refreshable_client_information!(client_info, as_metadata:)
@@ -1037,6 +1052,15 @@ module MCP
           raise InvalidTokenRequestParamsError, "The provider's token_request_params #{problem}" if problem
 
           params
+        end
+
+        # The Client ID Metadata Document URL, when the provider has one. Only `Provider` exposes the reader
+        # (CIMD replaces Dynamic Client Registration on the authorization-code flow), while `refresh!` serves
+        # every provider that holds a `refresh_token`, so the read is duck-typed like `authorization_flow`.
+        def provider_client_id_metadata_document_url
+          return unless @provider.respond_to?(:client_id_metadata_document_url)
+
+          @provider.client_id_metadata_document_url
         end
 
         def build_authorization_url(as_metadata:, client_id:, scope:, state:, code_challenge:, resource:)
