@@ -48,6 +48,11 @@ module MCP
       #   The document served at the URL is a separate JSON artifact from the `client_metadata` keyword:
       #   DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include `client_id` set
       #   to the URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
+      # - `token_request_params` - Hash of String keys and values added to every token request this provider makes
+      #   (the authorization code exchange and refresh), for parameters the authorization server requires beyond
+      #   the grant itself. The authorization request is not affected. A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS`
+      #   raises `Flow::InvalidTokenRequestParamsError`.
+      #   The Hash is copied and frozen. See `StorageBackedProvider#token_request_params`.
       class Provider
         include StorageBackedProvider
 
@@ -87,7 +92,8 @@ module MCP
           scope: nil,
           storage: nil,
           client_id_metadata_document_url: nil,
-          authorization_request_validator: nil
+          authorization_request_validator: nil,
+          token_request_params: nil
         )
           unless Discovery.secure_url?(redirect_uri)
             raise InsecureRedirectURIError,
@@ -117,6 +123,7 @@ module MCP
           @storage = storage || InMemoryStorage.new
           @client_id_metadata_document_url = client_id_metadata_document_url
           @authorization_request_validator = authorization_request_validator
+          @token_request_params = frozen_token_request_params(token_request_params)
         end
 
         # Identifies the OAuth flow this provider drives.

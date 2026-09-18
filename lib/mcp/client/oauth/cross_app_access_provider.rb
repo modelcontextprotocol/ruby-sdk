@@ -25,6 +25,10 @@ module MCP
       #   the Protected Resource Metadata do not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`, `client_information`, and `save_client_information(info)`.
       #   Defaults to an `InMemoryStorage`.
+      # - `token_request_params` - Hash of String keys and values added to the `jwt-bearer` token request, for parameters
+      #   the authorization server requires beyond the grant itself. A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS` raises
+      #   `Flow::InvalidTokenRequestParamsError`. The Hash is copied and frozen.
+      #   See `StorageBackedProvider#token_request_params`.
       #
       # https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990
       class CrossAppAccessProvider
@@ -35,7 +39,15 @@ module MCP
 
         attr_reader :scope, :storage
 
-        def initialize(client_id:, client_secret:, assertion_provider:, scope: nil, storage: nil, authorization_request_validator: nil)
+        def initialize(
+          client_id:,
+          client_secret:,
+          assertion_provider:,
+          scope: nil,
+          storage: nil,
+          authorization_request_validator: nil,
+          token_request_params: nil
+        )
           if blank?(client_id)
             raise InvalidConfigurationError, "client_id is required for the jwt-bearer grant."
           end
@@ -52,6 +64,7 @@ module MCP
           @scope = scope
           @storage = storage || InMemoryStorage.new
           @authorization_request_validator = authorization_request_validator
+          @token_request_params = frozen_token_request_params(token_request_params)
           @storage.save_client_information(
             "client_id" => client_id,
             "client_secret" => client_secret,

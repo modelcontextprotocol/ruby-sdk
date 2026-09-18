@@ -7,6 +7,23 @@ module MCP
   class Client
     module OAuth
       class ClientCredentialsProviderTest < Minitest::Test
+        # Every parameter the flow sets on a token request, spelled out rather than read from
+        # `Flow::RESERVED_TOKEN_REQUEST_PARAMS`, so a key dropped from that constant fails here.
+        RESERVED_TOKEN_REQUEST_PARAMS = [
+          "grant_type",
+          "client_id",
+          "client_secret",
+          "client_assertion",
+          "client_assertion_type",
+          "scope",
+          "resource",
+          "code",
+          "code_verifier",
+          "redirect_uri",
+          "refresh_token",
+          "assertion",
+        ].freeze
+
         def test_initialize_stores_credentials_as_client_information
           provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret")
 
@@ -159,6 +176,90 @@ module MCP
           assert_equal("cc-client", claims["iss"])
           assert_equal("cc-client", claims["sub"])
           assert_equal("https://auth.example.com", claims["aud"])
+        end
+
+        def test_token_request_params_is_nil_by_default
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret")
+
+          assert_nil(provider.token_request_params)
+        end
+
+        def test_initialize_keeps_a_frozen_copy_of_token_request_params
+          params = { "audience" => +"https://api.example.com" }
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", token_request_params: params)
+
+          params["audience"] << "/changed"
+          params["organization"] = "org_123"
+
+          assert_equal({ "audience" => "https://api.example.com" }, provider.token_request_params)
+          assert_predicate(provider.token_request_params, :frozen?)
+          assert_predicate(provider.token_request_params["audience"], :frozen?)
+        end
+
+        def test_initialize_rejects_token_request_params_that_the_sdk_sets_itself
+          RESERVED_TOKEN_REQUEST_PARAMS.each do |key|
+            error = assert_raises(Flow::InvalidTokenRequestParamsError, "should reject #{key.inspect}") do
+              ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", token_request_params: { key => "x" })
+            end
+
+            assert_includes(error.message, key.inspect)
+          end
+        end
+
+        def test_initialize_rejects_token_request_params_that_are_not_a_hash_of_strings
+          ["audience=x", { audience: "x" }, { "audience" => 1 }, { "audience" => nil }].each do |params|
+            assert_raises(Flow::InvalidTokenRequestParamsError, "should reject #{params.inspect}") do
+              ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", token_request_params: params)
+            end
+          end
+        end
+
+        def test_initialize_rejects_token_request_params_that_compare_keys_by_identity
+          # Two equal keys are two entries in such a Hash and would silently collapse into one when copied.
+          error = assert_raises(Flow::InvalidTokenRequestParamsError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              client_secret: "cc-secret",
+              token_request_params: { "audience" => "x" }.compare_by_identity,
+            )
+          end
+
+          assert_match(/identity/, error.message)
+        end
+
+        def test_initialize_copies_keys_that_hash_would_share_with_the_caller
+          # `Hash` copies and freezes only keys whose class is exactly `String`; a subclass key would otherwise
+          # stay shared with the caller, and a later `replace` would turn it into a reserved name.
+          key = Class.new(String).new("audience")
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", token_request_params: { key => "x" })
+
+          key.replace("grant_type")
+
+          assert_equal({ "audience" => "x" }, provider.token_request_params)
+          refute_same(key, provider.token_request_params.keys.first)
+          assert_predicate(provider.token_request_params.keys.first, :frozen?)
+        end
+
+        def test_initialize_keeps_empty_token_request_params_as_a_frozen_empty_hash
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", token_request_params: {})
+
+          assert_equal({}, provider.token_request_params)
+          assert_predicate(provider.token_request_params, :frozen?)
+        end
+
+        def test_initialize_writes_no_client_information_when_token_request_params_are_rejected
+          storage = InMemoryStorage.new
+
+          assert_raises(Flow::InvalidTokenRequestParamsError) do
+            ClientCredentialsProvider.new(
+              client_id: "cc-client",
+              client_secret: "cc-secret",
+              storage: storage,
+              token_request_params: { "grant_type" => "password" },
+            )
+          end
+
+          assert_nil(storage.client_information)
         end
       end
     end

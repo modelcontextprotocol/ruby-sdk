@@ -17,6 +17,23 @@ module MCP
         TOKEN_ENDPOINT_ERROR_MAX_LENGTH = 128
         TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH = 512
 
+        # Token request parameters the flow sets itself. Its values win over a provider's `token_request_params`,
+        # so a provider naming one of these is refused rather than left believing its value was sent.
+        RESERVED_TOKEN_REQUEST_PARAMS = [
+          "grant_type",
+          "client_id",
+          "client_secret",
+          "client_assertion",
+          "client_assertion_type",
+          "scope",
+          "resource",
+          "code",
+          "code_verifier",
+          "redirect_uri",
+          "refresh_token",
+          "assertion",
+        ].freeze
+
         class AuthorizationError < StandardError
           attr_reader :http_status, :error, :error_description
 
@@ -39,6 +56,33 @@ module MCP
         # so that a caller can tell a refusal by its own policy from a network, discovery,
         # or authorization server metadata failure by rescuing a class rather than by matching the message text.
         class AuthorizationRefusedError < AuthorizationError; end
+
+        # Raised for a `token_request_params` value the SDK refuses: a reserved key, a Hash comparing keys by identity,
+        # or anything but a Hash of Strings. An `ArgumentError` because the value is a configuration mistake,
+        # not a failed authorization, and deliberately outside `AuthorizationError`, which `MCP::Client::HTTP` treats on
+        # a failed refresh as a reason to run the interactive flow.
+        class InvalidTokenRequestParamsError < ArgumentError; end
+
+        class << self
+          # Returns why `params` cannot ride a token request as `token_request_params`, or `nil` when it can.
+          # Shared by the provider constructors and the flow, which both refuse the value with `InvalidTokenRequestParamsError`,
+          # so the same problem reads the same wherever it surfaces.
+          def token_request_params_problem(params)
+            return "must be a Hash (got #{params.class})." unless params.is_a?(Hash)
+
+            # Two equal keys are two entries here, which would be sent twice from a provider method
+            # or silently collapse into one when the constructors copy the Hash.
+            return "must not compare keys by identity." if params.compare_by_identity?
+
+            params.each do |key, value|
+              return "keys must be Strings (got #{key.class})." unless key.is_a?(String)
+              return "values must be Strings (got #{value.class} for #{key.inspect})." unless value.is_a?(String)
+              return "must not set #{key.inspect}, which the SDK sets itself." if RESERVED_TOKEN_REQUEST_PARAMS.include?(key)
+            end
+
+            nil
+          end
+        end
 
         def initialize(provider:, http_client_factory: nil)
           @provider = provider
@@ -960,6 +1004,22 @@ module MCP
           @provider.authorization_flow
         end
 
+        # Parameters the provider adds to every token request it makes (RFC 6749 Section 8.2 leaves room for them;
+        # Auth0's `audience` is the usual one). Duck-typed like `authorization_flow`, so a provider without the method,
+        # or one returning `nil`, adds nothing.
+        # A bad value raises `InvalidTokenRequestParamsError`, as the provider constructors do.
+        def provider_token_request_params
+          return {} unless @provider.respond_to?(:token_request_params)
+
+          params = @provider.token_request_params
+          return {} if params.nil?
+
+          problem = self.class.token_request_params_problem(params)
+          raise InvalidTokenRequestParamsError, "The provider's token_request_params #{problem}" if problem
+
+          params
+        end
+
         def build_authorization_url(as_metadata:, client_id:, scope:, state:, code_challenge:, resource:)
           authorization_endpoint = as_metadata["authorization_endpoint"]
           unless authorization_endpoint
@@ -1012,6 +1072,9 @@ module MCP
         # Submits a form-encoded token request using the authentication method
         # stored in `client_information`. The method determines whether client
         # credentials belong in the form body, a Basic header, or a JWT assertion.
+        # A provider's `token_request_params` go underneath the flow's own parameters,
+        # which therefore win, and are refused before the request is sent when they name
+        # a reserved parameter or are not a Hash of Strings.
         def post_to_token_endpoint(as_metadata:, client_info:, form:)
           client_id = client_info_required_value(client_info, "client_id")
           unless client_id
@@ -1021,6 +1084,7 @@ module MCP
 
           client_secret = client_info_required_value(client_info, "client_secret")
           token_endpoint_auth_method = client_info_value(client_info, "token_endpoint_auth_method")
+          form = provider_token_request_params.merge(form)
 
           # Apply one client authentication method per request (RFC 6749 Section 2.3).
           headers = {}

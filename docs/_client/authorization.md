@@ -112,6 +112,14 @@ Optional keyword arguments:
   served at the URL is a separate JSON artifact from the `client_metadata` keyword above:
   the DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include
   `client_id` set to the document URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
+- `token_request_params`: Hash of String keys and values added to every token request the provider makes,
+  for parameters the authorization server requires beyond the grant itself, such as Auth0's `audience`.
+  Defaults to `nil`, which adds nothing. The authorization request is not affected.
+  A key the SDK sets itself (listed in `Flow::RESERVED_TOKEN_REQUEST_PARAMS`), a Hash that compares keys by identity,
+  or a value that is not a Hash of Strings is refused with `Flow::InvalidTokenRequestParamsError`, a subclass of `ArgumentError`,
+  when the provider is built, and the accepted Hash is copied and frozen.
+  Any provider that defines a `token_request_params` method gets the same treatment on every token request it makes;
+  the flow checks the returned value by the same rules and raises the same error before the token request is sent.
 
 {: .warning }
 > The OAuth 2.0 Dynamic Client Registration Protocol (RFC 7591) is deprecated as a client registration mechanism as of MCP 2026-07-28 in favor of Client ID Metadata Documents,
@@ -192,6 +200,7 @@ provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
   client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
   # token_endpoint_auth_method: "client_secret_basic" (default), "client_secret_post", or "private_key_jwt"
   # scope: "mcp:read mcp:write" (optional; used when the server does not advertise scopes)
+  # token_request_params: { "audience" => "https://api.example.com" } (optional; parameters the authorization server requires)
 )
 
 transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp", oauth: provider)
@@ -207,7 +216,8 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
-- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`: Optional, same meaning as on `Provider`.
+  Use `token_request_params` for a parameter the authorization server requires on the `client_credentials` grant, such as Auth0's `audience`.
 
 ### Cross-App Access (JWT Bearer) Grant
 
@@ -244,7 +254,7 @@ Keyword arguments:
 - `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
   `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
   Passing both through to `IDJAGTokenExchange.request` covers the common case.
-- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`: Optional, same meaning as on `Provider`.
 
 ### Communication Security
 
