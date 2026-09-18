@@ -109,7 +109,30 @@ $ ruby examples/streamable_http_server.rb
 
 The server will start on `http://localhost:9393` and provide detailed instructions for testing SSE functionality.
 
-### 6. Streamable HTTP Client (`streamable_http_client.rb`)
+### 6. OAuth Resource Server (`streamable_http_server_oauth.rb`)
+
+A streamable HTTP server protected as an OAuth 2.1 resource server per the MCP authorization specification.
+
+**Features:**
+
+- Bearer token enforcement built into the transport (`token_verifier:`), answering 401/403 `WWW-Authenticate` challenges
+- Protected Resource Metadata (RFC 9728) served at `/.well-known/oauth-protected-resource`
+- JWT verification against the authorization server's JWKS (`ISSUER` and `JWKS_URI`), or HS256 with a secret generated at boot in the explicit development mode (`DEV_MODE=1`)
+- A `whoami` tool that reads the verified token from `server_context.auth_info`
+
+**Usage:**
+
+```console
+$ DEV_MODE=1 ruby examples/streamable_http_server_oauth.rb
+```
+
+The server will start on `http://localhost:9393` and print curl commands, including a ready-to-use development token,
+for exercising the 401 challenge, the metadata document, and authenticated tool calls. Without `DEV_MODE=1` or a `JWKS_URI` pointing at
+an authorization server, the example refuses to start.
+
+Requires the `jwt` gem (`gem install jwt`).
+
+### 7. Streamable HTTP Client (`streamable_http_client.rb`)
 
 An interactive client that connects to the SSE stream and provides a menu-driven interface for testing SSE functionality.
 
@@ -141,7 +164,7 @@ The client will:
 - Provide an interactive menu to trigger notifications
 - Display all received SSE events in real-time
 
-### 7. Rails Server (`rails/`)
+### 8. Rails Server (`rails/`)
 
 A minimal Rails application that mounts `StreamableHTTPTransport` in its routes, following the "Rails (mount)" pattern from the top-level README.
 It demonstrates class-based tools in `app/tools/` and a resource with a read handler.
@@ -156,7 +179,7 @@ $ bundle exec puma --port 9292
 
 The MCP endpoint is available at `http://localhost:9292/mcp`. See [`rails/README.md`](rails/README.md) for a full curl-based walkthrough.
 
-### 8. Modern Lifecycle HTTP Server / Client (`modern_http_server.rb`, `modern_http_client.rb`)
+### 9. Modern Lifecycle HTTP Server / Client (`modern_http_server.rb`, `modern_http_client.rb`)
 
 A server and client pair demonstrating the 2026-07-28 modern lifecycle (SEP-2575), which replaces the `initialize` handshake and per-session state with sessionless, self-contained requests.
 

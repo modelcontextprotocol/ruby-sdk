@@ -16,6 +16,7 @@ Runnable examples live in [`examples/`](https://github.com/modelcontextprotocol/
 - [`http_server.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/http_server.rb) - a Rack-based Streamable HTTP server with session management and SSE support
 - [`http_client.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/http_client.rb) - a client driving the HTTP server through all MCP protocol methods
 - [`streamable_http_server.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/streamable_http_server.rb) - an SSE-focused server with tools that trigger notifications and progress updates
+- [`streamable_http_server_oauth.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/streamable_http_server_oauth.rb) - a Streamable HTTP server protected as an OAuth 2.1 resource server, with a `whoami` tool that reads the verified token; `DEV_MODE=1` signs demo tokens locally
 - [`streamable_http_client.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/streamable_http_client.rb) - an interactive, menu-driven client for testing the SSE stream
 
 Each script is standalone and run from the repository root:

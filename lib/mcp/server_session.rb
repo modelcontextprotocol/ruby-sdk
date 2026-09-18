@@ -120,12 +120,22 @@ module MCP
       MCP.configuration.exception_reporter.call(e, { notification: "cancelled", request_id: request_id })
     end
 
-    def handle(request)
-      @server.handle(request, session: self)
+    # Accepts the request either as a positional Hash or as bare keyword arguments (`session.handle(jsonrpc: "2.0", ...)`),
+    # a calling style that predates this method having keyword parameters. `auth_info:` is honored only alongside a positional request:
+    # in the bare-keyword style every keyword belongs to the request body, and the body is attacker-authored JSON,
+    # so a captured `auth_info` keyword is folded back into the request rather than trusted as a verified credential.
+    def handle(request = nil, auth_info: nil, **request_keywords)
+      if request.nil?
+        request = request_keywords
+        request[:auth_info] = auth_info unless auth_info.nil?
+        auth_info = nil
+      end
+
+      @server.handle(request, session: self, auth_info: auth_info)
     end
 
-    def handle_json(request_json)
-      @server.handle_json(request_json, session: self)
+    def handle_json(request_json, auth_info: nil)
+      @server.handle_json(request_json, session: self, auth_info: auth_info)
     end
 
     # Called by `Server#init` during the initialization handshake.
