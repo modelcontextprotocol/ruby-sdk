@@ -26,7 +26,7 @@ module MCP
         # Faraday `on_data` streaming callback. The chunks arrive decompressed: the default `Net::HTTP` adapter negotiates
         # `Accept-Encoding` itself and reads the body through `Net::HTTPResponse#inflater`, so a small compressed body
         # that expands past the cap is refused partway through the expansion rather than after it. That holds only while
-        # the connection leaves `Accept-Encoding` to the adapter; see `Flow#default_http_client`.
+        # the connection leaves `Accept-Encoding` to the adapter; see `Flow.build_http_client`.
         def on_data
           proc do |chunk, _received_bytes, _env|
             @buffer << chunk

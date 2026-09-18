@@ -85,12 +85,13 @@ module MCP
           )
         end
 
-        def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic", token_request_params: nil)
+        def client_credentials_provider(token_endpoint_auth_method: "client_secret_basic", token_request_params: nil, http_client_customizer: nil)
           ClientCredentialsProvider.new(
             client_id: "cc-client",
             client_secret: "cc-secret",
             token_endpoint_auth_method: token_endpoint_auth_method,
             token_request_params: token_request_params,
+            http_client_customizer: http_client_customizer,
           )
         end
 
@@ -141,6 +142,118 @@ module MCP
           end
         end
 
+        # Records `[method, url]` for every request that passes through, standing in for the tracing middleware
+        # an application adds through `http_client_customizer`.
+        class RecordingMiddleware
+          def initialize(app, log)
+            @app = app
+            @log = log
+          end
+
+          def call(env)
+            @log << [env.method, env.url.to_s]
+            @app.call(env)
+          end
+        end
+
+        # Sends the request for `from` to `to` instead, the shape redirect-following middleware leaves behind:
+        # the flow asked for one URL and the adapter is handed another.
+        class URLRewritingMiddleware
+          def initialize(app, from:, to:)
+            @app = app
+            @from = from
+            @to = to
+          end
+
+          def call(env)
+            env.url = URI(@to) if env.url.to_s == @from
+            @app.call(env)
+          end
+        end
+
+        # Replaces the per-request context the way instrumentation middleware may; the guard must not depend on it.
+        class ContextReplacingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            env.request.context = { tag: "instrumented" }
+            @app.call(env)
+          end
+        end
+
+        # Hands the next middleware an environment rebuilt from Faraday's own members only, dropping whatever
+        # an earlier middleware recorded on the original.
+        class EnvRebuildingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            @app.call(Faraday::Env.from(env.to_h))
+          end
+        end
+
+        # Follows a `3xx` the way `faraday-follow_redirects` does: duplicates the environment, points it at the `Location`,
+        # and re-enters the stack from its own position.
+        class RedirectFollowingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            response = @app.call(env)
+            location = response.headers["Location"]
+            return response unless location && (300..399).cover?(response.status)
+
+            redirected = env.dup
+            redirected.url = URI(location)
+            redirected.response = nil
+            @app.call(redirected)
+          end
+        end
+
+        # Replaces the request options wholesale, the way middleware that resets timeouts or contexts might.
+        class RequestOptionsReplacingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            env.request = Faraday::RequestOptions.new
+            @app.call(env)
+          end
+        end
+
+        # Re-enters the stack once with the same environment after a `5xx`, the way retry middleware does.
+        class RetryingMiddleware
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            response = @app.call(env)
+            return response unless response.status >= 500
+
+            env.response = nil
+            @app.call(env)
+          end
+        end
+
+        # Records the application's `trace_id` from the per-request context, as a tracing middleware would.
+        class ContextRecordingMiddleware
+          def initialize(app, log)
+            @app = app
+            @log = log
+          end
+
+          def call(env)
+            @log << env.request.context&.dig(:trace_id)
+            @app.call(env)
+          end
+        end
+
         # Runs the full authorization flow and returns the `scope` query parameter
         # sent on the authorization request. The caller stubs the AS metadata;
         # this helper supplies a provider whose `grant_types` and optional pre-set
@@ -188,6 +301,278 @@ module MCP
               !form.key?("code_verifier") &&
               req.headers["Authorization"] == expected_basic
           end
+        end
+
+        def test_run_sends_every_authorization_server_request_through_the_provider_customizer
+          log = []
+          provider = client_credentials_provider(http_client_customizer: ->(faraday) { faraday.use(RecordingMiddleware, log) })
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal([[:get, @prm_url], [:get, @as_metadata_url], [:post, "#{@auth_base}/token"]], log)
+
+          # The SDK's defaults are applied before the customizer runs.
+          assert_requested(:get, @prm_url, headers: { "Accept" => "application/json" })
+        end
+
+        def test_run_refuses_a_customized_connection_that_sends_a_request_off_the_origin
+          stub_request(:get, "https://other.example.com/prm.json").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) { faraday.use(URLRewritingMiddleware, from: @prm_url, to: "https://other.example.com/prm.json") },
+          )
+
+          error = assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_equal(<<~MESSAGE, error.message)
+            Request to \"#{@prm_url}\" would be sent to \"https://other.example.com/prm.json\", on a different origin; \
+            middleware that follows redirects or rewrites URLs is refused.
+          MESSAGE
+
+          # The guard sits before the adapter, so the request never leaves.
+          assert_not_requested(:get, "https://other.example.com/prm.json")
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_keeps_a_same_origin_rewrite
+          moved_url = "https://srv.example.com/prm-moved.json"
+          stub_request(:get, moved_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) { faraday.use(URLRewritingMiddleware, from: @prm_url, to: moved_url) },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, moved_url)
+        end
+
+        def test_run_refuses_a_rewritten_request_even_when_middleware_replaces_the_request_context
+          stub_request(:get, "https://other.example.com/prm.json").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) {
+              faraday.use(ContextReplacingMiddleware)
+              faraday.use(URLRewritingMiddleware, from: @prm_url, to: "https://other.example.com/prm.json")
+            },
+          )
+
+          assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:get, "https://other.example.com/prm.json")
+        end
+
+        def test_run_refuses_a_redirect_off_the_origin_followed_by_middleware_placed_ahead_of_the_stamp
+          # `builder.insert(0, ...)` is where middleware that wants to be outermost puts itself, so a follower can
+          # land ahead of the SDK's stamp and re-enter the stack; the record of the first URL must survive that.
+          stub_request(:get, @prm_url).to_return(status: 302, headers: { "Location" => "https://other.example.com/prm.json" })
+          stub_request(:get, "https://other.example.com/prm.json").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) { faraday.builder.insert(0, RedirectFollowingMiddleware) },
+          )
+
+          error = assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/would be sent to "https:\/\/other\.example\.com\/prm\.json", on a different origin/, error.message)
+          assert_not_requested(:get, "https://other.example.com/prm.json")
+        end
+
+        def test_run_keeps_a_same_origin_redirect_followed_by_middleware_placed_ahead_of_the_stamp
+          moved_url = "https://srv.example.com/prm-moved.json"
+          stub_request(:get, @prm_url).to_return(status: 302, headers: { "Location" => moved_url })
+          stub_request(:get, moved_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) { faraday.builder.insert(0, RedirectFollowingMiddleware) },
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, moved_url)
+        end
+
+        def test_run_refuses_a_request_whose_environment_was_rebuilt
+          provider = client_credentials_provider(http_client_customizer: ->(faraday) { faraday.use(EnvRebuildingMiddleware) })
+
+          error = assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_equal(<<~MESSAGE,  error.message)
+            Request to \"#{@prm_url}\" carries no record of the URL the flow asked for; \
+            middleware that rebuilds the request environment is refused.
+          MESSAGE
+          assert_not_requested(:get, @prm_url)
+        end
+
+        def test_run_refuses_a_rewritten_token_request
+          stub_request(:post, "https://other.example.com/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "stolen", token_type: "Bearer"),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) {
+              faraday.use(URLRewritingMiddleware, from: "#{@auth_base}/token", to: "https://other.example.com/token")
+            },
+          )
+
+          assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:post, "https://other.example.com/token")
+          assert_not_requested(:post, "#{@auth_base}/token")
+          assert_nil(provider.access_token)
+        end
+
+        def test_run_keeps_the_application_request_context_for_every_request
+          trace_ids = []
+
+          result = run_authorization_flow(
+            http_client_customizer: ->(faraday) {
+              faraday.options.context = { trace_id: "incident-123" }
+              faraday.use(ContextRecordingMiddleware, trace_ids)
+            },
+          )
+
+          assert_equal(:authorized, result)
+          # Protected Resource Metadata and authorization server metadata (GET), registration (JSON POST),
+          # and the token exchange (form POST) all carry it.
+          assert_equal(["incident-123"] * 4, trace_ids)
+        end
+
+        def test_run_keeps_the_application_request_context_on_a_factory_connection
+          trace_ids = []
+          factory = -> {
+            Faraday.new do |faraday|
+              faraday.options.context = { trace_id: "incident-123" }
+              faraday.use(ContextRecordingMiddleware, trace_ids)
+            end
+          }
+
+          result = Flow.new(provider: client_credentials_provider, http_client_factory: factory).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_equal(["incident-123"] * 3, trace_ids)
+        end
+
+        def test_run_refuses_a_rewritten_request_even_when_middleware_replaces_the_request_options
+          stub_request(:get, "https://other.example.com/prm.json").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(
+            http_client_customizer: ->(faraday) {
+              faraday.use(RequestOptionsReplacingMiddleware)
+              faraday.use(URLRewritingMiddleware, from: @prm_url, to: "https://other.example.com/prm.json")
+            },
+          )
+
+          error = assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          # The mismatch, not a lost record: replacing the options must leave the record in place.
+          assert_match(/would be sent to "https:\/\/other\.example\.com\/prm\.json", on a different origin/, error.message)
+          assert_not_requested(:get, "https://other.example.com/prm.json")
+        end
+
+        def test_run_refuses_a_redirect_off_the_origin_followed_by_middleware_placed_after_the_stamp
+          stub_request(:get, @prm_url).to_return(status: 302, headers: { "Location" => "https://other.example.com/prm.json" })
+          stub_request(:get, "https://other.example.com/prm.json").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(http_client_customizer: ->(faraday) { faraday.use(RedirectFollowingMiddleware) })
+
+          error = assert_raises(Flow::DestinationMismatchError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          # The mismatch, not a lost record: the duplicate the follower re-enters with shares the record.
+          assert_match(/would be sent to "https:\/\/other\.example\.com\/prm\.json", on a different origin/, error.message)
+          assert_not_requested(:get, "https://other.example.com/prm.json")
+        end
+
+        def test_run_keeps_a_same_origin_redirect_followed_by_middleware_placed_after_the_stamp
+          moved_url = "https://srv.example.com/prm-moved.json"
+          stub_request(:get, @prm_url).to_return(status: 302, headers: { "Location" => moved_url })
+          stub_request(:get, moved_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+          )
+          provider = client_credentials_provider(http_client_customizer: ->(faraday) { faraday.use(RedirectFollowingMiddleware) })
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, moved_url)
+        end
+
+        def test_run_keeps_a_retry_by_middleware_placed_ahead_of_the_stamp
+          # The same environment re-enters the stack with the same URL, so the first record still matches.
+          stub_request(:get, @prm_url).to_return(
+            { status: 503 },
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [@auth_base]),
+            },
+          )
+          provider = client_credentials_provider(http_client_customizer: ->(faraday) { faraday.builder.insert(0, RetryingMiddleware) })
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, @prm_url, times: 2)
+        end
+
+        def test_build_http_client_records_each_request_on_its_own
+          # A caller using the SDK-built connection directly may address different origins from one request
+          # to the next; each request gets its own record.
+          stub_request(:get, "https://a.example.com/one").to_return(status: 200, body: "one")
+          stub_request(:get, "https://b.example.com/two").to_return(status: 200, body: "two")
+          connection = Flow.build_http_client
+
+          assert_equal("one", connection.get("https://a.example.com/one").body)
+          assert_equal("two", connection.get("https://b.example.com/two").body)
+        end
+
+        def test_run_prefers_an_explicit_http_client_factory_over_the_customizer
+          provider = client_credentials_provider(http_client_customizer: ->(_faraday) { raise "the customizer must not run" })
+
+          result = Flow.new(provider: provider, http_client_factory: -> { Faraday.new }).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
         end
 
         def test_run_client_credentials_with_client_secret_post_sends_credentials_in_body
@@ -718,7 +1103,7 @@ module MCP
         # the Dynamic Client Registration request body. The default loopback redirect URI
         # exercises SEP-837's `"native"` inference; passing an HTTPS `redirect_uri` exercises
         # the `"web"` inference.
-        def run_authorization_flow(redirect_uri: "http://localhost:0/callback", client_metadata_extra: {})
+        def run_authorization_flow(redirect_uri: "http://localhost:0/callback", client_metadata_extra: {}, http_client_customizer: nil)
           state_holder = {}
           provider = Provider.new(
             client_metadata: {
@@ -730,6 +1115,7 @@ module MCP
             redirect_uri: redirect_uri,
             redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
             callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+            http_client_customizer: http_client_customizer,
           )
 
           Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)

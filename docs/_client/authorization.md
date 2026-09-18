@@ -97,6 +97,8 @@ Optional keyword arguments:
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
 - `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
   Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
+- `http_client_customizer`: Callable invoked with the Faraday connection the SDK builds for the OAuth flow's own requests, after its defaults and before its origin guard.
+  See [Customizing the OAuth HTTP Client](#customizing-the-oauth-http-client).
 - `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
   which keeps credentials in process memory only. Persisted `client_information` is stamped with an `"issuer"` member binding it to the authorization server that
   issued it (SEP-2352): when the server's authorization server changes, the SDK discards the stale registration and its tokens and re-registers automatically
@@ -219,7 +221,7 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
-- `scope`, `storage`, `authorization_request_validator`, `token_request_params`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
   Use `token_request_params` for a parameter the authorization server requires on the `client_credentials` grant, such as Auth0's `audience`.
 
 ### Cross-App Access (JWT Bearer) Grant
@@ -258,7 +260,39 @@ Keyword arguments:
 - `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
   `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
   Passing both through to `IDJAGTokenExchange.request` covers the common case.
-- `scope`, `storage`, `authorization_request_validator`, `token_request_params`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
+
+### Customizing the OAuth HTTP Client
+
+The requests the OAuth flow makes (Protected Resource Metadata discovery on the MCP server's origin, authorization server metadata discovery,
+dynamic client registration, and every token request the flow sends, whether the first exchange, a refresh, or a step-up) go over a Faraday connection of their own,
+not over the transport's connection: the transport's is bound to the MCP server URL and carries the `headers:` and the customizer block meant for that server.
+To add middleware to the OAuth flow's connection, or to swap its adapter, pass `http_client_customizer:` to the provider:
+
+```ruby
+provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
+  client_id: "my-service",
+  client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  http_client_customizer: ->(faraday) { faraday.use MyApp::Middleware::HttpRecorder },
+)
+```
+
+The callable receives the `Faraday::Connection` after the SDK has applied its defaults and registered the middleware that records the requested URL,
+and before the SDK registers its origin guard, the same position the transport's customizer block has on the MCP server connection.
+It may be invoked more than once, and from more than one thread at a time, so keep it free of side effects and safe to run concurrently;
+today it runs once per authorization attempt, but that is not a promise.
+A few constraints follow from the checks described below:
+
+- Do not add redirect-following middleware. Every destination check runs against the URL as written, so a request that middleware added by the customizer would send
+  to a different origin after the SDK has recorded the requested URL, whether by following a `3xx` or by rewriting the URL, is refused with `Flow::DestinationMismatchError`
+  before it reaches the adapter, as is a request that reaches the guard without that record. Middleware inserted ahead of the record with `builder.insert(0, ...)`
+  that rewrites the URL first or rebuilds the environment is outside the guard, as is following done inside an adapter, so leave both off.
+- Leave `Accept-Encoding` unset. The response cap below is measured on decoded bytes, and claiming the header turns Net::HTTP's decoding off.
+- Do not add Faraday's `raise_error` middleware. The flow reads statuses itself, both to tell an absent metadata document from a failed request
+  and to turn a token endpoint error into `Flow::InvalidGrantError`.
+- With an adapter that does not stream through `on_data`, the response cap is applied once the body has been buffered rather than as it arrives.
+- A middleware that records requests sees the client credentials on token requests (`Authorization: Basic`, `client_secret`, `client_assertion`), refresh tokens,
+  and the access tokens in token responses; redact them before they reach a log.
 
 ### Communication Security
 
@@ -290,8 +324,11 @@ The range check compares IP literals and does not resolve hostnames, so it canno
 such as `https://vault.corp.internal/`. Resolving names here would not close that gap either, because the address the SDK looked up need not be the one
 the HTTP client connects to a moment later. The same-origin rule is what protects the `resource_metadata` URL, which is the only one of these a server supplies directly.
 
-If you replace the OAuth HTTP client through `MCP::Client::OAuth::Flow.new(http_client_factory:)`, do not add redirect-following middleware. Every check above runs against
-the URL as written, so a connection that follows a `3xx` on its own would reach hosts these rules just refused.
+On the connection the SDK builds, a middleware that would send a request to a different origin, by following a `3xx` or by rewriting the URL, is refused before the request
+goes out (see [Customizing the OAuth HTTP Client](#customizing-the-oauth-http-client)). A connection supplied through `MCP::Client::OAuth::Flow.new(http_client_factory:)`
+replaces that one, the provider's `http_client_customizer` and the guard included, so do not add redirect-following middleware to it: every check above runs against
+the URL as written, and a connection that follows a `3xx` on its own would reach hosts these rules just refused.
+A factory that wants to keep them can return `MCP::Client::OAuth::Flow.build_http_client(customizer)`, the connection the SDK builds for itself.
 
 The SDK also bounds what those endpoints may return. A discovery, dynamic client registration, token, or token exchange response is refused once it passes 4 MiB,
 measured as the body arrives rather than after it has been buffered, so a compressed body that expands past the limit is refused partway through the expansion.

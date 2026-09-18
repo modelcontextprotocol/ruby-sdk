@@ -46,6 +46,8 @@ module MCP
       #   server requires beyond the grant itself (Auth0's `audience`, for example).
       #   A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS` raises `Flow::InvalidTokenRequestParamsError`.
       #   The Hash is copied and frozen. See `StorageBackedProvider#token_request_params`.
+      # - `http_client_customizer` - Callable invoked with the `Faraday::Connection` the flow builds for
+      #   its own requests; see `StorageBackedProvider#http_client_customizer`.
       class ClientCredentialsProvider
         include StorageBackedProvider
 
@@ -66,7 +68,8 @@ module MCP
           scope: nil,
           storage: nil,
           authorization_request_validator: nil,
-          token_request_params: nil
+          token_request_params: nil,
+          http_client_customizer: nil
         )
           if blank?(client_id)
             raise InvalidCredentialsError, "client_id is required for the client_credentials grant."
@@ -104,6 +107,8 @@ module MCP
             client_information["client_secret"] = client_secret
           end
 
+          http_client_customizer = validated_http_client_customizer(http_client_customizer)
+
           @client_id = client_id
           @private_key = private_key
           @signing_algorithm = signing_algorithm
@@ -111,6 +116,7 @@ module MCP
           @storage = storage || InMemoryStorage.new
           @authorization_request_validator = authorization_request_validator
           @token_request_params = frozen_token_request_params(token_request_params)
+          @http_client_customizer = http_client_customizer
           @storage.save_client_information(client_information)
         end
 

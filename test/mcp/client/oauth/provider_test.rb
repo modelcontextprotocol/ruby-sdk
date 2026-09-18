@@ -38,6 +38,26 @@ module MCP
           end
         end
 
+        def test_initialize_defaults_http_client_customizer_to_nil
+          assert_nil(Provider.new(**args_for("https://app.example.com/callback")).http_client_customizer)
+        end
+
+        def test_initialize_keeps_the_http_client_customizer
+          customizer = ->(_faraday) {}
+          provider = Provider.new(**args_for("https://app.example.com/callback"), http_client_customizer: customizer)
+
+          assert_same(customizer, provider.http_client_customizer)
+        end
+
+        def test_initialize_rejects_a_non_callable_http_client_customizer
+          # A connection object in place of a callable is the likely mistake.
+          error = assert_raises(ArgumentError) do
+            Provider.new(**args_for("https://app.example.com/callback"), http_client_customizer: Object.new)
+          end
+
+          assert_equal("http_client_customizer must respond to call (got Object).", error.message)
+        end
+
         def test_initialize_rejects_non_loopback_http_redirect_uri
           # Communication Security: a non-loopback `http://` redirect URI would
           # let an attacker steal the authorization code from a network sniffer,

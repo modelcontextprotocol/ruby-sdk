@@ -248,6 +248,9 @@ http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp") do |f
 end
 ```
 
+The block customizes only the connection to the MCP server. The connection the OAuth flow uses for its own requests is customized through
+the provider's `http_client_customizer:` keyword instead; see [Customizing the OAuth HTTP Client](/client/authorization/#customizing-the-oauth-http-client).
+
 {: .note }
 > Answers to server-to-client requests (a pong, an elicitation result) are POSTed from inside
 > the SSE streaming callback of another response, re-entering the connection on the same thread.

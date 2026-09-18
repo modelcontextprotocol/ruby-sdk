@@ -49,6 +49,36 @@ module MCP
           )
         end
 
+        def test_initialize_keeps_the_http_client_customizer
+          customizer = ->(_faraday) {}
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag" },
+            http_client_customizer: customizer,
+          )
+
+          assert_same(customizer, provider.http_client_customizer)
+          assert_nil(build_provider.http_client_customizer)
+        end
+
+        def test_initialize_rejects_a_non_callable_http_client_customizer_before_writing_credentials
+          storage = InMemoryStorage.new
+
+          error = assert_raises(ArgumentError) do
+            CrossAppAccessProvider.new(
+              client_id: "xaa-client",
+              client_secret: "xaa-secret",
+              assertion_provider: ->(**) { "id-jag" },
+              storage: storage,
+              http_client_customizer: "recorder",
+            )
+          end
+
+          assert_equal("http_client_customizer must respond to call (got String).", error.message)
+          assert_nil(storage.client_information)
+        end
+
         def test_initialize_rejects_missing_client_id
           assert_raises(CrossAppAccessProvider::InvalidConfigurationError) do
             CrossAppAccessProvider.new(

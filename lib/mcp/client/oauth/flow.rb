@@ -63,6 +63,71 @@ module MCP
         # a failed refresh as a reason to run the interactive flow.
         class InvalidTokenRequestParamsError < ArgumentError; end
 
+        # Raised by `RequestedOriginGuard` when middleware added through the provider's `http_client_customizer`
+        # would send a request to an origin other than the one the flow validated, or has dropped the record of
+        # the URL the flow asked for. An `ArgumentError` because the middleware is a configuration mistake,
+        # and deliberately outside `AuthorizationError`, which discovery treats as "nothing published"
+        # and `MCP::Client::HTTP` treats on a failed refresh as a reason to run the interactive flow.
+        class DestinationMismatchError < ArgumentError; end
+
+        # Faraday middleware registered on the connection `build_http_client` assembles before the customizer
+        # is invoked, so with the usual `use` it sits ahead of the customizer's middleware and sees the URL exactly
+        # as the flow requested it, which it records on the request environment for `RequestedOriginGuard`.
+        # The guard covers what happens to a request after that record; middleware inserted ahead of it with
+        # `builder.insert(0, ...)` that rewrites the URL before it or rebuilds the environment is outside the guard.
+        # The record lives on the environment, not in `env.request.context`: that slot belongs to the application,
+        # which may fill it on the connection or replace it from a middleware of its own. Only the first URL seen
+        # on an environment is recorded: a middleware inserted ahead of this one that re-enters the stack after
+        # a `3xx` with the same environment, or with its `dup`, which shares the record, cannot replace it with
+        # the redirected URL.
+        class RequestedURLStamp
+          KEY = :mcp_oauth_requested_url
+
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            env[KEY] ||= env.url.to_s
+            @app.call(env)
+          end
+        end
+
+        # Faraday middleware registered last on that connection, so it sees `env.url` after any customizer-added
+        # middleware has rewritten it or followed a redirect. A request that would leave the origin the flow asked
+        # for is refused before it reaches the adapter, since every destination check ran against the URL as
+        # written; a same-origin change stays with the server those checks admitted. The record survives
+        # the `env.dup` that redirect-following middleware performs, and a request that arrives without it is
+        # refused as well, so a middleware that rebuilds the environment fails closed rather than open.
+        # The origin boundary resembles the one the Python SDK keeps for its own auth requests, which follows
+        # a redirect itself only within the origin; this flow follows none.
+        class RequestedOriginGuard
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            requested = env[RequestedURLStamp::KEY]
+            unless requested
+              raise DestinationMismatchError, <<~MESSAGE
+                Request to #{Discovery.canonicalize_origin_and_path(env.url.to_s).inspect} carries no record of \
+                the URL the flow asked for; middleware that rebuilds the request environment is refused.
+              MESSAGE
+            end
+
+            unless Discovery.same_origin?(env.url.to_s, requested)
+              raise DestinationMismatchError, <<~MESSAGE
+                Request to #{Discovery.canonicalize_origin_and_path(requested).inspect} would be sent to \
+                #{Discovery.canonicalize_origin_and_path(env.url.to_s).inspect}, on a different origin; \
+                middleware that follows redirects or rewrites URLs is refused.
+              MESSAGE
+            end
+
+            @app.call(env)
+          end
+        end
+        private_constant :RequestedURLStamp, :RequestedOriginGuard
+
         class << self
           # Returns why `params` cannot ride a token request as `token_request_params`, or `nil` when it can.
           # Shared by the provider constructors and the flow, which both refuse the value with `InvalidTokenRequestParamsError`,
@@ -81,6 +146,33 @@ module MCP
             end
 
             nil
+          end
+
+          # Builds the connection the flow uses for its own requests: the SDK's defaults, `RequestedURLStamp`,
+          # then `customizer` (a provider's `http_client_customizer`, called with the `Faraday::Connection`),
+          # then `RequestedOriginGuard` last so it sees what the customizer's middleware does to each request
+          # after the stamp recorded it. Every request on the connection passes through both, so a caller using
+          # it directly is held to the same origin rule.
+          #
+          # Deliberately built without redirect-following middleware. Every destination check in this class runs
+          # against the URL as written, before the request goes out, so a connection that transparently followed
+          # a `3xx` would let a server reach a host the checks just refused. The guard turns following at
+          # the middleware level into a refusal; following inside an adapter stays invisible, so a customizer must
+          # not enable it.
+          #
+          # `Accept-Encoding` is deliberately left unset. `Net::HTTP::GenericRequest` negotiates it and decodes
+          # the response only while the caller has not claimed that header; assigning it turns `decode_content` off,
+          # which would silently move `BoundedBody`'s cap onto compressed bytes and let a small body expand past it
+          # after the check.
+          def build_http_client(customizer = nil)
+            require "faraday"
+
+            Faraday.new do |faraday|
+              faraday.headers["Accept"] = "application/json"
+              faraday.use(RequestedURLStamp)
+              customizer&.call(faraday)
+              faraday.use(RequestedOriginGuard)
+            end
           end
         end
 
@@ -1298,22 +1390,18 @@ module MCP
           @http_client ||= @http_client_factory.call
         end
 
-        # Deliberately built without redirect-following middleware. Every destination check in
-        # this class runs against the URL as written, before the request goes out, so a connection
-        # that transparently followed a `3xx` would let a server reach a host the checks just refused.
-        # A caller passing `http_client_factory:` takes on that responsibility: add redirect following here
-        # and the guards above only cover the first hop.
-        #
-        # `Accept-Encoding` is deliberately left unset. `Net::HTTP::GenericRequest` negotiates it and decodes
-        # the response only while the caller has not claimed that header; assigning it turns `decode_content` off,
-        # which would silently move `BoundedBody`'s cap onto compressed bytes and let a small body expand past it
-        # after the check.
+        # A connection supplied through `http_client_factory:` replaces this one, the provider's customizer and
+        # `RequestedOriginGuard` included, so that caller takes on the redirect responsibility described on
+        # `build_http_client`; `bounded_request` caps its responses all the same.
         def default_http_client
-          require "faraday"
+          self.class.build_http_client(provider_http_client_customizer)
+        end
 
-          Faraday.new do |faraday|
-            faraday.headers["Accept"] = "application/json"
-          end
+        # `nil` for a provider that predates the hook or leaves it unset.
+        def provider_http_client_customizer
+          return unless @provider.respond_to?(:http_client_customizer)
+
+          @provider.http_client_customizer
         end
 
         def response_body_string(response)

@@ -53,6 +53,8 @@ module MCP
       #   the grant itself. The authorization request is not affected. A key in `Flow::RESERVED_TOKEN_REQUEST_PARAMS`
       #   raises `Flow::InvalidTokenRequestParamsError`.
       #   The Hash is copied and frozen. See `StorageBackedProvider#token_request_params`.
+      # - `http_client_customizer` - Callable invoked with the `Faraday::Connection` the flow builds for
+      #   its own requests; see `StorageBackedProvider#http_client_customizer`.
       class Provider
         include StorageBackedProvider
 
@@ -93,7 +95,8 @@ module MCP
           storage: nil,
           client_id_metadata_document_url: nil,
           authorization_request_validator: nil,
-          token_request_params: nil
+          token_request_params: nil,
+          http_client_customizer: nil
         )
           unless Discovery.secure_url?(redirect_uri)
             raise InsecureRedirectURIError,
@@ -115,6 +118,8 @@ module MCP
                 "per the MCP authorization specification and `draft-ietf-oauth-client-id-metadata-document`."
           end
 
+          http_client_customizer = validated_http_client_customizer(http_client_customizer)
+
           @client_metadata = client_metadata
           @redirect_uri = redirect_uri
           @redirect_handler = redirect_handler
@@ -124,6 +129,7 @@ module MCP
           @client_id_metadata_document_url = client_id_metadata_document_url
           @authorization_request_validator = authorization_request_validator
           @token_request_params = frozen_token_request_params(token_request_params)
+          @http_client_customizer = http_client_customizer
         end
 
         # Identifies the OAuth flow this provider drives.
