@@ -1602,9 +1602,9 @@ module MCP
         end
 
         def test_run_falls_back_to_legacy_discovery_when_prm_is_not_a_json_object
-          # Valid JSON but the wrong shape. Any PRM discovery failure selects the legacy 2025-03-26 path
-          # (matching the TypeScript and Python SDKs); here the legacy path also dead-ends, surfacing
-          # a domain error rather than a raw `TypeError` from indexing the array.
+          # Valid JSON but the wrong shape counts as nothing usable being published, so it selects the legacy 2025-03-26 path
+          # (matching the TypeScript and Python SDKs); here the legacy path also dead-ends, surfacing a domain error rather than
+          # a raw `TypeError` from indexing the array.
           stub_request(:get, @prm_url).to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
@@ -1634,6 +1634,211 @@ module MCP
 
           assert_match(/Dynamic client registration failed/i, error.message)
           assert_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+        end
+
+        def test_run_surfaces_a_network_error_during_prm_discovery_instead_of_falling_back
+          # A request that never reached the server says nothing about whether it publishes PRM, so once
+          # the other candidates answer 404 the flow stops instead of moving to the legacy authorization base;
+          # the TypeScript and Python SDKs propagate the error the same way.
+          challenge_url = "https://srv.example.com/prm.json"
+          stub_request(:get, challenge_url).to_raise(Faraday::ConnectionFailed.new("connection refused"))
+          stub_prm_not_found
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: challenge_url)
+          end
+
+          assert_match(/Faraday::ConnectionFailed/, error.message)
+          assert_not_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+          assert_not_requested(:post, "https://srv.example.com/register")
+        end
+
+        def test_run_reports_a_prm_candidate_url_without_its_query_in_the_discovery_error
+          # The candidate URL comes from the server's `WWW-Authenticate` challenge and lands in every log line
+          # the error reaches, so the query is dropped, while the path keeps the spelling that was requested
+          # (`%2E` is not decoded) so the line can be matched against the server's access log.
+          challenge_url = "https://srv.example.com/prm%2Ejson?token=abc"
+          stub_request(:get, challenge_url).to_raise(Faraday::ConnectionFailed.new("connection refused"))
+          stub_prm_not_found
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: challenge_url)
+          end
+
+          assert_includes(error.message, "GET https://srv.example.com/prm%2Ejson raised Faraday::ConnectionFailed: connection refused; GET")
+          refute_includes(error.message, "token=abc")
+        end
+
+        def test_run_cuts_an_overlong_prm_candidate_url_in_the_discovery_error
+          # The challenge URL is the server's to choose, so its length is bounded before it lands in the message.
+          challenge_url = "https://srv.example.com/#{"a" * 5000}/prm.json"
+          stub_request(:get, challenge_url).to_raise(Faraday::ConnectionFailed.new("connection refused"))
+          stub_prm_not_found
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: challenge_url)
+          end
+
+          assert_includes(error.message, "GET #{challenge_url[0, Flow::METADATA_URL_MAX_LENGTH - 3]}... raised Faraday::ConnectionFailed")
+          refute_includes(error.message, "a" * (Flow::METADATA_URL_MAX_LENGTH - 3))
+        end
+
+        def test_run_bounds_the_transport_error_message_in_the_discovery_error
+          # A caller-supplied client can raise with server-chosen text in the message (Faraday's `raise_error` middleware repeats
+          # the status line and the request URL), so it is bounded like the parser's message.
+          stub_request(:get, @prm_url).to_raise(Faraday::ConnectionFailed.new("x" * 5000))
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_includes(error.message, "raised Faraday::ConnectionFailed: #{"x" * 125}...; GET")
+          refute_includes(error.message, "x" * 126)
+        end
+
+        def test_run_bounds_the_parser_message_in_the_discovery_error
+          # json before 2.10 repeats the remaining source in `JSON::ParserError#message`, so a malformed body
+          # could otherwise put up to the response cap into the message once per candidate.
+          stub_request(:get, @prm_url).to_return(status: 200, headers: { "Content-Type" => "application/json" }, body: "{")
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 503)
+          JSON.stubs(:parse).raises(JSON::ParserError, "unexpected token at '#{"{" * 5000}'")
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          # `METADATA_DIAGNOSTIC_MAX_LENGTH` is 128: the first 125 characters survive, then three dots.
+          assert_includes(error.message, <<~MESSAGE.chomp)
+            returned a body that is not JSON: unexpected token at '#{"{" * 104}...; \
+            GET https://srv.example.com/.well-known/oauth-protected-resource returned 503.
+          MESSAGE
+
+          refute_includes(error.message, "{" * 105)
+        end
+
+        def test_run_surfaces_a_server_error_during_prm_discovery_instead_of_falling_back
+          # A `5xx` or `429` says nothing about what the server publishes either, even when a later candidate answers 404;
+          # the Python SDK refuses the legacy path the same way.
+          [503, 429].each do |status|
+            stub_request(:get, @prm_url).to_return(status: status)
+            stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+
+            error = assert_raises(Flow::MetadataUnreachableError, "status #{status}") do
+              Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+            end
+
+            assert_match(/returned #{status}/, error.message)
+          end
+
+          assert_not_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+          assert_not_requested(:post, "https://srv.example.com/register")
+        end
+
+        def test_run_keeps_a_server_error_in_mind_when_a_later_candidate_is_unusable
+          # An unusable document from a later candidate must not turn an earlier `503` into "nothing published".
+          challenge_url = "https://srv.example.com/prm.json"
+          stub_request(:get, challenge_url).to_return(status: 503)
+          stub_request(:get, @prm_url).to_return(status: 200, headers: { "Content-Type" => "application/json" }, body: "[]")
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: challenge_url)
+          end
+
+          assert_match(/returned 503/, error.message)
+          assert_not_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+        end
+
+        def test_run_uses_a_later_prm_candidate_when_the_challenge_url_serves_an_unusable_document
+          # The setup stubs a valid document at the well-known path; a broken one at the challenge URL is skipped.
+          challenge_url = "https://srv.example.com/prm.json"
+          stub_request(:get, challenge_url).to_return(status: 200, headers: { "Content-Type" => "application/json" }, body: "[]")
+
+          result = Flow.new(provider: build_legacy_discovery_provider({})).run!(server_url: @server_url, resource_metadata_url: challenge_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, @prm_url)
+        end
+
+        def test_run_recovers_authorization_server_metadata_from_a_later_candidate_after_a_network_error
+          # The OAuth document being unreachable must not stop the OpenID one from being tried.
+          stub_request(:get, @as_metadata_url).to_raise(Faraday::TimeoutError.new("execution expired"))
+          stub_request(:get, "#{@auth_base}/.well-known/openid-configuration").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          result = run_authorization_flow
+
+          assert_equal(:authorized, result)
+          assert_requested(:get, "#{@auth_base}/.well-known/openid-configuration")
+        end
+
+        def test_run_recovers_authorization_server_metadata_from_a_later_candidate_after_an_unusable_document
+          # An OAuth document that is not JSON, or not a JSON object, must not stop the OpenID one from being tried.
+          stub_request(:get, "#{@auth_base}/.well-known/openid-configuration").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+
+          ["{", "[]"].each do |body|
+            stub_request(:get, @as_metadata_url).to_return(status: 200, headers: { "Content-Type" => "application/json" }, body: body)
+
+            assert_equal(:authorized, run_authorization_flow, "body #{body.inspect}")
+          end
+
+          assert_requested(:get, "#{@auth_base}/.well-known/openid-configuration", times: 2)
+        end
+
+        def test_refresh_surfaces_a_network_error_during_prm_discovery_instead_of_falling_back
+          stub_request(:get, @prm_url).to_raise(Faraday::TimeoutError.new("execution expired"))
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+          provider = build_legacy_discovery_provider({})
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_not_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
+          assert_not_requested(:post, "https://srv.example.com/token")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
+        end
+
+        def test_refresh_surfaces_a_server_error_during_prm_discovery_instead_of_falling_back
+          stub_request(:get, @prm_url).to_return(status: 503)
+          stub_request(:get, "https://srv.example.com/.well-known/oauth-protected-resource").to_return(status: 404)
+          provider = build_legacy_discovery_provider({})
+          provider.save_client_information("client_id" => "test-client")
+          provider.save_tokens("access_token" => "stale-at", "refresh_token" => "saved-rt")
+
+          error = assert_raises(Flow::MetadataUnreachableError) do
+            Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/returned 503/, error.message)
+          assert_not_requested(:post, "https://srv.example.com/token")
+          assert_equal("saved-rt", provider.tokens["refresh_token"])
         end
 
         # Builds a provider for the legacy-discovery tests, capturing the authorization URL so tests can assert
@@ -2029,10 +2234,10 @@ module MCP
         end
 
         def test_run_refuses_a_protected_resource_metadata_body_over_the_cap
-          # PRM discovery failures select the legacy path by design, so the refusal shows up as
-          # the fallback rather than as a raise. The padded document is valid JSON naming
-          # an authorization server, so contacting that server is exactly what would happen
-          # if the body had been read: the assertion below fails if the cap stops working.
+          # An oversized document is refused outright rather than treated as unpublished, so the flow stops
+          # without the legacy fallback. The padded document is valid JSON naming an authorization server,
+          # so contacting that server is exactly what would happen if the body had been read:
+          # the assertion below fails if the cap stops working.
           stub_request(:any, %r{\Ahttps://srv\.example\.com/}).to_return(status: 404)
           stub_request(:get, @prm_url).to_return(
             status: 200,
@@ -2044,9 +2249,11 @@ module MCP
             ),
           )
 
-          assert_raises(Flow::AuthorizationError) { run_authorization_flow }
+          error = assert_raises(Flow::AuthorizationError) { run_authorization_flow }
 
+          assert_match(/exceeds \d+ bytes/, error.message)
           assert_not_requested(:get, @as_metadata_url)
+          assert_not_requested(:get, "https://srv.example.com/.well-known/oauth-authorization-server")
         end
 
         def test_run_refuses_a_dynamic_client_registration_body_over_the_cap
@@ -2150,6 +2357,7 @@ module MCP
             headers: { "Content-Type" => "application/json" },
             body: "null",
           )
+          stub_request(:get, "#{@auth_base}/.well-known/openid-configuration").to_return(status: 404)
 
           provider = Provider.new(
             client_metadata: {
@@ -3801,7 +4009,7 @@ module MCP
         end
 
         def test_token_endpoint_errors_fall_back_when_diagnostic_extraction_raises
-          Flow.any_instance.stubs(:token_endpoint_diagnostic).raises(ArgumentError, "sensitive provider text")
+          Flow.any_instance.stubs(:bounded_diagnostic).raises(ArgumentError, "sensitive provider text")
 
           { "invalid_grant" => Flow::InvalidGrantError, "invalid_client" => Flow::AuthorizationError }.each do |code, klass|
             error = refresh_token_endpoint_error(JSON.generate(error: code, error_description: "details"))

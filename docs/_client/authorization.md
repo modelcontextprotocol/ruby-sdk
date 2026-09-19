@@ -39,6 +39,8 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - Fall back to the legacy 2025-03-26 discovery when the server publishes no Protected Resource Metadata, matching the TypeScript and Python SDKs: the MCP server's origin acts
   as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` and must name that origin as its `issuer` (RFC 8414 Section 3.3),
   and when even that is absent the spec's default endpoints `/authorize`, `/token`, and `/register` at the origin are used with PKCE S256 assumed.
+  When no Protected Resource Metadata candidate serves a JSON object, a request that could not reach the server, or that returned a `5xx` or `429`,
+  raises `Flow::MetadataUnreachableError` instead of triggering that fallback, and a body over the response cap is refused outright.
 - On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
   `ClientCredentialsProvider` and `CrossAppAccessProvider` refresh the same way and fall back to their own grant instead;
   their refresh also requires the `issuer` the SDK records on the tokens, so tokens stored without it run the grant again.
