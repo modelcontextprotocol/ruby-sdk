@@ -12,7 +12,7 @@ This page covers `MCP::Client#connect` and how it negotiates between the two.
 
 ## Handshake
 
-Call `MCP::Client#connect` to perform the MCP [initialization handshake](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization) before sending any other requests. The client sends an `initialize` request through the transport, followed by the required `notifications/initialized` notification, and caches the server's `InitializeResult` (protocol version, capabilities, server info, instructions):
+Call `MCP::Client#connect` before sending any other requests. On the handshake lifecycle it performs the MCP [initialization handshake](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization): the client sends an `initialize` request through the transport, followed by the required `notifications/initialized` notification, and caches the server's `InitializeResult` (protocol version, capabilities, server info, instructions):
 
 ```ruby
 client.connect
@@ -22,7 +22,7 @@ client.connected?  # => true
 client.server_info # => cached InitializeResult
 ```
 
-`connect` accepts optional `client_info:`, `protocol_version:`, and `capabilities:` keyword arguments. It is idempotent: a second call returns the cached result without contacting the server. After `close`, state is cleared and `connect` will handshake again.
+`connect` accepts optional `client_info:`, `protocol_version:`, and `capabilities:` keyword arguments. It is idempotent: a second call returns the cached result without contacting the server. After `close`, state is cleared and `connect` establishes the lifecycle again.
 
 This applies to both the Stdio and HTTP transports described on the [Transports](/client/transports/) page.
 
