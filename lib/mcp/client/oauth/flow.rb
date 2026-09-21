@@ -1206,16 +1206,30 @@ module MCP
               "Authorization server metadata `authorization_endpoint` is not a valid URI: #{e.message}."
           end
 
-          params = URI.decode_www_form(uri.query.to_s)
-          params << ["response_type", "code"]
-          params << ["client_id", client_id]
-          params << ["redirect_uri", @provider.redirect_uri]
-          params << ["code_challenge", code_challenge]
-          params << ["code_challenge_method", "S256"]
-          params << ["state", state]
-          params << ["scope", scope] if scope
-          params << ["resource", resource] if resource
-          uri.query = URI.encode_www_form(params)
+          # A parameter the flow sets replaces any of the same name the endpoint URL already carries.
+          # RFC 6749 Section 3.1 forbids sending a parameter twice, and which of two values a server would honor is
+          # its own choice; on the legacy path the endpoint URL is served by the MCP server, whose query must not speak
+          # for the client's `client_id`, `redirect_uri`, `code_challenge`, or `resource`.
+          # Other parameters in the URL are kept, as the TypeScript SDK's `searchParams.set` keeps them; that includes
+          # a `scope` when the flow has none, since an authorization server may set a default scope there.
+          # RFC 9101 `request` and `request_uri` are dropped as well, though the flow sets neither: a server takes
+          # the whole authorization request from the object they carry, over every parameter in the query, and both are
+          # the client's to send, never an endpoint URL's to supply.
+          own_params = [
+            ["response_type", "code"],
+            ["client_id", client_id],
+            ["redirect_uri", @provider.redirect_uri],
+            ["code_challenge", code_challenge],
+            ["code_challenge_method", "S256"],
+            ["state", state],
+          ]
+          own_params << ["scope", scope] if scope
+          own_params << ["resource", resource] if resource
+          dropped_names = own_params.map(&:first) + ["request", "request_uri"]
+
+          params = URI.decode_www_form(uri.query.to_s).reject { |name, _value| dropped_names.include?(name) }
+          uri.query = URI.encode_www_form(params + own_params)
+
           uri
         end
 
