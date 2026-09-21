@@ -48,3 +48,5 @@ Server-to-client requests are bounded by a timeout on the Streamable HTTP transp
 ## Client Side
 
 Pinging the server with `MCP::Client#ping` is documented on the client [Ping](/client/ping/) page.
+The Ruby client answers the pings sent with `ServerSession#ping` automatically;
+see [Answering Server Pings](/client/ping/#answering-server-pings).

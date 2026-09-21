@@ -35,7 +35,7 @@ stdio_transport = MCP::Client::Stdio.new(
 )
 client = MCP::Client.new(transport: stdio_transport)
 
-# Perform the MCP initialization handshake before sending any requests.
+# Negotiate the protocol lifecycle before sending any requests.
 client.connect
 
 # List available tools.
@@ -57,8 +57,16 @@ stdio_transport.close
 The stdio transport automatically handles:
 
 - Spawning the server process with `Open3.popen3`
-- MCP protocol initialization handshake (`initialize` request + `notifications/initialized`)
+- Lifecycle negotiation (a `server/discover` probe, or `initialize` + `notifications/initialized` on the handshake lifecycle)
 - JSON-RPC 2.0 message framing over newline-delimited JSON
+- Answering server `ping` requests; see [Answering Server Pings](/client/ping/#answering-server-pings)
+
+{: .note }
+> `ping` is the only server-to-client request answered over stdio. A wire-level `elicitation/create`
+> or `sampling/createMessage` is ignored on this transport, so a server that sends one waits for an answer
+> that never comes; use Streamable HTTP for those, as described below. The SEP-2322 `input_required` route,
+> which is how the modern lifecycle asks for the same input, works on every transport, so `on_elicitation`
+> and `on_sampling` handlers still fire over stdio; see [Multi Round-Trip Requests](/client/mrtr/).
 
 ## HTTP Transport Layer
 
@@ -85,7 +93,7 @@ Example usage:
 http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp")
 client = MCP::Client.new(transport: http_transport)
 
-# Perform the MCP initialization handshake before sending any requests.
+# Negotiate the protocol lifecycle before sending any requests.
 client.connect
 
 # List available tools
@@ -239,6 +247,9 @@ http_transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp") do |f
   faraday.adapter :typhoeus
 end
 ```
+
+The block customizes only the connection to the MCP server. The connection the OAuth flow uses for its own requests is customized through
+the provider's `http_client_customizer:` keyword instead; see [Customizing the OAuth HTTP Client](/client/authorization/#customizing-the-oauth-http-client).
 
 {: .note }
 > Answers to server-to-client requests (a pong, an elicitation result) are POSTed from inside

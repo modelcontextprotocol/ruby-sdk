@@ -37,9 +37,13 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - On a `401 Unauthorized`, parse the `WWW-Authenticate` header, discover the authorization server (Protected Resource Metadata + RFC 8414 Authorization Server Metadata),
   perform Dynamic Client Registration if needed, run the OAuth 2.1 Authorization Code flow with PKCE (S256), and retry the failed request with the acquired token.
 - Fall back to the legacy 2025-03-26 discovery when the server publishes no Protected Resource Metadata, matching the TypeScript and Python SDKs: the MCP server's origin acts
-  as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` without the RFC 8414 issuer byte-match (which the legacy spec predates),
+  as the authorization base URL, its metadata is fetched from `<origin>/.well-known/oauth-authorization-server` and must name that origin as its `issuer` (RFC 8414 Section 3.3),
   and when even that is absent the spec's default endpoints `/authorize`, `/token`, and `/register` at the origin are used with PKCE S256 assumed.
+  When no Protected Resource Metadata candidate serves a JSON object, a request that could not reach the server, or that returned a `5xx` or `429`,
+  raises `Flow::MetadataUnreachableError` instead of triggering that fallback, and a body over the response cap is refused outright.
 - On subsequent 401s with a saved `refresh_token`, exchange it at the token endpoint before falling back to the full interactive flow (RFC 6749 Section 6).
+  `ClientCredentialsProvider` and `CrossAppAccessProvider` refresh the same way and fall back to their own grant instead;
+  their refresh also requires the `issuer` the SDK records on the tokens, so tokens stored without it run the grant again.
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
   The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
@@ -74,7 +78,7 @@ transport = MCP::Client::HTTP.new(
   oauth: provider,
 )
 client = MCP::Client.new(transport: transport)
-client.connect # `initialize` is sent here; if the server replies 401 the OAuth flow runs and the handshake is retried with the acquired token
+client.connect # the lifecycle is established here; if the server replies 401 the OAuth flow runs and the request is retried with the acquired token
 client.tools
 ```
 
@@ -95,6 +99,8 @@ Optional keyword arguments:
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
 - `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
   Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
+- `http_client_customizer`: Callable invoked with the Faraday connection the SDK builds for the OAuth flow's own requests, after its defaults and before its origin guard.
+  See [Customizing the OAuth HTTP Client](#customizing-the-oauth-http-client).
 - `storage`: Object responding to `tokens`, `save_tokens(t)`, `client_information`, `save_client_information(info)`. Defaults to `MCP::Client::OAuth::InMemoryStorage`,
   which keeps credentials in process memory only. Persisted `client_information` is stamped with an `"issuer"` member binding it to the authorization server that
   issued it (SEP-2352): when the server's authorization server changes, the SDK discards the stale registration and its tokens and re-registers automatically
@@ -112,6 +118,14 @@ Optional keyword arguments:
   served at the URL is a separate JSON artifact from the `client_metadata` keyword above:
   the DCR `client_metadata` MUST NOT include `client_id`, while the CIMD document MUST include
   `client_id` set to the document URL, `client_name`, and `redirect_uris` covering `redirect_uri`.
+- `token_request_params`: Hash of String keys and values added to every token request the provider makes,
+  for parameters the authorization server requires beyond the grant itself, such as Auth0's `audience`.
+  Defaults to `nil`, which adds nothing. The authorization request is not affected.
+  A key the SDK sets itself (listed in `Flow::RESERVED_TOKEN_REQUEST_PARAMS`), a Hash that compares keys by identity,
+  or a value that is not a Hash of Strings is refused with `Flow::InvalidTokenRequestParamsError`, a subclass of `ArgumentError`,
+  when the provider is built, and the accepted Hash is copied and frozen.
+  Any provider that defines a `token_request_params` method gets the same treatment on every token request it makes;
+  the flow checks the returned value by the same rules and raises the same error before the token request is sent.
 
 {: .warning }
 > The OAuth 2.0 Dynamic Client Registration Protocol (RFC 7591) is deprecated as a client registration mechanism as of MCP 2026-07-28 in favor of Client ID Metadata Documents,
@@ -159,11 +173,33 @@ provider = MCP::Client::OAuth::Provider.new(
 )
 ```
 
+### Token Endpoint Errors
+
+When a token exchange or refresh fails, `MCP::Client::OAuth::Flow::AuthorizationError` includes the HTTP status and
+the authorization server's `error` and `error_description` from [RFC 6749 Section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
+For example:
+
+```text
+Token endpoint returned status 400. invalid_request: Client must not use multiple authentication methods
+```
+
+The exception exposes `http_status`, `error`, and `error_description` readers for structured diagnostics. Missing or non-string
+diagnostic fields are `nil`; non-JSON responses retain the status-only message. Other authorization failures have `nil` readers.
+An `invalid_grant` response still raises `Flow::InvalidGrantError`, a subclass of `Flow::AuthorizationError`, so refresh-token
+recovery behavior is unchanged.
+
+Diagnostic fields are limited to 128 characters for `error` and 512 for `error_description`, including a trailing `...` when
+truncated. Characters outside the RFC's printable ASCII set are replaced with spaces, and surrounding whitespace is removed.
+The SDK excludes all other response fields, including `error_uri`, and does not include the raw response body in these errors.
+Descriptions are provider-controlled text, not guaranteed to be free of sensitive information; apply your application's logging
+and redaction policy before persisting them or displaying them to users.
+
 ### Client Credentials Grant
 
 For a confidential machine-to-machine client (no user, no browser redirect), use `MCP::Client::OAuth::ClientCredentialsProvider` instead of `Provider`.
 The transport discovers the authorization server the same way, then exchanges the OAuth 2.1 `client_credentials` grant (RFC 6749 Section 4.4) at
-the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant does not issue a refresh token.
+the token endpoint. There is no authorization request, PKCE, or `offline_access`, because the grant is not expected to issue a refresh token (RFC 6749 Section 4.4.3);
+a refresh token the authorization server issues anyway is used on the next `401`.
 
 ```ruby
 provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
@@ -171,6 +207,7 @@ provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
   client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
   # token_endpoint_auth_method: "client_secret_basic" (default), "client_secret_post", or "private_key_jwt"
   # scope: "mcp:read mcp:write" (optional; used when the server does not advertise scopes)
+  # token_request_params: { "audience" => "https://api.example.com" } (optional; parameters the authorization server requires)
 )
 
 transport = MCP::Client::HTTP.new(url: "https://api.example.com/mcp", oauth: provider)
@@ -186,13 +223,15 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
-- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
+  Use `token_request_params` for a parameter the authorization server requires on the `client_credentials` grant, such as Auth0's `audience`.
 
 ### Cross-App Access (JWT Bearer) Grant
 
 For enterprise MCP deployments where an identity provider (IdP) governs authorization (SEP-990), use `MCP::Client::OAuth::CrossAppAccessProvider` instead of `Provider`.
 The client exchanges an IdP-issued ID token for an Identity Assertion Authorization Grant (ID-JAG) at the IdP via RFC 8693 token exchange, then presents the ID-JAG
 to the MCP authorization server with the RFC 7523 `jwt-bearer` grant, authenticating with `client_secret_basic`. There is no authorization request, PKCE, DCR, or `offline_access`.
+A refresh token the authorization server issues is exchanged on the next `401` with the stored client secret, without calling `assertion_provider` again.
 Mirrors `CrossAppAccessProvider` and `requestJwtAuthorizationGrant` in the TypeScript SDK.
 
 `MCP::Client::OAuth::IDJAGTokenExchange.request` performs the RFC 8693 exchange at the IdP token endpoint. Wrap it in a callable so the same provider can plug into
@@ -223,7 +262,39 @@ Keyword arguments:
 - `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
   `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
   Passing both through to `IDJAGTokenExchange.request` covers the common case.
-- `scope`, `storage`, `authorization_request_validator`: Optional, same meaning as on `Provider`.
+- `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
+
+### Customizing the OAuth HTTP Client
+
+The requests the OAuth flow makes (Protected Resource Metadata discovery on the MCP server's origin, authorization server metadata discovery,
+dynamic client registration, and every token request the flow sends, whether the first exchange, a refresh, or a step-up) go over a Faraday connection of their own,
+not over the transport's connection: the transport's is bound to the MCP server URL and carries the `headers:` and the customizer block meant for that server.
+To add middleware to the OAuth flow's connection, or to swap its adapter, pass `http_client_customizer:` to the provider:
+
+```ruby
+provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
+  client_id: "my-service",
+  client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  http_client_customizer: ->(faraday) { faraday.use MyApp::Middleware::HttpRecorder },
+)
+```
+
+The callable receives the `Faraday::Connection` after the SDK has applied its defaults and registered the middleware that records the requested URL,
+and before the SDK registers its origin guard, the same position the transport's customizer block has on the MCP server connection.
+It may be invoked more than once, and from more than one thread at a time, so keep it free of side effects and safe to run concurrently;
+today it runs once per authorization attempt, but that is not a promise.
+A few constraints follow from the checks described below:
+
+- Do not add redirect-following middleware. Every destination check runs against the URL as written, so a request that middleware added by the customizer would send
+  to a different origin after the SDK has recorded the requested URL, whether by following a `3xx` or by rewriting the URL, is refused with `Flow::DestinationMismatchError`
+  before it reaches the adapter, as is a request that reaches the guard without that record. Middleware inserted ahead of the record with `builder.insert(0, ...)`
+  that rewrites the URL first or rebuilds the environment is outside the guard, as is following done inside an adapter, so leave both off.
+- Leave `Accept-Encoding` unset. The response cap below is measured on decoded bytes, and claiming the header turns Net::HTTP's decoding off.
+- Do not add Faraday's `raise_error` middleware. The flow reads statuses itself, both to tell an absent metadata document from a failed request
+  and to turn a token endpoint error into `Flow::InvalidGrantError`.
+- With an adapter that does not stream through `on_data`, the response cap is applied once the body has been buffered rather than as it arrives.
+- A middleware that records requests sees the client credentials on token requests (`Authorization: Basic`, `client_secret`, `client_assertion`), refresh tokens,
+  and the access tokens in token responses; redact them before they reach a log.
 
 ### Communication Security
 
@@ -255,8 +326,11 @@ The range check compares IP literals and does not resolve hostnames, so it canno
 such as `https://vault.corp.internal/`. Resolving names here would not close that gap either, because the address the SDK looked up need not be the one
 the HTTP client connects to a moment later. The same-origin rule is what protects the `resource_metadata` URL, which is the only one of these a server supplies directly.
 
-If you replace the OAuth HTTP client through `MCP::Client::OAuth::Flow.new(http_client_factory:)`, do not add redirect-following middleware. Every check above runs against
-the URL as written, so a connection that follows a `3xx` on its own would reach hosts these rules just refused.
+On the connection the SDK builds, a middleware that would send a request to a different origin, by following a `3xx` or by rewriting the URL, is refused before the request
+goes out (see [Customizing the OAuth HTTP Client](#customizing-the-oauth-http-client)). A connection supplied through `MCP::Client::OAuth::Flow.new(http_client_factory:)`
+replaces that one, the provider's `http_client_customizer` and the guard included, so do not add redirect-following middleware to it: every check above runs against
+the URL as written, and a connection that follows a `3xx` on its own would reach hosts these rules just refused.
+A factory that wants to keep them can return `MCP::Client::OAuth::Flow.build_http_client(customizer)`, the connection the SDK builds for itself.
 
 The SDK also bounds what those endpoints may return. A discovery, dynamic client registration, token, or token exchange response is refused once it passes 4 MiB,
 measured as the body arrives rather than after it has been buffered, so a compressed body that expands past the limit is refused partway through the expansion.

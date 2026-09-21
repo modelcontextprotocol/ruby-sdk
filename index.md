@@ -83,7 +83,7 @@ stdio_transport = MCP::Client::Stdio.new(
 )
 client = MCP::Client.new(transport: stdio_transport)
 
-# Perform the MCP initialization handshake before sending any requests.
+# Negotiate the protocol lifecycle before sending any requests.
 client.connect
 
 # List available tools.

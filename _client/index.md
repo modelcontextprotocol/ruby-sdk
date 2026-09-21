@@ -17,7 +17,8 @@ This class supports:
 - Lifecycle negotiation and connection via `MCP::Client#connect`, adopting the modern lifecycle
   when the server serves it; see [Lifecycle](/client/lifecycle/)
 - Server discovery via the `server/discover` method (`MCP::Client#discover`); see [Explicit Discovery](/client/lifecycle/#explicit-discovery)
-- Liveness check via the `ping` method (`MCP::Client#ping`)
+- Liveness check via the `ping` method (`MCP::Client#ping`), and automatic answers to server pings;
+  see [Answering Server Pings](/client/ping/#answering-server-pings)
 - Tool listing via the `tools/list` method (`MCP::Client#tools`)
 - Tool invocation via the `tools/call` method (`MCP::Client#call_tool`)
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
