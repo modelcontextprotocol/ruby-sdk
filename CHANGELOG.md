@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-21
+
+This release lets an application configure, on the OAuth provider, the requests the flow makes to
+the authorization server: `token_request_params:` adds the parameters a server requires beyond the grant itself,
+and `http_client_customizer:` adds middleware to the connection the flow uses for discovery, registration,
+and token requests, behind a guard that refuses a request leaving the origin the flow asked for.
+The legacy 2025-03-26 discovery path is now taken only when the server publishes no Protected Resource Metadata:
+a fetch that failed to reach the server, or that answered `5xx` or `429`, raises `Flow::MetadataUnreachableError` instead,
+and the metadata served on that path must name the MCP server's origin as its `issuer`. The `client_credentials`
+and `jwt-bearer` grants run on that path, and a stored refresh token no longer crashes their providers.
+`MCP::Icon.new` now refuses an icon the specification's schema rejects, such as one without `src` or
+with `sizes` given as a String.
+Three entries under "Changed" reject what earlier releases accepted and ship in a minor release under
+the exceptions described in [VERSIONING.md](VERSIONING.md).
+
+### Added
+
+- Add `token_request_params:` to let a provider add parameters to the token requests it makes (#555)
+- Add `http_client_customizer:` to let a provider customize the HTTP client the OAuth flow uses (#560)
+
+### Changed
+
+- Validate the issuer of legacy authorization server metadata (#556)
+- Surface unreachable Protected Resource Metadata instead of falling back to legacy discovery (#561)
+- Validate the `src` and `sizes` of an icon against the specification (#563)
+
+### Fixed
+
+- Omit the body `client_id` from token requests that authenticate with HTTP Basic (#548)
+- Preserve the token endpoint's `error` and `error_description` in the raised error (#549)
+- Let the `client_credentials` and `jwt-bearer` grants run without Protected Resource Metadata (#557)
+- Let providers without a CIMD URL reader refresh their tokens (#559)
+
 ## [1.5.1] - 2026-09-09
 
 This release keeps the HTTP client working with json 3.0. That release accepts the options of `JSON.parse`
