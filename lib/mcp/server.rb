@@ -128,6 +128,34 @@ module MCP
       end
     end
 
+    # Raised when `skills/get` names a URI the server does not serve. SEP-2640 specifies the same
+    # `-32602` the resource methods use for unknown URIs, with the requested URI in the error `data`.
+    class SkillNotFoundError < RequestHandlerError
+      def initialize(uri, request = nil)
+        super(
+          "Skill not found: #{uri}",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
+      end
+    end
+
+    # Raised when `resources/directory/read` names a URI that does not exist or is not a directory
+    # resource. SEP-2640 gives both cases the same `-32602` as an unknown resource.
+    class DirectoryNotFoundError < RequestHandlerError
+      def initialize(uri, request = nil)
+        super(
+          "Directory not found: #{uri}",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
+      end
+    end
+
     # Raised when a server-to-client request (sampling, elicitation, `roots/list`, `ping`) goes unanswered past its timeout.
     # The spec asks implementations to bound every sent request so a peer that never answers cannot exhaust the sender's resources,
     # and to cancel the request on expiry; the transport sends `notifications/cancelled` before raising this.
@@ -179,10 +207,28 @@ module MCP
       Methods::RESOURCES_LIST,
       Methods::RESOURCES_TEMPLATES_LIST,
       Methods::RESOURCES_READ,
+      # SEP-2640: `skills/list` carries the list-caching attributes at 2026-07-28. `skills/get` does not;
+      # the SEP leaves that open, so its result stays hint-free rather than guessing.
+      Methods::SKILLS_LIST,
     ].freeze
 
+    # A skill's files are declared by URI alone, so the default directory listing infers each child's
+    # `mimeType` from its extension and omits the field when it cannot. Servers that know better supply a
+    # `resources_directory_read_handler`.
+    DIRECTORY_CHILD_MIME_TYPES = {
+      ".md" => Skills::SKILL_MIME_TYPE,
+      ".txt" => "text/plain",
+      ".json" => "application/json",
+      ".yaml" => "application/yaml",
+      ".yml" => "application/yaml",
+      ".csv" => "text/csv",
+      ".html" => "text/html",
+      ".py" => "text/x-python",
+      ".sh" => "application/x-sh",
+    }.freeze
+
     attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
+    attr_reader :resources, :skills, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
 
     def initialize(
       description: nil,
@@ -196,6 +242,7 @@ module MCP
       prompts: [],
       resources: [],
       resource_templates: [],
+      skills: [],
       server_context: nil,
       configuration: nil,
       capabilities: nil,
@@ -220,6 +267,10 @@ module MCP
       @resource_templates = resource_templates
       @resource_index = index_resources_by_uri(resources)
       @resources_list_handler = nil
+      @skills_list_handler = nil
+      @skills_get_handler = nil
+      @resources_directory_read_handler = nil
+      self.skills = skills
       @server_context = server_context
       self.page_size = page_size
       self.ttl_ms = ttl_ms
@@ -243,6 +294,8 @@ module MCP
       else
         capabilities || default_capabilities
       end
+      validate_skills_capability!
+
       @client_capabilities = nil
       @logging_message_notification = nil
 
@@ -250,6 +303,9 @@ module MCP
         Methods::RESOURCES_LIST => method(:list_resources),
         Methods::RESOURCES_READ => method(:read_resource),
         Methods::RESOURCES_TEMPLATES_LIST => method(:list_resource_templates),
+        Methods::RESOURCES_DIRECTORY_READ => method(:read_resource_directory),
+        Methods::SKILLS_LIST => method(:list_skills),
+        Methods::SKILLS_GET => method(:get_skill),
         Methods::RESOURCES_SUBSCRIBE => ->(_) { {} },
         Methods::RESOURCES_UNSUBSCRIBE => ->(_) { {} },
         Methods::TOOLS_LIST => method(:list_tools),
@@ -337,6 +393,18 @@ module MCP
     def resources=(resources)
       @resources = resources
       @resource_index = index_resources_by_uri(resources)
+    end
+
+    # Registers the skills this server serves (SEP-2640). Entries may be `MCP::Skill` instances or the
+    # `{uri:, frontmatter:, resources:}` Hash shape. A skill exceeding the extension's per-skill limits is
+    # registered anyway and warned about: servers SHOULD stay within them, but only the host decides
+    # whether to load an oversized skill.
+    def skills=(skills)
+      @skills = (skills || []).map { |skill| Skill.from(skill) }
+      @skill_index = @skills.each_with_object({}) { |skill, index| index[skill.uri] = skill }
+      @skills.each do |skill|
+        skill.limit_violations.each { |violation| warn("MCP skill #{skill.uri}: #{violation}") }
+      end
     end
 
     def define_custom_method(method_name:, &block)
@@ -449,6 +517,30 @@ module MCP
     #
     # @yield [params] The request params containing `:uri`.
     # @yieldreturn [Array<Hash>, Hash] Resource contents.
+    # Replaces the default `skills/list`, for a catalog this server cannot hold in memory.
+    # The block receives the request params and returns skills (instances or Hashes); pagination,
+    # serialization and the SEP-2549 cache hints are applied to whatever it returns.
+    # SEP-2640 lets a server whose catalog is large, generated or otherwise unenumerable return an
+    # empty or partial listing, so a block returning `[]` is conformant.
+    def skills_list_handler(&block)
+      @skills_list_handler = block
+    end
+
+    # Replaces the default `skills/get` lookup. The block receives the request params and returns one
+    # skill, or `nil` for a URI this server does not serve. A server MUST answer for every skill it
+    # serves, including ones its listing omits, which is what this block is for.
+    def skills_get_handler(&block)
+      @skills_get_handler = block
+    end
+
+    # Replaces the default `resources/directory/read`, which derives a directory's children from the
+    # manifests of the registered skills. A block is required for directories the manifests do not
+    # describe, dynamically generated skills among them. It receives the request params and returns
+    # the direct children as resource Hashes, subdirectories carrying `mimeType: "inode/directory"`.
+    def resources_directory_read_handler(&block)
+      @resources_directory_read_handler = block
+    end
+
     def resources_read_handler(&block)
       @handlers[Methods::RESOURCES_READ] = block
     end
@@ -576,6 +668,18 @@ module MCP
           raise ArgumentError, message
         end
       end
+    end
+
+    # SEP-2640: a server declaring the Skills extension MUST also declare the `resources` capability,
+    # since `resources/read` is where every skill file is actually served from. Caught at construction
+    # rather than on the first `resources/read`, which would otherwise fail per request.
+    def validate_skills_capability!
+      return unless Skills.declared?(@capabilities)
+      return if @capabilities[:resources] || @capabilities["resources"]
+
+      raise ArgumentError,
+        "Declaring the #{Skills::EXTENSION_ID} extension requires the `resources` capability: " \
+          "skill files are served through `resources/read`"
     end
 
     def validate_tool_name!
@@ -1343,11 +1447,96 @@ module MCP
     # Calls the `resources_list_handler` block, forwarding `server_context:` only when the block opts in
     # by declaring the keyword (the same rule `dispatch_optional_context_handler` applies).
     def invoke_resources_list_handler(request, server_context)
-      if handler_declares_server_context?(@resources_list_handler)
-        @resources_list_handler.call(request, server_context: server_context)
+      invoke_with_optional_context(@resources_list_handler, request, server_context)
+    end
+
+    def invoke_with_optional_context(handler, request, server_context)
+      if handler_declares_server_context?(handler)
+        handler.call(request, server_context: server_context)
       else
-        @resources_list_handler.call(request)
+        handler.call(request)
       end
+    end
+
+    # `skills/list` (SEP-2640). Each entry is a complete manifest rather than a summary, so a host that
+    # pages the listing has everything it needs to build its registry and verify every file it later reads.
+    def list_skills(request, server_context: nil)
+      skills = if @skills_list_handler
+        invoke_with_optional_context(@skills_list_handler, request, server_context)
+      else
+        @skills
+      end
+
+      page = paginate(Array(skills), cursor: cursor_from(request), page_size: @page_size, request: request) do |skill|
+        Skill.from(skill).to_h
+      end
+
+      apply_cache_metadata({ skills: page[:items], nextCursor: page[:next_cursor] }.compact)
+    end
+
+    # `skills/get` (SEP-2640): one entry by URI, in the same shape `skills/list` returns, including for a
+    # skill the listing omits. Never a step a host must take to complete a listed entry.
+    def get_skill(request, server_context: nil)
+      uri = skill_uri_param!(request)
+      add_instrumentation_data(skill_uri: uri)
+
+      skill = if @skills_get_handler
+        invoke_with_optional_context(@skills_get_handler, request, server_context)
+      else
+        @skill_index[uri]
+      end
+
+      raise SkillNotFoundError.new(uri, request) if skill.nil?
+
+      { skill: Skill.from(skill).to_h }
+    end
+
+    # `resources/directory/read` (SEP-2640): the direct children of a directory resource, as the same
+    # `Resource` objects `resources/list` returns and under the same pagination contract. The listing is
+    # never recursive; a client descends by calling the method again on a child directory.
+    def read_resource_directory(request, server_context: nil)
+      uri = skill_uri_param!(request)
+      add_instrumentation_data(resource_uri: uri)
+
+      children = if @resources_directory_read_handler
+        invoke_with_optional_context(@resources_directory_read_handler, request, server_context)
+      else
+        skill_directory_children(uri, request)
+      end
+
+      page = paginate(Array(children), cursor: cursor_from(request), page_size: @page_size, request: request) do |child|
+        child.is_a?(Hash) ? child : child.to_h
+      end
+
+      { resources: page[:items], nextCursor: page[:next_cursor] }.compact
+    end
+
+    # Derives a directory's children from the registered skills' manifests, which name every file of every
+    # non-dynamic skill. A directory no manifest describes is indistinguishable here from one that does not
+    # exist, and SEP-2640 gives both the same error.
+    def skill_directory_children(uri, request)
+      directory = uri.delete_suffix("/")
+      prefix = "#{directory}/"
+      files = @skills.reject(&:dynamic?).flat_map { |skill| skill.resources.map(&:uri) }.uniq
+      descendants = files.select { |file| file.start_with?(prefix) }
+
+      raise DirectoryNotFoundError.new(uri, request) if descendants.empty?
+
+      descendants.map do |file|
+        segment, nested = file.delete_prefix(prefix).split("/", 2)
+        if nested
+          { uri: "#{directory}/#{segment}", name: segment, mimeType: Skills::DIRECTORY_MIME_TYPE }
+        else
+          { uri: file, name: segment, mimeType: DIRECTORY_CHILD_MIME_TYPES[File.extname(segment).downcase] }.compact
+        end
+      end.uniq.sort_by { |child| child[:uri] }
+    end
+
+    def skill_uri_param!(request)
+      uri = request.is_a?(Hash) ? request[:uri] : nil
+      raise RequestHandlerError.new("Invalid params", request, error_type: :invalid_params) unless uri.is_a?(String)
+
+      uri
     end
 
     # Default `resources/read` handler: routes to class-based resources and resource templates.

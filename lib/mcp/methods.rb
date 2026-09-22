@@ -25,6 +25,14 @@ module MCP
     TOOLS_CALL = "tools/call"
     TOOLS_LIST = "tools/list"
 
+    # Skills extension (SEP-2640). `skills/list` and `skills/get` are required of every server
+    # declaring `io.modelcontextprotocol/skills`; `resources/directory/read` is additionally gated
+    # behind the declaration's `directoryRead` setting. All three are negotiated through
+    # `capabilities.extensions` (SEP-2133) rather than a top-level capability.
+    SKILLS_LIST = "skills/list"
+    SKILLS_GET = "skills/get"
+    RESOURCES_DIRECTORY_READ = "resources/directory/read"
+
     # RPC methods the stateless modern lifecycle removes (MCP 2026-07-28, SEP-2575):
     # `initialize` is replaced by the per-request `_meta` envelope plus `server/discover`,
     # `logging/setLevel` by the envelope's `logLevel` member, and `ping` and the resource
@@ -91,6 +99,11 @@ module MCP
           require_capability!(method, capabilities, :resources, :subscribe)
         when TOOLS_CALL, TOOLS_LIST
           require_capability!(method, capabilities, :tools)
+        when SKILLS_LIST, SKILLS_GET
+          require_extension!(method, capabilities, Skills::EXTENSION_ID)
+        when RESOURCES_DIRECTORY_READ
+          require_capability!(method, capabilities, :resources)
+          require_extension!(method, capabilities, Skills::EXTENSION_ID, :directoryRead)
         when NOTIFICATIONS_TOOLS_LIST_CHANGED
           require_capability!(method, capabilities, :tools)
           require_capability!(method, capabilities, :tools, :listChanged)
@@ -111,6 +124,25 @@ module MCP
       end
 
       private
+
+      # Extension declarations are keyed by reverse-DNS identifier (SEP-2133), which callers may
+      # write as either a String or a Symbol, so neither `dig` alone nor a fixed key form suffices.
+      # `setting` additionally requires an optional feature within the declaration to be enabled.
+      def require_extension!(method, capabilities, extension_id, setting = nil)
+        extensions = read_key(capabilities, :extensions)
+        declaration = read_key(extensions, extension_id)
+        name = setting ? "extensions.#{extension_id}.#{setting}" : "extensions.#{extension_id}"
+
+        raise MissingRequiredCapabilityError.new(method, name) unless declaration.is_a?(Hash)
+        raise MissingRequiredCapabilityError.new(method, name) if setting && read_key(declaration, setting) != true
+      end
+
+      def read_key(hash, key)
+        return unless hash.is_a?(Hash)
+
+        value = hash[key.to_sym]
+        value.nil? ? hash[key.to_s] : value
+      end
 
       def require_capability!(method, capabilities, *keys)
         name = keys.join(".") # :resources, :subscribe -> "resources.subscribe"
