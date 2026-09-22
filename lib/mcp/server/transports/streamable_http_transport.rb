@@ -169,8 +169,10 @@ module MCP
           @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
           @pending_responses = {}
 
-          # Maps a `subscriptions/listen` request id to
-          # `{ stream: stream_object, filter: honored_subscription_filter, active: boolean, write_mutex: Mutex }` (SEP-2575).
+          # Maps a key the transport mints for each `subscriptions/listen` stream to
+          # `{ request_id: listen_request_id, stream: stream_object, filter: honored_subscription_filter, active: boolean,
+          # write_mutex: Mutex }` (SEP-2575). The request id is the client's, unique only among that client's own
+          # in-flight requests, so it stamps `subscriptionId` but cannot serve as the key: two clients may pick the same one.
           # In-process only; a multi-worker deployment needs an external event bus to fan notifications out across processes,
           # which is a follow-up.
           @listen_subscriptions = {}
@@ -925,19 +927,25 @@ module MCP
         # the legacy GET stream (`create_sse_body`).
         #
         # Registration and activation are split on purpose: the entry is inserted inactive
-        # (reserving the id and the cap slot atomically), the acknowledgement is written outside the lock,
+        # (reserving the cap slot atomically), the acknowledgement is written outside the lock,
         # and only then does the entry become eligible for delivery. A concurrent notification between
         # the insert and the acknowledgement write skips the inactive entry,
         # enforcing the SEP-2575 rule that no notification precedes the acknowledgement.
+        #
+        # The entry is keyed by an identifier minted here, not by the request id: that id is unique only among
+        # the requesting client's own in-flight requests, and two clients that pick the same one must each get
+        # their stream, stamped with the id they sent.
         def listen_sse_body(request_id, honored)
           ListenStreamBody.new do |stream|
+            subscription_key = SecureRandom.uuid
             rejected = false
             @mutex.synchronize do
-              if @listen_subscriptions.key?(request_id) ||
-                  (@max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions)
+              if @max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions
                 rejected = true
               else
-                @listen_subscriptions[request_id] = { stream: stream, filter: honored, active: false, write_mutex: Mutex.new }
+                @listen_subscriptions[subscription_key] = {
+                  request_id: request_id, stream: stream, filter: honored, active: false, write_mutex: Mutex.new,
+                }
               end
             end
 
@@ -955,10 +963,10 @@ module MCP
 
               begin
                 send_to_stream(stream, acknowledgement)
-                activate_listen_subscription(request_id)
-                start_listen_keepalive_thread(request_id)
+                activate_listen_subscription(subscription_key)
+                start_listen_keepalive_thread(subscription_key, request_id)
               rescue *STREAM_WRITE_ERRORS
-                remove_listen_subscription(request_id)
+                remove_listen_subscription(subscription_key)
                 close_stream_safely(stream)
               end
             end
@@ -967,9 +975,9 @@ module MCP
 
         # Marks a listen subscription eligible for delivery once its acknowledgement write has completed.
         # The entry may already be gone when the transport closed concurrently.
-        def activate_listen_subscription(request_id)
+        def activate_listen_subscription(subscription_key)
           @mutex.synchronize do
-            subscription = @listen_subscriptions[request_id]
+            subscription = @listen_subscriptions[subscription_key]
             subscription[:active] = true if subscription
           end
         end
@@ -978,37 +986,39 @@ module MCP
         # connection is detected and its slot freed, rather than held until the next fan-out write.
         # Mirrors the legacy GET stream's `start_keepalive_thread`; a comment frame (not a data frame)
         # cannot corrupt an interleaved notification's JSON.
-        def start_listen_keepalive_thread(request_id)
+        def start_listen_keepalive_thread(subscription_key, request_id)
           return unless @listen_keepalive_interval
 
           Thread.new do
-            while listen_subscription_active?(request_id)
+            while listen_subscription_active?(subscription_key)
               sleep(@listen_keepalive_interval)
-              send_listen_keepalive_ping(request_id)
+              send_listen_keepalive_ping(subscription_key)
             end
           rescue *STREAM_WRITE_ERRORS
             # The peer went away; the ensure frees the slot. A dropped listen stream is the normal
             # way this loop ends, so it is not reported.
           rescue StandardError => e
+            # The request id is taken from the caller rather than the registry: a delivery failure may have
+            # removed the entry already, and the report should still name the stream.
             MCP.configuration.exception_reporter.call(e, { subscription_id: request_id })
           ensure
             stream = @mutex.synchronize do
-              subscription = @listen_subscriptions.delete(request_id)
+              subscription = @listen_subscriptions.delete(subscription_key)
               subscription && subscription[:stream]
             end
             close_stream_safely(stream) if stream
           end
         end
 
-        def listen_subscription_active?(request_id)
-          @mutex.synchronize { @listen_subscriptions.key?(request_id) }
+        def listen_subscription_active?(subscription_key)
+          @mutex.synchronize { @listen_subscriptions.key?(subscription_key) }
         end
 
         # Resolves the stream under the lock, then writes outside it so a stalled reader cannot block
         # every other subscription on `@mutex`. A write error propagates to end the keepalive loop.
-        def send_listen_keepalive_ping(request_id)
+        def send_listen_keepalive_ping(subscription_key)
           stream = @mutex.synchronize do
-            subscription = @listen_subscriptions[request_id]
+            subscription = @listen_subscriptions[subscription_key]
             subscription && subscription[:stream]
           end
           return unless stream
@@ -1054,7 +1064,7 @@ module MCP
           # The matching snapshot is taken under `@mutex`, but stream writes happen outside it:
           # a slow or stalled subscriber must not block the transport, matching the legacy delivery paths.
           matched = @mutex.synchronize do
-            @listen_subscriptions.filter_map do |request_id, subscription|
+            @listen_subscriptions.filter_map do |subscription_key, subscription|
               # An inactive entry has not finished writing its acknowledgement yet;
               # delivering to it would put a notification ahead of the acknowledgement.
               next unless subscription[:active]
@@ -1067,12 +1077,12 @@ module MCP
                 uris.is_a?(Array) && uris.include?(uri)
               end
 
-              [request_id, subscription] if hit
+              [subscription_key, subscription] if hit
             end
           end
 
-          matched.each do |request_id, subscription|
-            meta = { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id }
+          matched.each do |subscription_key, subscription|
+            meta = { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => subscription[:request_id] }
             notification_params = (params || {}).merge(_meta: meta)
             notification = { jsonrpc: "2.0", method: method, params: notification_params }
 
@@ -1089,16 +1099,16 @@ module MCP
             rescue *STREAM_WRITE_ERRORS => e
               MCP.configuration.exception_reporter.call(
                 e,
-                { subscription_id: request_id, error: "Failed to send notification" },
+                { subscription_id: subscription[:request_id], error: "Failed to send notification" },
               )
-              remove_listen_subscription(request_id)
+              remove_listen_subscription(subscription_key)
               close_stream_safely(subscription[:stream])
             end
           end
         end
 
-        def remove_listen_subscription(request_id)
-          @mutex.synchronize { @listen_subscriptions.delete(request_id) }
+        def remove_listen_subscription(subscription_key)
+          @mutex.synchronize { @listen_subscriptions.delete(subscription_key) }
         end
 
         # Graceful teardown (SEP-2575): each open listen stream receives its `SubscriptionsListenResult` response
@@ -1110,7 +1120,7 @@ module MCP
             subscriptions
           end
 
-          removed.each do |request_id, subscription|
+          removed.each_value do |subscription|
             # Marking the entry closed and writing the result under the stream's write mutex orders
             # this against in-flight deliveries: each one either lands before the result or observes
             # `closed` and skips, keeping the graceful result the stream's final message.
@@ -1120,13 +1130,13 @@ module MCP
               begin
                 send_to_stream(subscription[:stream], {
                   jsonrpc: "2.0",
-                  id: request_id,
+                  id: subscription[:request_id],
                   result: {
                     # `SubscriptionsListenResult` is served at the transport layer and never
                     # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
                     # stamped at its construction site.
                     resultType: ResultType::COMPLETE,
-                    _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
+                    _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => subscription[:request_id] },
                   },
                 })
               rescue *STREAM_WRITE_ERRORS

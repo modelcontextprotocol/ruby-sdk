@@ -6113,7 +6113,7 @@ module MCP
           # the registry insert and the acknowledgement write, which happens outside the lock.
           io = StringIO.new
           @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
-            stream: io, filter: { toolsListChanged: true }, active: false, write_mutex: Mutex.new
+            request_id: "listen-1", stream: io, filter: { toolsListChanged: true }, active: false, write_mutex: Mutex.new
           }
 
           @server.notify_tools_list_changed
@@ -6128,13 +6128,14 @@ module MCP
 
         test "a delivery racing the graceful teardown cannot write after the final result" do
           io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
-          entry = @transport.instance_variable_get(:@listen_subscriptions)["listen-1"]
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          subscription_key, entry = registry.first
 
           @transport.close
 
           # Simulate an in-flight delivery that snapshotted the entry before teardown cleared
           # the registry: the closed flag set under the write mutex makes it a no-op.
-          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = entry
+          registry[subscription_key] = entry
           @server.notify_tools_list_changed
 
           events = sse_events(io)
@@ -6257,16 +6258,54 @@ module MCP
           transport.close
         end
 
-        test "subscriptions/listen rejects a duplicate subscription id by closing the new stream" do
-          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+        test "subscriptions/listen serves two streams that carry the same request id" do
+          # A request id is unique only among one client's own in-flight requests, and clients that number
+          # their requests with a counter reach the same small integers, so two clients' listen requests may
+          # carry the same id. Each gets its own stream, stamped with the id it sent.
+          first = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
+          second = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
 
-          duplicate = StringIO.new
-          response = @transport.handle_request(modern_rack_request(
-            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
-          ))
-          response[2].call(duplicate)
+          @server.notify_tools_list_changed
 
-          assert_predicate duplicate, :closed?
+          [first, second].each do |io|
+            refute_predicate io, :closed?
+            events = sse_events(io)
+            assert_equal ["notifications/subscriptions/acknowledged", "notifications/tools/list_changed"], events.map { |event| event["method"] }
+            assert_equal [1, 1], events.map { |event| event.dig("params", "_meta", "io.modelcontextprotocol/subscriptionId") }
+          end
+        end
+
+        test "transport close sends each of two streams sharing a request id its own result" do
+          first = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
+          second = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
+
+          @transport.close
+
+          [first, second].each do |io|
+            result = sse_events(io).last
+            assert_equal 1, result["id"]
+            assert_equal "complete", result.dig("result", "resultType")
+            assert_predicate io, :closed?
+          end
+        end
+
+        test "a failed write on one of two streams sharing a request id frees only that stream" do
+          first = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
+          second = open_listen_stream(id: 1, notifications: { toolsListChanged: true })
+          first.define_singleton_method(:write) { |_data| raise Errno::EPIPE }
+
+          @server.notify_tools_list_changed
+
+          assert_predicate first, :closed?
+          refute_predicate second, :closed?
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          assert_equal 1, registry.size
+          assert_same second, registry.values.first[:stream]
+
+          # The entry that survived is the second stream's, so a further notification still reaches it.
+          @server.notify_tools_list_changed
+
+          assert_equal 2, sse_events(second).count { |event| event["method"] == "notifications/tools/list_changed" }
         end
 
         test "listen keepalive writes a comment frame outside the mutex" do
@@ -6281,7 +6320,9 @@ module MCP
             ping = data
           end
           stream.define_singleton_method(:flush) {}
-          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = { stream: stream, filter: {}, write_mutex: Mutex.new }
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
+            request_id: "listen-1", stream: stream, filter: {}, write_mutex: Mutex.new,
+          }
 
           @transport.send(:send_listen_keepalive_ping, "listen-1")
 
