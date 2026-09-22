@@ -6113,7 +6113,12 @@ module MCP
           # the registry insert and the acknowledgement write, which happens outside the lock.
           io = StringIO.new
           @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
-            request_id: "listen-1", stream: io, filter: { toolsListChanged: true }, active: false, write_mutex: Mutex.new
+            request_id: "listen-1",
+            stream: io,
+            filter: { toolsListChanged: true },
+            active: false,
+            write_mutex: Mutex.new,
+            keepalive_wakeup: ConditionVariable.new,
           }
 
           @server.notify_tools_list_changed
@@ -6321,7 +6326,7 @@ module MCP
           end
           stream.define_singleton_method(:flush) {}
           @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
-            request_id: "listen-1", stream: stream, filter: {}, write_mutex: Mutex.new,
+            request_id: "listen-1", stream: stream, filter: {}, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new,
           }
 
           @transport.send(:send_listen_keepalive_ping, "listen-1")
@@ -6345,6 +6350,113 @@ module MCP
           assert_predicate io, :closed?
         ensure
           transport.close
+        end
+
+        test "listen keepalive ends with its slot when a delivery write fails" do
+          # A long interval: were the thread still sleeping it out after the slot is freed, the join below would time out.
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 30)
+          before = Thread.list
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          keepalive_threads = Thread.list - before
+          assert_equal 1, keepalive_threads.size
+          wait_until_asleep(keepalive_threads)
+          io.define_singleton_method(:write) do |_data|
+            raise Errno::EPIPE
+          end
+
+          transport.send_notification("notifications/tools/list_changed", nil, **{})
+
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+          assert(keepalive_threads.all? { |thread| thread.join(5) }, "the keepalive thread outlived its freed slot")
+          assert_predicate io, :closed?
+        ensure
+          # Whatever the assertions did, the streams and their threads must not outlive the test.
+          transport.close
+
+          keepalive_threads.each do |thread|
+            thread.join(5)
+          end
+        end
+
+        test "listen keepalive ends with its slot on transport close" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 30)
+          before = Thread.list
+          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          open_listen_stream(id: "listen-2", notifications: { toolsListChanged: true }, transport: transport)
+          keepalive_threads = Thread.list - before
+          assert_equal 2, keepalive_threads.size
+          wait_until_asleep(keepalive_threads)
+
+          transport.close
+
+          assert(keepalive_threads.all? { |thread| thread.join(5) }, "a keepalive thread outlived the transport")
+        ensure
+          transport.close
+
+          keepalive_threads.each do |thread|
+            thread.join(5)
+          end
+        end
+
+        test "listen keepalive writes under the stream's write mutex" do
+          # Holding the mutex a delivery or the closing result would hold makes the ping wait its turn,
+          # so a comment frame cannot land between the bytes of another message.
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 30)
+          before = Thread.list
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          keepalive_threads = Thread.list - before
+          subscription_key, subscription = transport.instance_variable_get(:@listen_subscriptions).first
+          written_before = io.string.dup
+
+          subscription[:write_mutex].lock
+          ping_thread = Thread.new { transport.send(:send_listen_keepalive_ping, subscription_key) }
+          wait_until_asleep([ping_thread])
+          assert_equal written_before, io.string, "the ping must wait for the stream's write mutex"
+          subscription[:write_mutex].unlock
+
+          assert(ping_thread.join(5), "the ping did not finish once the mutex was released")
+          assert_match(/\A: ping /, io.string.delete_prefix(written_before))
+        ensure
+          subscription[:write_mutex].unlock if subscription && subscription[:write_mutex].owned?
+
+          transport.close
+
+          keepalive_threads.each do |thread|
+            thread.join(5)
+          end
+        end
+
+        test "listen keepalive does not write once the transport marked the stream closed" do
+          # Teardown marks the entry closed and writes the result under the write mutex; a ping that resolved
+          # the entry just before must find the flag and skip, or a comment frame follows the final message.
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 30)
+          before = Thread.list
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          keepalive_threads = Thread.list - before
+          subscription_key, subscription = transport.instance_variable_get(:@listen_subscriptions).first
+          written_before = io.string.dup
+          subscription[:closed] = true
+
+          transport.send(:send_listen_keepalive_ping, subscription_key)
+
+          assert_equal written_before, io.string
+        ensure
+          transport.close
+
+          keepalive_threads.each do |thread|
+            thread.join(5)
+          end
+        end
+
+        # A freshly started keepalive thread may not have reached its wait yet; the removal has to land while
+        # the thread is asleep for the test to say anything about waking it. The bound is generous for
+        # a starved CI runner while staying far below the 30 second interval these tests use.
+        def wait_until_asleep(threads)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+          until threads.all? { |thread| thread.status == "sleep" }
+            flunk("keepalive threads did not reach their wait") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.005)
+          end
         end
 
         test "listen keepalive is not started when the interval is nil" do
