@@ -24,6 +24,8 @@ module MCP
   autoload :ResultType, "mcp/result_type"
   autoload :Server, "mcp/server"
   autoload :ServerSession, "mcp/server_session"
+  autoload :Skill, "mcp/skill"
+  autoload :Skills, "mcp/skills"
   autoload :Tool, "mcp/tool"
   autoload :TraceContext, "mcp/trace_context"
 
