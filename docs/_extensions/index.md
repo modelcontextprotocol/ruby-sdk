@@ -15,3 +15,4 @@ as described on [Capability Extensions](/extensions/capability-extensions/).
 The extensions this SDK ships support for:
 
 - [MCP Apps](/extensions/mcp-apps/) (SEP-1865) - interactive HTML user interfaces rendered by the host for tool results
+- [Skills](/extensions/skills/) (SEP-2640) - Agent Skills served as resources, with `skills/list`, `skills/get` and scoped directory reads
