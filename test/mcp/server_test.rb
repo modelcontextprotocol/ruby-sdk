@@ -4539,6 +4539,98 @@ module MCP
       refute response[:result].key?(:cacheScope)
     end
 
+    test "handle threads auth_info to tool handlers and the Hash context" do
+      observed = {}
+      server = Server.new(name: "auth_test_server", server_context: { user: "u1" })
+      server.define_tool(name: "auth_echo") do |server_context:|
+        observed[:auth_info] = server_context.auth_info
+        observed[:context_key] = server_context[:auth_info]
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      access_token = Server::OAuth::AccessToken.new(token: "abc", subject: "alice")
+
+      request = {
+        jsonrpc: "2.0",
+        method: Methods::TOOLS_CALL,
+        id: 1,
+        params: { name: "auth_echo", arguments: {} },
+      }
+      response = server.handle(request, auth_info: access_token)
+
+      assert response[:result]
+      assert_same access_token, observed[:auth_info]
+      assert_same access_token, observed[:context_key]
+    end
+
+    test "handle leaves the Hash context untouched when no auth_info is given" do
+      observed = {}
+      server = Server.new(name: "auth_test_server", server_context: { user: "u1" })
+      server.define_tool(name: "auth_echo") do |server_context:|
+        observed[:auth_info] = server_context.auth_info
+        observed[:context_key] = server_context[:auth_info]
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      request = {
+        jsonrpc: "2.0",
+        method: Methods::TOOLS_CALL,
+        id: 1,
+        params: { name: "auth_echo", arguments: {} },
+      }
+      response = server.handle(request)
+
+      assert response[:result]
+      assert_nil observed[:auth_info]
+      assert_nil observed[:context_key]
+    end
+
+    test "ServerSession#handle forwards auth_info alongside a positional request" do
+      observed = {}
+      server = Server.new(name: "auth_test_server")
+      server.define_tool(name: "auth_echo") do |server_context:|
+        observed[:auth_info] = server_context.auth_info
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      session = ServerSession.new(server: server, transport: mock)
+      access_token = Server::OAuth::AccessToken.new(token: "abc", subject: "alice")
+
+      request = {
+        jsonrpc: "2.0",
+        method: Methods::TOOLS_CALL,
+        id: 1,
+        params: { name: "auth_echo", arguments: {} },
+      }
+      response = session.handle(request, auth_info: access_token)
+
+      assert response[:result]
+      assert_same access_token, observed[:auth_info]
+    end
+
+    test "ServerSession#handle does not trust an auth_info key splatted from a request body" do
+      observed = { called: false }
+      server = Server.new(name: "auth_test_server")
+      server.define_tool(name: "auth_echo") do |server_context:|
+        observed[:called] = true
+        observed[:auth_info] = server_context.auth_info
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      session = ServerSession.new(server: server, transport: mock)
+
+      # An embedder splatting attacker-authored JSON (`session.handle(**parsed_body)`) must not let
+      # a top-level `auth_info` member become a verified credential.
+      response = session.handle(
+        jsonrpc: "2.0",
+        method: Methods::TOOLS_CALL,
+        id: 1,
+        params: { name: "auth_echo", arguments: {} },
+        auth_info: { subject: "forged" },
+      )
+
+      assert response[:result]
+      assert observed[:called]
+      assert_nil observed[:auth_info]
+    end
+
     private
 
     # Builds a request carrying the SEP-2575 modern `_meta` envelope.

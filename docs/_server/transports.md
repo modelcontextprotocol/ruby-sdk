@@ -245,9 +245,10 @@ by `max_listen_subscriptions:`.
 ### Session Ownership
 
 `StreamableHTTPTransport` issues a random `SecureRandom.uuid` session ID and validates incoming requests by session
-existence and idle timeout only. It does not bind a session to a user, because the transport never receives
-an authenticated identity on its own. A caller that obtains a valid session ID could therefore act on that session,
-so binding a session to a user is the deploying application's responsibility (the MCP spec frames this as a SHOULD).
+existence and idle timeout only. Without bearer authentication it does not bind a session to a user, because the transport
+then receives no authenticated identity on its own. A caller that obtains a valid session ID could therefore act on that session,
+so binding a session to a user is the deploying application's responsibility (the MCP spec frames this as a SHOULD);
+with `token_verifier:` configured the transport does it itself, as described at the end of this section.
 
 The primary control is the `session_request_validator`. It is called as `->(request, session_id) { true | false }`
 on every non-`initialize` POST, GET, and DELETE against an existing session (including notification and response POSTs,
@@ -262,15 +263,18 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(
 )
 ```
 
-Without a validator the transport does not enforce ownership. As a limited defense in depth (not authentication),
+Without a validator or bearer authentication the transport does not enforce ownership. As a limited defense in depth (not authentication),
 it also records the `Origin` header at `initialize` and rejects a later request whose `Origin` differs, but only
 when both are present - a non-browser client that omits `Origin` (e.g. `curl` or a script) is not stopped by this check.
 Enforcing ownership against a determined attacker requires supplying the validator with an authenticated principal.
+Bearer authentication configured with `token_verifier:` supplies one automatically: each session is then also bound
+to the token identity that initialized it; see [Authorization](/server/authorization/).
 
 Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) carry no `Mcp-Session-Id` and touch no stored session,
 so there is no session to steal, and neither the validator nor the recorded-`Origin` comparison runs for them
 (the per-request `Origin` validation of the DNS rebinding protection above still applies);
-on that path, authorization is enforced per request by the deploying application.
+on that path, bearer enforcement configured with `token_verifier:` still applies to every request; without it,
+authorization is enforced per request by the deploying application.
 
 ### Request Size Limits
 

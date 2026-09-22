@@ -1537,6 +1537,23 @@ module MCP
           end
         end
 
+        test "GET stream keepalive detects a dead peer on a session opened without a token" do
+          session_id = initialize_test_session
+          dead_peer = Object.new
+          dead_peer.define_singleton_method(:write) { |_data| raise Errno::ECONNRESET }
+          dead_peer.define_singleton_method(:close) {}
+          # The keepalive tick is a fixed 30 seconds; skipping the wait lets the first ping run at once.
+          @transport.stubs(:sleep)
+
+          response = @transport.handle_request(create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          response[2].call(dead_peer)
+
+          # Only the keepalive thread notices the dead peer; without it the session lingers until the idle timeout.
+          wait_until { !@transport.instance_variable_get(:@sessions).key?(session_id) }
+
+          refute(@transport.instance_variable_get(:@sessions).key?(session_id))
+        end
+
         test "responds with 405 for unsupported methods" do
           request = create_rack_request(
             "PUT",
