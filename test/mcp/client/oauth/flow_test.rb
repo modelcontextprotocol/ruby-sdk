@@ -1572,6 +1572,52 @@ module MCP
           assert_match(/authorization_endpoint/i, error.message)
         end
 
+        def test_run_replaces_authorization_request_parameters_the_endpoint_url_already_carries
+          # An `authorization_endpoint` may carry a query of its own. A parameter of the same name as one the flow sets is
+          # replaced rather than sent twice, so the URL cannot speak for the client's identity, redirect URI, or PKCE challenge;
+          # the rest of the query is kept.
+          query = authorization_url_query_for_endpoint_query(
+            "client_id=other&redirect_uri=https%3A%2F%2Fother.example.com%2Fcb&state=fixed&code_challenge=theirs&audience=api",
+          )
+
+          assert_equal(
+            ["audience", "response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "resource"],
+            query.map(&:first),
+          )
+          assert_equal("api", query.to_h["audience"])
+          assert_equal("test-client", query.to_h["client_id"])
+          assert_equal("http://localhost:0/callback", query.to_h["redirect_uri"])
+          refute_equal("theirs", query.to_h["code_challenge"])
+          refute_equal("fixed", query.to_h["state"])
+        end
+
+        def test_run_drops_request_object_parameters_the_endpoint_url_carries
+          # RFC 9101 has an authorization server take the whole authorization request from `request` or `request_uri`,
+          # over every parameter in the query, so neither may come from the endpoint URL even though the flow sets no
+          # parameter of either name.
+          query = authorization_url_query_for_endpoint_query(
+            "request_uri=https%3A%2F%2Fother.example.com%2Frequest&request=opaque&audience=api",
+          )
+
+          assert_equal(
+            ["audience", "response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "resource"],
+            query.map(&:first),
+          )
+        end
+
+        def test_run_keeps_an_endpoint_scope_when_the_flow_has_none
+          # An authorization server may place a default `scope` on its own endpoint URL. With no scope of its own
+          # (none requested, none in the resource metadata, none on the provider) the flow leaves it there,
+          # as the TypeScript SDK does.
+          query = authorization_url_query_for_endpoint_query("scope=openid")
+
+          assert_equal(
+            ["scope", "response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "resource"],
+            query.map(&:first),
+          )
+          assert_equal("openid", query.to_h["scope"])
+        end
+
         def test_run_raises_when_prm_resource_is_malformed_uri
           stub_request(:get, @prm_url).to_return(
             status: 200,
@@ -4435,6 +4481,38 @@ module MCP
         end
 
         private
+
+        # Serves authorization server metadata whose `authorization_endpoint` carries `endpoint_query`,
+        # runs the authorization-code flow to completion, and returns the query of the URL the browser was
+        # sent to as name/value pairs in order.
+        def authorization_url_query_for_endpoint_query(endpoint_query)
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize?#{endpoint_query}",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            ),
+          )
+          holder = {}
+          provider = Provider.new(
+            **authorization_code_provider_arguments(
+              ->(url) { holder[:authorization_url] = url },
+              -> { ["test-auth-code", URI.decode_www_form(holder[:authorization_url].query).to_h.fetch("state")] },
+            ),
+          )
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+
+          URI.decode_www_form(holder[:authorization_url].query)
+        end
 
         def refresh_only_provider
           provider = Provider.new(
