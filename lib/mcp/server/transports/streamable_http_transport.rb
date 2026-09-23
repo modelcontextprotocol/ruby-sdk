@@ -171,8 +171,10 @@ module MCP
 
           # Maps a key the transport mints for each `subscriptions/listen` stream to
           # `{ request_id: listen_request_id, stream: stream_object, filter: honored_subscription_filter, active: boolean,
-          # write_mutex: Mutex }` (SEP-2575). The request id is the client's, unique only among that client's own
-          # in-flight requests, so it stamps `subscriptionId` but cannot serve as the key: two clients may pick the same one.
+          # write_mutex: Mutex, keepalive_wakeup: ConditionVariable }` (SEP-2575). The request id is the client's,
+          # unique only among that client's own in-flight requests, so it stamps `subscriptionId` but cannot serve as the key:
+          # two clients may pick the same one. Whoever removes an entry signals `keepalive_wakeup` under `@mutex`,
+          # so the stream's keepalive thread ends with its slot instead of sleeping out its interval.
           # In-process only; a multi-worker deployment needs an external event bus to fan notifications out across processes,
           # which is a follow-up.
           @listen_subscriptions = {}
@@ -944,7 +946,7 @@ module MCP
                 rejected = true
               else
                 @listen_subscriptions[subscription_key] = {
-                  request_id: request_id, stream: stream, filter: honored, active: false, write_mutex: Mutex.new,
+                  request_id: request_id, stream: stream, filter: honored, active: false, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new
                 }
               end
             end
@@ -986,12 +988,27 @@ module MCP
         # connection is detected and its slot freed, rather than held until the next fan-out write.
         # Mirrors the legacy GET stream's `start_keepalive_thread`; a comment frame (not a data frame)
         # cannot corrupt an interleaved notification's JSON.
+        #
+        # The wait between pings is a condition variable wait under `@mutex`, not a plain sleep:
+        # the presence check and the wait happen under the same lock that removals signal from,
+        # so a removal cannot slip in between them and a thread waiting out its interval wakes
+        # at once when its entry goes, whichever path removed it. A thread already past the wait,
+        # in a ping, finishes that write first and then finds its entry gone.
         def start_listen_keepalive_thread(subscription_key, request_id)
           return unless @listen_keepalive_interval
 
           Thread.new do
-            while listen_subscription_active?(subscription_key)
-              sleep(@listen_keepalive_interval)
+            loop do
+              registered = @mutex.synchronize do
+                subscription = @listen_subscriptions[subscription_key]
+                next false unless subscription
+
+                subscription[:keepalive_wakeup].wait(@mutex, @listen_keepalive_interval)
+
+                @listen_subscriptions.key?(subscription_key)
+              end
+              break unless registered
+
               send_listen_keepalive_ping(subscription_key)
             end
           rescue *STREAM_WRITE_ERRORS
@@ -1010,20 +1027,20 @@ module MCP
           end
         end
 
-        def listen_subscription_active?(subscription_key)
-          @mutex.synchronize { @listen_subscriptions.key?(subscription_key) }
-        end
-
-        # Resolves the stream under the lock, then writes outside it so a stalled reader cannot block
-        # every other subscription on `@mutex`. A write error propagates to end the keepalive loop.
+        # Resolves the entry under the registry lock, then writes outside it so a stalled reader cannot
+        # block every other subscription on `@mutex`. The write itself holds the stream's write mutex,
+        # like notification delivery and the closing result: the comment frame then cannot land between
+        # the bytes of a notification or after the closing result, and once teardown has marked
+        # the entry closed the ping is skipped. A write error propagates to end the keepalive loop.
         def send_listen_keepalive_ping(subscription_key)
-          stream = @mutex.synchronize do
-            subscription = @listen_subscriptions[subscription_key]
-            subscription && subscription[:stream]
-          end
-          return unless stream
+          subscription = @mutex.synchronize { @listen_subscriptions[subscription_key] }
+          return unless subscription
 
-          send_ping_to_stream(stream)
+          subscription[:write_mutex].synchronize do
+            next if subscription[:closed]
+
+            send_ping_to_stream(subscription[:stream])
+          end
         end
 
         # Per SEP-2575, the server MUST NOT send notification types the client has not requested,
@@ -1108,7 +1125,12 @@ module MCP
         end
 
         def remove_listen_subscription(subscription_key)
-          @mutex.synchronize { @listen_subscriptions.delete(subscription_key) }
+          @mutex.synchronize do
+            subscription = @listen_subscriptions.delete(subscription_key)
+            subscription[:keepalive_wakeup].signal if subscription
+
+            subscription
+          end
         end
 
         # Graceful teardown (SEP-2575): each open listen stream receives its `SubscriptionsListenResult` response
@@ -1117,6 +1139,11 @@ module MCP
           removed = @mutex.synchronize do
             subscriptions = @listen_subscriptions.dup
             @listen_subscriptions.clear
+
+            subscriptions.each_value do |subscription|
+              subscription[:keepalive_wakeup].signal
+            end
+
             subscriptions
           end
 
