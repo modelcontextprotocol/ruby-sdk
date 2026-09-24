@@ -79,6 +79,49 @@ module MCP
           assert_equal('value with "quoted" word and a back\\slash', params["error_description"])
         end
 
+        def test_parse_www_authenticate_finds_bearer_after_a_challenge_with_multibyte_text
+          # The Bearer challenge is located by byte position, so text before it that is wider than
+          # one byte per character must not shift where its parameters are read from.
+          params = Discovery.parse_www_authenticate(%(Basic realm="café", Bearer scope="s"))
+
+          assert_equal({ "scope" => "s" }, params)
+        end
+
+        def test_parse_www_authenticate_tolerates_bytes_that_are_invalid_in_the_header_encoding
+          # A value the server fills with bytes that are not valid UTF-8 must not turn the `401` into
+          # an `ArgumentError`; the bytes are replaced and the other parameters still come through.
+          header = %(Bearer error="invalid_token", scope="s\xff", realm="r").dup.force_encoding(Encoding::UTF_8)
+
+          params = Discovery.parse_www_authenticate(header)
+
+          assert_equal("invalid_token", params["error"])
+          assert_equal("s�", params["scope"])
+          assert_equal("r", params["realm"])
+        end
+
+        def test_parse_www_authenticate_reads_a_binary_header
+          # Net::HTTP hands header values over as ASCII-8BIT; high bytes are kept as they are.
+          params = Discovery.parse_www_authenticate(%(Bearer scope="s\xff", realm="r").b)
+
+          assert_equal("s\xff".b, params["scope"])
+          assert_equal("r", params["realm"])
+        end
+
+        def test_parse_www_authenticate_walks_a_header_with_many_parameters_in_linear_time
+          # The header is the server's to choose. Slicing off the consumed prefix for every pair copied
+          # the remainder each time, so 200,000 pairs took tens of seconds; the bound below is loose enough
+          # for a slow CI machine and far below that.
+          header = "Bearer " + (1..200_000).map { |i| %(k#{i}="v#{i}") }.join(", ")
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          params = Discovery.parse_www_authenticate(header)
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_equal(200_000, params.size)
+          assert_equal("v200000", params["k200000"])
+          assert_operator(elapsed, :<, 5)
+        end
+
         def test_protected_resource_metadata_urls_uses_explicit_url_first
           urls = Discovery.protected_resource_metadata_urls(
             server_url: "https://api.example.com/mcp",
