@@ -20,6 +20,8 @@ module MCP
       #   request. Must be one of `redirect_uris` in `client_metadata`.
       # - `redirect_handler` - Callable invoked with the fully-built authorization
       #   URL (a `URI`). Implementations typically open the user's browser.
+      #
+      # Optional keyword arguments:
       # - `callback_handler` - Callable invoked after `redirect_handler`. Returns
       #   `[code, state]` or `[code, state, iss]`, where `code` is the authorization code,
       #   `state` is the `state` parameter received on the redirect URI, and `iss` is
@@ -28,8 +30,11 @@ module MCP
       #   must match the authorization server's issuer, and a nil `iss` is
       #   rejected when the AS advertises `authorization_response_iss_parameter_supported`.
       #   The 2-element form skips the check for backward compatibility.
-      #
-      # Optional keyword arguments:
+      #   Omit it when the redirect arrives in a later request, as it does in a web application:
+      #   the flow then stops after `redirect_handler` with a pending authorization saved in `storage`,
+      #   and the request that receives the redirect finishes it with `Flow#finish!`.
+      # - `pending_authorization_max_age` - Seconds a pending authorization stays redeemable after the redirect,
+      #   when `callback_handler` is omitted. Defaults to `DEFAULT_PENDING_AUTHORIZATION_MAX_AGE`.
       # - `scope`   - String of space-separated scopes to request when the server's
       #   `WWW-Authenticate` does not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
@@ -38,6 +43,9 @@ module MCP
       #   an `"issuer"` member binding it to the authorization server that
       #   issued it (SEP-2352); when the authorization server changes, the SDK discards
       #   the stale registration and tokens and re-registers.
+      #   Without `callback_handler`, it must also respond to `save_pending_authorization(state, pending)`,
+      #   `pending_authorization(state)`, and `delete_pending_authorization(state)`; the last must remove the entry
+      #   and return it atomically, returning `nil` when there was none.
       # - `client_id_metadata_document_url` - URL where the client publishes its Client ID Metadata Document
       #   (`draft-ietf-oauth-client-id-metadata-document-00` and the MCP authorization specification).
       #   When the authorization server advertises `client_id_metadata_document_supported: true`,
@@ -78,25 +86,43 @@ module MCP
         # applies and the value must unambiguously identify the document.
         class InvalidClientIDMetadataDocumentURLError < ArgumentError; end
 
+        # Raised when `Provider#initialize` is called without `callback_handler` and with a `storage`
+        # that cannot hold a pending authorization between the request that sends the user to the authorization server
+        # and the request that receives the redirect.
+        class PendingAuthorizationStorageError < ArgumentError; end
+
+        # Seconds a pending authorization stays redeemable after the redirect when the provider has no `callback_handler`.
+        # Long enough for a user to sign in and consent at the authorization server, short enough that an abandoned
+        # authorization does not keep its PKCE verifier in `storage` indefinitely.
+        DEFAULT_PENDING_AUTHORIZATION_MAX_AGE = 600
+
+        PENDING_AUTHORIZATION_STORAGE_METHODS = [
+          :save_pending_authorization,
+          :pending_authorization,
+          :delete_pending_authorization,
+        ].freeze
+
         attr_reader :client_metadata,
           :redirect_uri,
           :scope,
           :storage,
           :redirect_handler,
           :callback_handler,
-          :client_id_metadata_document_url
+          :client_id_metadata_document_url,
+          :pending_authorization_max_age
 
         def initialize(
           client_metadata:,
           redirect_uri:,
           redirect_handler:,
-          callback_handler:,
+          callback_handler: nil,
           scope: nil,
           storage: nil,
           client_id_metadata_document_url: nil,
           authorization_request_validator: nil,
           token_request_params: nil,
-          http_client_customizer: nil
+          http_client_customizer: nil,
+          pending_authorization_max_age: DEFAULT_PENDING_AUTHORIZATION_MAX_AGE
         )
           unless Discovery.secure_url?(redirect_uri)
             raise InsecureRedirectURIError,
@@ -120,16 +146,33 @@ module MCP
 
           http_client_customizer = validated_http_client_customizer(http_client_customizer)
 
+          storage ||= InMemoryStorage.new
+          if callback_handler.nil?
+            missing = PENDING_AUTHORIZATION_STORAGE_METHODS.reject { |method| storage.respond_to?(method) }
+            unless missing.empty?
+              raise PendingAuthorizationStorageError,
+                "Without a callback_handler the authorization finishes in a later request, so storage must also respond to " \
+                  "#{missing.join(", ")} (#{storage.class} does not)."
+            end
+          end
+
+          unless pending_authorization_max_age.is_a?(Integer) && pending_authorization_max_age.positive?
+            raise ArgumentError,
+              "pending_authorization_max_age must be a positive Integer number of seconds " \
+                "(got #{pending_authorization_max_age.inspect})."
+          end
+
           @client_metadata = client_metadata
           @redirect_uri = redirect_uri
           @redirect_handler = redirect_handler
           @callback_handler = callback_handler
           @scope = scope
-          @storage = storage || InMemoryStorage.new
+          @storage = storage
           @client_id_metadata_document_url = client_id_metadata_document_url
           @authorization_request_validator = authorization_request_validator
           @token_request_params = frozen_token_request_params(token_request_params)
           @http_client_customizer = http_client_customizer
+          @pending_authorization_max_age = pending_authorization_max_age
         end
 
         # Identifies the OAuth flow this provider drives.
@@ -137,6 +180,20 @@ module MCP
         # which is protocol metadata for the authorization server, not an SDK control signal.
         def authorization_flow
           :authorization_code
+        end
+
+        def save_pending_authorization(state, pending)
+          @storage.save_pending_authorization(state, pending)
+        end
+
+        def pending_authorization(state)
+          @storage.pending_authorization(state)
+        end
+
+        # Returns the entry the storage removed, or `nil`. `Flow#finish!` redeems the code only when it gets
+        # the entry back, so of two callbacks racing on the same `state`, only one can.
+        def delete_pending_authorization(state)
+          @storage.delete_pending_authorization(state)
         end
       end
     end

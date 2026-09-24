@@ -231,6 +231,76 @@ module MCP
 
           assert_includes(error.message, '"code"')
         end
+
+        def test_initialize_accepts_a_missing_callback_handler
+          arguments = args_for("https://app.example.com/callback")
+          arguments.delete(:callback_handler)
+          provider = Provider.new(**arguments)
+
+          assert_nil(provider.callback_handler)
+          assert_equal(Provider::DEFAULT_PENDING_AUTHORIZATION_MAX_AGE, provider.pending_authorization_max_age)
+        end
+
+        def test_delete_pending_authorization_returns_the_removed_entry
+          arguments = args_for("https://app.example.com/callback")
+          arguments.delete(:callback_handler)
+          provider = Provider.new(**arguments)
+          provider.save_pending_authorization("state-1", { "code_verifier" => "v1" })
+
+          assert_equal({ "code_verifier" => "v1" }, provider.delete_pending_authorization("state-1"))
+          assert_nil(provider.delete_pending_authorization("state-1"))
+        end
+
+        def test_initialize_rejects_storage_that_cannot_hold_a_pending_authorization_without_a_callback_handler
+          storage_class = Class.new do
+            attr_accessor :tokens, :client_information
+
+            def save_tokens(tokens)
+              @tokens = tokens
+            end
+
+            def save_client_information(info)
+              @client_information = info
+            end
+          end
+          arguments = args_for("https://app.example.com/callback")
+          arguments.delete(:callback_handler)
+
+          error = assert_raises(Provider::PendingAuthorizationStorageError) do
+            Provider.new(**arguments, storage: storage_class.new)
+          end
+
+          assert_includes(error.message, "save_pending_authorization, pending_authorization, delete_pending_authorization")
+        end
+
+        def test_initialize_accepts_storage_without_pending_authorization_methods_when_a_callback_handler_is_given
+          storage = Object.new
+
+          provider = Provider.new(**args_for("https://app.example.com/callback"), storage: storage)
+
+          assert_same(storage, provider.storage)
+        end
+
+        def test_initialize_rejects_a_pending_authorization_max_age_that_is_not_a_positive_integer
+          [0, -1, 1.5, "600", nil].each do |max_age|
+            assert_raises(ArgumentError) do
+              Provider.new(**args_for("https://app.example.com/callback"), pending_authorization_max_age: max_age)
+            end
+          end
+        end
+
+        def test_in_memory_storage_keeps_pending_authorizations_by_state
+          storage = InMemoryStorage.new
+          storage.save_pending_authorization("state-1", { "code_verifier" => "v1" })
+          storage.save_pending_authorization("state-2", { "code_verifier" => "v2" })
+
+          assert_equal({ "code_verifier" => "v1" }, storage.pending_authorization("state-1"))
+
+          storage.delete_pending_authorization("state-1")
+
+          assert_nil(storage.pending_authorization("state-1"))
+          assert_equal({ "code_verifier" => "v2" }, storage.pending_authorization("state-2"))
+        end
       end
     end
   end
