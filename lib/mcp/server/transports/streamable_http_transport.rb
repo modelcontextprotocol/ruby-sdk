@@ -929,10 +929,15 @@ module MCP
         # the legacy GET stream (`create_sse_body`).
         #
         # Registration and activation are split on purpose: the entry is inserted inactive
-        # (reserving the cap slot atomically), the acknowledgement is written outside the lock,
+        # (reserving the cap slot atomically), the acknowledgement is written outside the registry lock,
         # and only then does the entry become eligible for delivery. A concurrent notification between
         # the insert and the acknowledgement write skips the inactive entry,
         # enforcing the SEP-2575 rule that no notification precedes the acknowledgement.
+        #
+        # The acknowledgement write holds the stream's write mutex, which `teardown_listen_subscriptions` also takes
+        # before it marks an entry closed. The two therefore cannot interleave: the acknowledgement either lands
+        # before the result, or, if the transport closed first, is not written at all and the stream just closes,
+        # so no stream ever carries a result ahead of its acknowledgement.
         #
         # The entry is keyed by an identifier minted here, not by the request id: that id is unique only among
         # the requesting client's own in-flight requests, and two clients that pick the same one must each get
@@ -940,18 +945,17 @@ module MCP
         def listen_sse_body(request_id, honored)
           ListenStreamBody.new do |stream|
             subscription_key = SecureRandom.uuid
-            rejected = false
+            subscription = nil
             @mutex.synchronize do
-              if @max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions
-                rejected = true
-              else
-                @listen_subscriptions[subscription_key] = {
+              unless @max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions
+                subscription = {
                   request_id: request_id, stream: stream, filter: honored, active: false, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new
                 }
+                @listen_subscriptions[subscription_key] = subscription
               end
             end
 
-            if rejected
+            if subscription.nil?
               close_stream_safely(stream)
             else
               acknowledgement = {
@@ -964,23 +968,32 @@ module MCP
               }
 
               begin
-                send_to_stream(stream, acknowledgement)
-                activate_listen_subscription(subscription_key)
-                start_listen_keepalive_thread(subscription_key, request_id)
+                acknowledged = subscription[:write_mutex].synchronize do
+                  next false if subscription[:closed]
+
+                  send_to_stream(stream, acknowledgement)
+
+                  # Set on the entry itself, not through the registry: a concurrent close may already have cleared the registry
+                  # while its result write waits on this mutex, and that write must still find the stream acknowledged.
+                  # Set under the registry lock as well, since that is the lock the delivery snapshot reads the flag under.
+                  # This is the one place a write mutex is held while the registry lock is taken; it stays deadlock-free only
+                  # as long as no path takes a write mutex inside `@mutex.synchronize`, so resolve entries under `@mutex`,
+                  # release it, then write.
+                  @mutex.synchronize { subscription[:active] = true }
+
+                  true
+                end
+
+                if acknowledged
+                  start_listen_keepalive_thread(subscription_key, request_id)
+                else
+                  close_stream_safely(stream)
+                end
               rescue *STREAM_WRITE_ERRORS
                 remove_listen_subscription(subscription_key)
                 close_stream_safely(stream)
               end
             end
-          end
-        end
-
-        # Marks a listen subscription eligible for delivery once its acknowledgement write has completed.
-        # The entry may already be gone when the transport closed concurrently.
-        def activate_listen_subscription(subscription_key)
-          @mutex.synchronize do
-            subscription = @listen_subscriptions[subscription_key]
-            subscription[:active] = true if subscription
           end
         end
 
@@ -1149,10 +1162,14 @@ module MCP
 
           removed.each_value do |subscription|
             # Marking the entry closed and writing the result under the stream's write mutex orders
-            # this against in-flight deliveries: each one either lands before the result or observes
-            # `closed` and skips, keeping the graceful result the stream's final message.
+            # this against in-flight deliveries and against the acknowledgement write: each one either lands
+            # before the result or observes `closed` and skips, keeping the graceful result the stream's final message.
             subscription[:write_mutex].synchronize do
               subscription[:closed] = true
+
+              # A stream whose acknowledgement was never written gets no result either: SEP-2575 makes
+              # the acknowledgement the first message, so the stream closes abruptly and the client re-sends.
+              next unless subscription[:active]
 
               begin
                 send_to_stream(subscription[:stream], {

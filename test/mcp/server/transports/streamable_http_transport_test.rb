@@ -6125,7 +6125,7 @@ module MCP
 
           assert_empty sse_events(io)
 
-          @transport.send(:activate_listen_subscription, "listen-1")
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"][:active] = true
           @server.notify_tools_list_changed
 
           assert_equal ["notifications/tools/list_changed"], sse_events(io).map { |event| event["method"] }
@@ -6147,6 +6147,79 @@ module MCP
 
           assert_equal "complete", events.last.dig("result", "resultType")
           refute(events.any? { |event| event["method"] == "notifications/tools/list_changed" })
+        end
+
+        test "transport close during the acknowledgement write still sends the acknowledgement first" do
+          # The stream blocks its first write, the acknowledgement, until released, so the close arrives while
+          # that write is in progress and has to queue behind it on the stream's write mutex.
+          reached = Queue.new
+          release = Queue.new
+          io = StringIO.new
+          first_write = true
+
+          io.define_singleton_method(:write) do |data|
+            if first_write
+              first_write = false
+              reached.push(true)
+              release.pop
+            end
+            super(data)
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+          body_thread = Thread.new { response[2].call(io) }
+          close_thread = nil
+
+          begin
+            wait_until { !reached.empty? }
+            close_thread = Thread.new { @transport.close }
+            wait_until_blocked_or_done(close_thread)
+          ensure
+            # Released whatever the waits above did, so a failed wait cannot leave the body holding
+            # the stream's write mutex with the close queued behind it.
+            release.push(true)
+          end
+
+          assert(body_thread.join(5), "the listen body did not finish")
+          assert(close_thread.join(5), "the transport close did not finish")
+
+          events = sse_events(io)
+
+          assert_equal 2, events.size
+          assert_equal "notifications/subscriptions/acknowledged", events[0]["method"]
+          assert_equal "complete", events[1].dig("result", "resultType")
+          assert_predicate io, :closed?
+        end
+
+        test "transport close before the acknowledgement closes the stream without a result" do
+          # An entry in the registered-but-not-yet-acknowledged state: with no acknowledgement written,
+          # a result would be the stream's first message, which SEP-2575 forbids.
+          io = StringIO.new
+          @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
+            request_id: "listen-1",
+            stream: io,
+            filter: { toolsListChanged: true },
+            active: false,
+            write_mutex: Mutex.new,
+            keepalive_wakeup: ConditionVariable.new,
+          }
+
+          @transport.close
+
+          assert_empty sse_events(io)
+          assert_predicate io, :closed?
+        end
+
+        # Waits until `thread` is either blocked (asleep on a lock or queue) or finished, so the step after it
+        # runs against a thread that has made its move.
+        def wait_until_blocked_or_done(thread)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+          until thread.status == "sleep" || thread.status == false
+            flunk("thread did not block or finish") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.005)
+          end
         end
 
         test "subscriptions/listen streams for different subscriptions receive their own subscriptionId" do
