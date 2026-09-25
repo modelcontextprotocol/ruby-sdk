@@ -141,6 +141,88 @@ module MCP
           assert_equal("test-token-after-flow", provider.access_token)
         end
 
+        def test_send_request_raises_authorization_pending_for_a_provider_without_a_callback_handler
+          stub_request(:post, @mcp_url)
+            .with { |req| req.headers["Authorization"].nil? }
+            .to_return(
+              status: 401,
+              headers: { "WWW-Authenticate" => %(Bearer resource_metadata="#{@prm_url}") },
+              body: "",
+            )
+
+          stub_request(:post, @mcp_url)
+            .with(headers: { "Authorization" => "Bearer test-token-after-flow" })
+            .to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+            )
+
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: @mcp_url, authorization_servers: [@auth_base]),
+          )
+
+          stub_request(:get, "#{@auth_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+            ),
+          )
+
+          stub_request(:post, "#{@auth_base}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "test-client"),
+          )
+
+          stub_request(:post, "#{@auth_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "test-token-after-flow", token_type: "Bearer", expires_in: 3600),
+          )
+
+          redirected_to = nil
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["https://app.example.com/oauth/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "https://app.example.com/oauth/callback",
+            redirect_handler: ->(url) { redirected_to = url },
+          )
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          request = { jsonrpc: "2.0", id: "1", method: "tools/list" }
+
+          error = assert_raises(Flow::AuthorizationPendingError) do
+            transport.send_request(request: request)
+          end
+
+          state = URI.decode_www_form(redirected_to.query).to_h.fetch("state")
+          assert_equal(redirected_to, error.authorization_url)
+          refute_includes(error.message, state)
+          # Nothing to retry with until the authorization is finished.
+          assert_requested(:post, @mcp_url, times: 1)
+          assert_not_requested(:post, "#{@auth_base}/token")
+
+          Flow.new(provider: provider).finish!(
+            server_url: @mcp_url,
+            callback_params: { "code" => "test-auth-code", "state" => state },
+          )
+          response = transport.send_request(request: request)
+
+          assert_equal({ "ok" => true }, response["result"])
+        end
+
         def test_send_request_runs_the_oauth_flow_through_the_provider_customizer
           stub_request(:post, @mcp_url).with { |req|
             req.headers["Authorization"].nil?

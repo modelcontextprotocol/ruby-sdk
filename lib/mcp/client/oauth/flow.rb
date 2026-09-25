@@ -83,6 +83,27 @@ module MCP
         # and `MCP::Client::HTTP` treats on a failed refresh as a reason to run the interactive flow.
         class DestinationMismatchError < ArgumentError; end
 
+        # Raised by `MCP::Client::HTTP` when a provider without a `callback_handler` has sent the user to the authorization server:
+        # the request cannot be retried until the application finishes the authorization with `finish!` in the request that
+        # receives the redirect. `authorization_url` is the URL handed to `redirect_handler`; it is kept out of the message,
+        # which may reach logs, because it carries the `state` that `finish!` looks the pending authorization up by.
+        # Deliberately outside `AuthorizationError`, which `MCP::Client::HTTP` treats on a failed refresh as a reason to run
+        # the interactive flow: this is the interactive flow waiting on the user, not a failure.
+        class AuthorizationPendingError < StandardError
+          attr_reader :authorization_url
+
+          def initialize(message = nil, authorization_url: nil)
+            super(message)
+            @authorization_url = authorization_url
+          end
+        end
+
+        # A `state` the SDK generates is 43 characters; a callback carrying a much longer one is refused before storage is asked.
+        CALLBACK_STATE_MAX_LENGTH = 128
+
+        UNKNOWN_PENDING_AUTHORIZATION_MESSAGE =
+          "Authorization callback `state` matches no pending authorization; it is unknown, already used, or expired."
+
         # Faraday middleware registered on the connection `build_http_client` assembles before the customizer
         # is invoked, so with the usual `use` it sits ahead of the customizer's middleware and sees the URL exactly
         # as the flow requested it, which it records on the request environment for `RequestedOriginGuard`.
@@ -189,13 +210,20 @@ module MCP
           end
         end
 
+        # The authorization URL the last `run!` handed to `redirect_handler` before returning `:redirect`, or `nil`.
+        attr_reader :authorization_url
+
         def initialize(provider:, http_client_factory: nil)
           @provider = provider
           @http_client_factory = http_client_factory || -> { default_http_client }
+          @authorization_url = nil
         end
 
         # Runs the full discovery, registration, authorization, and token exchange flow.
         # On success, persists tokens via the provider and returns `:authorized`.
+        # A provider without a `callback_handler` stops after the redirect instead: the flow saves
+        # a pending authorization in the provider's storage, keyed by `state`, and returns `:redirect`, leaving the code
+        # exchange to `finish!` in the request that receives the redirect.
         def run!(server_url:, resource_metadata_url: nil, scope: nil)
           # The `resource_metadata` URL ships in `WWW-Authenticate` and is the very
           # first thing we contact in the OAuth flow, so it has to clear the same
@@ -256,6 +284,20 @@ module MCP
             code_challenge: pkce[:code_challenge],
             resource: resource,
           )
+
+          if @provider.callback_handler.nil?
+            save_pending_authorization(
+              state: state,
+              code_verifier: pkce[:code_verifier],
+              server_url: server_url,
+              resource: resource,
+              client_id: client_info_required_value(client_info, "client_id"),
+              as_metadata: as_metadata,
+            )
+            @authorization_url = authorization_url
+            @provider.redirect_handler.call(authorization_url)
+            return :redirect
+          end
 
           @provider.redirect_handler.call(authorization_url)
           callback_result = Array(@provider.callback_handler.call)
@@ -447,6 +489,82 @@ module MCP
 
           save_tokens_issued_by(preserve_refresh_token(new_tokens, refresh_token), as_metadata: as_metadata)
           :refreshed
+        end
+
+        # Finishes an authorization that `run!` left pending, in the request that receives the redirect to `redirect_uri`,
+        # which may run in another process. `callback_params` is that redirect's whole query as a Hash (`code`, `state`, and,
+        # when present, `iss`, `error`, and `error_description`); passing all of it, rather than picking values out, is what
+        # lets the flow tell an absent `iss` from one the caller did not look for.
+        #
+        # The pending authorization is looked up by `state` before any request is made, and it binds the rest of the exchange:
+        # the code is redeemed at the token endpoint recorded when the authorization began, with the client registration,
+        # `resource`, and `redirect_uri` used then, and without discovery running again, so the code reaches the authorization
+        # server the user was sent to (SEP-2352). The RFC 9207 `iss` is validated against the recorded issuer before the pending
+        # authorization is consumed, so a forged callback carrying a valid `state` cannot discard the verifier the legitimate
+        # callback needs, and before the callback's `error` is read, since in a mix-up those parameters are the attacker's.
+        # Past that check the pending authorization is consumed with `delete_pending_authorization`, which returns the entry
+        # it removed; only a callback that gets the entry back redeems the code, so of callbacks racing on the same `state`
+        # (a retried redirect, say), at most one does.
+        #
+        # Binding the callback to the user who started the authorization stays with the application: scoping `storage`
+        # to that user means a callback delivered to another user's session finds no pending authorization.
+        #
+        # On success, persists tokens via the provider and returns `:authorized`.
+        def finish!(server_url:, callback_params:)
+          unless provider_authorization_flow == :authorization_code && @provider.callback_handler.nil?
+            raise ArgumentError,
+              "finish! completes an authorization started by a provider without a callback_handler; " \
+                "this provider finishes its authorizations in `run!`."
+          end
+
+          state = callback_param(callback_params, "state")
+          raise AuthorizationError, "Authorization callback carried no `state`." unless state
+
+          pending = @provider.pending_authorization(state) if state.bytesize <= CALLBACK_STATE_MAX_LENGTH
+          raise AuthorizationError, UNKNOWN_PENDING_AUTHORIZATION_MESSAGE unless valid_pending_authorization?(pending)
+
+          if pending_authorization_expired?(pending)
+            @provider.delete_pending_authorization(state)
+            raise AuthorizationError, "The pending authorization has expired; start a new authorization."
+          end
+
+          unless safe_canonicalize_url(server_url, label: "MCP server URL") == pending["server_url"]
+            raise AuthorizationError, "The pending authorization was started for a different MCP server."
+          end
+
+          as_metadata = pending["authorization_server_metadata"]
+          # Checked when the authorization began, and checked again because the metadata has since made a round trip
+          # through the application's storage.
+          ensure_secure_endpoints!(as_metadata, server_url: pending["server_url"])
+
+          validate_authorization_response_issuer!(
+            as_metadata: as_metadata,
+            iss: callback_param(callback_params, "iss"),
+            iss_provided: true,
+          )
+
+          # The read above and this delete are separate calls, so the storage's atomic delete is what decides
+          # which of two concurrent callbacks carrying this `state` proceeds.
+          consumed = @provider.delete_pending_authorization(state)
+          raise AuthorizationError, UNKNOWN_PENDING_AUTHORIZATION_MESSAGE unless valid_pending_authorization?(consumed)
+
+          error = callback_param(callback_params, "error")
+          raise authorization_response_error(error, callback_param(callback_params, "error_description")) if error
+
+          code = callback_param(callback_params, "code")
+          raise AuthorizationError, "Authorization callback carried no authorization code." unless code
+
+          tokens = exchange_authorization_code(
+            as_metadata: as_metadata,
+            client_info: pending_client_information(pending, as_metadata: as_metadata),
+            code: code,
+            code_verifier: pending["code_verifier"],
+            resource: pending["resource"],
+            redirect_uri: pending["redirect_uri"],
+          )
+
+          save_tokens_issued_by(tokens, as_metadata: as_metadata)
+          :authorized
         end
 
         private
@@ -1096,6 +1214,88 @@ module MCP
           result.zero?
         end
 
+        def provider_pending_authorization_max_age
+          return Provider::DEFAULT_PENDING_AUTHORIZATION_MAX_AGE unless @provider.respond_to?(:pending_authorization_max_age)
+
+          @provider.pending_authorization_max_age
+        end
+
+        # Records what `finish!` needs to redeem the code exactly as this authorization began: the PKCE verifier, the MCP server,
+        # the `resource` and `redirect_uri` sent, the client identity used, and the authorization server metadata already validated.
+        # The client secret is not copied: `finish!` reads the registration from storage and requires the same `client_id`.
+        # Every value is JSON-compatible, so storage can serialize the entry as-is.
+        def save_pending_authorization(state:, code_verifier:, server_url:, resource:, client_id:, as_metadata:)
+          @provider.save_pending_authorization(
+            state,
+            {
+              "code_verifier" => code_verifier,
+              "server_url" => safe_canonicalize_url(server_url, label: "MCP server URL"),
+              "resource" => resource,
+              "redirect_uri" => @provider.redirect_uri,
+              "client_id" => client_id,
+              "authorization_server_metadata" => as_metadata,
+              "created_at" => Time.now.to_i,
+            },
+          )
+        end
+
+        def valid_pending_authorization?(pending)
+          return false unless pending.is_a?(Hash)
+          return false unless ["code_verifier", "server_url", "redirect_uri", "client_id"].all? { |key| non_empty_string?(pending[key]) }
+          return false unless pending["resource"].nil? || non_empty_string?(pending["resource"])
+
+          pending["authorization_server_metadata"].is_a?(Hash) && pending["created_at"].is_a?(Integer)
+        end
+
+        def pending_authorization_expired?(pending)
+          Time.now.to_i - pending["created_at"] > provider_pending_authorization_max_age
+        end
+
+        # The registration the authorization began with. A stored registration is used only while it still carries
+        # that `client_id` and is bound to the recorded authorization server; a Client ID Metadata Document URL,
+        # which is never stored, is used again while the recorded metadata advertises support for it.
+        def pending_client_information(pending, as_metadata:)
+          client_id = pending["client_id"]
+
+          stored = @provider.client_information
+          if stored.is_a?(Hash) &&
+              client_info_required_value(stored, "client_id") == client_id &&
+              client_info_required_value(stored, "issuer") == as_metadata["issuer"]
+            return stored
+          end
+
+          if client_id == provider_client_id_metadata_document_url && as_metadata["client_id_metadata_document_supported"] == true
+            return { "client_id" => client_id }
+          end
+
+          raise AuthorizationError, "The client registration changed after the authorization began; start a new authorization."
+        end
+
+        # Reads one parameter of an authorization response. Only a non-empty String counts: a repeated parameter that
+        # a framework delivers as an Array, or an empty value, is treated as absent.
+        def callback_param(params, key)
+          return unless params.is_a?(Hash)
+
+          value = params[key] || params[key.to_sym]
+          non_empty_string?(value) ? value : nil
+        end
+
+        def non_empty_string?(value)
+          value.is_a?(String) && !value.empty?
+        end
+
+        # An RFC 6749 Section 4.1.2.1 error response, reported with the bounds a token endpoint error gets.
+        # Reached only after the `iss` check, so the values are the authorization server's own; they are still text it chose,
+        # so they are cut to a bounded length and confined to the printable ASCII the RFC permits.
+        def authorization_response_error(error, description)
+          error = bounded_diagnostic(error, limit: TOKEN_ENDPOINT_ERROR_MAX_LENGTH)
+          description = bounded_diagnostic(description, limit: TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH)
+          message = "The authorization server returned an error to the authorization callback."
+          message += " #{[error, description].compact.join(": ")}" if error || description
+
+          AuthorizationError.new(message, error: error, error_description: description)
+        end
+
         # Per MCP 2025-11-25 Authorization and the TS/Python SDKs, scope resolution
         # prefers the `WWW-Authenticate` challenge first, then `scopes_supported`
         # from the Protected Resource Metadata, and falls back to a provider-supplied
@@ -1233,11 +1433,11 @@ module MCP
           uri
         end
 
-        def exchange_authorization_code(as_metadata:, client_info:, code:, code_verifier:, resource:)
+        def exchange_authorization_code(as_metadata:, client_info:, code:, code_verifier:, resource:, redirect_uri: @provider.redirect_uri)
           form = {
             "grant_type" => "authorization_code",
             "code" => code,
-            "redirect_uri" => @provider.redirect_uri,
+            "redirect_uri" => redirect_uri,
             "code_verifier" => code_verifier,
           }
           form["resource"] = resource if resource

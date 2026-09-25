@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Let a web application finish authorization in the request that receives the redirect (#573)
+
 ## [1.6.0] - 2026-09-21
 
 This release lets an application configure, on the OAuth provider, the requests the flow makes to
