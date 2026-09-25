@@ -291,6 +291,29 @@ module MCP
           )
         end
 
+        def test_canonicalize_url_keeps_the_slash_a_final_dot_segment_leaves_behind
+          # RFC 3986 Section 5.2.4 turns a final `/.` or `/..` into `/`, so the path ends in a slash rather than
+          # losing it with the segment; an empty segment is a segment too.
+          assert_equal("https://srv.example.com/a/", Discovery.canonicalize_url("https://srv.example.com/a/."))
+          assert_equal("https://srv.example.com/a/", Discovery.canonicalize_url("https://srv.example.com/a/b/.."))
+          assert_equal("https://srv.example.com/a//b", Discovery.canonicalize_url("https://srv.example.com/a//b"))
+          assert_equal("https://srv.example.com", Discovery.canonicalize_url("https://srv.example.com/.."))
+        end
+
+        def test_canonicalize_url_resolves_a_path_with_many_dot_segments_in_linear_time
+          # The path is the server's to choose (a PRM `resource`, an endpoint URL). Rewriting the input buffer
+          # for every dot segment copied the remainder each time, so 300,000 of them took tens of seconds;
+          # the bound below is loose enough for a slow CI machine and far below that.
+          url = "https://srv.example.com/#{"a/../" * 300_000}mcp"
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          canonical = Discovery.canonicalize_url(url)
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_equal("https://srv.example.com/mcp", canonical)
+          assert_operator(elapsed, :<, 5)
+        end
+
         def test_canonicalize_url_drops_userinfo
           # The canonicalized URL is sent on the wire as the RFC 8707 `resource`
           # claim and is surfaced in error messages, so credentials in
