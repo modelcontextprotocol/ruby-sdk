@@ -7,7 +7,7 @@ permalink: /examples/
 
 # Examples
 
-Runnable examples live in [`examples/`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples) in the repository.
+Runnable examples live in [`examples`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples) in the repository.
 
 ## Standalone Scripts
 
@@ -30,7 +30,7 @@ See [`examples/README.md`](https://github.com/modelcontextprotocol/ruby-sdk/blob
 
 [`examples/rails`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples/rails) is a complete, minimal
 Rails application serving an MCP server over the Streamable HTTP transport. The server and transport are built once
-at boot and mounted at `/mcp` in `config/routes.rb`; tools live in `app/tools/`, and a text resource is served through
+at boot and mounted at `/mcp` in `config/routes.rb`; tools live in `app/tools`, and a text resource is served through
 a `resources_read_handler`.
 
 ```console
