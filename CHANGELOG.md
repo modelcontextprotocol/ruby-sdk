@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-09-27
+
+This release makes the OAuth client parse `WWW-Authenticate` headers and URLs in linear time and repairs
+the lifecycle of `subscriptions/listen` streams: same-id streams are served, a keepalive thread ends with its slot,
+and the acknowledgement precedes the closing result.
+
+### Fixed
+
+- Replace authorization request parameters the endpoint URL already carries (#566)
+- Serve `subscriptions/listen` streams that carry the same request id (#567)
+- End a listen stream's keepalive thread when its slot is freed (#569)
+- Parse the `WWW-Authenticate` challenge in linear time (#571)
+- Keep the acknowledgement first when the transport closes during a listen registration (#574)
+- Resolve dot segments in linear time when canonicalizing a URL (#575)
+
 ## [1.6.0] - 2026-09-21
 
 This release lets an application configure, on the OAuth provider, the requests the flow makes to
