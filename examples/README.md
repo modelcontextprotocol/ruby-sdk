@@ -141,10 +141,10 @@ The client will:
 - Provide an interactive menu to trigger notifications
 - Display all received SSE events in real-time
 
-### 7. Rails Server (`rails/`)
+### 7. Rails Server (`rails`)
 
 A minimal Rails application that mounts `StreamableHTTPTransport` in its routes, following the "Rails (mount)" pattern from the top-level README.
-It demonstrates class-based tools in `app/tools/` and a resource with a read handler.
+It demonstrates class-based tools in `app/tools` and a resource with a read handler.
 
 **Usage:**
 

@@ -125,7 +125,7 @@ see [Client Transports](https://ruby.sdk.modelcontextprotocol.io/client/transpor
 
 ## Examples
 
-Runnable examples are available in [`examples/`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples),
+Runnable examples are available in [`examples`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples),
 including a complete Rails application in [`examples/rails`](https://github.com/modelcontextprotocol/ruby-sdk/tree/main/examples/rails).
 
 ## Documentation
