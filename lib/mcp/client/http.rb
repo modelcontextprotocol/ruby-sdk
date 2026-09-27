@@ -902,14 +902,24 @@ module MCP
         MCP::Client::OAuth::Discovery.parse_www_authenticate(header)
       end
 
+      # A provider without a `callback_handler` finishes the authorization in the request that receives the redirect,
+      # not here, so there is nothing to retry with yet: the pending authorization surfaces as
+      # `Flow::AuthorizationPendingError`, and requests made after `Flow#finish!` pick up the stored tokens.
       def run_full_authorization_flow!(flow:, params:)
         # Use the URL snapshotted at `initialize` time so a post-construction
         # mutation of `@url` cannot redirect PRM/AS discovery and the authorize
         # URL to an attacker-controlled host.
-        flow.run!(
+        result = flow.run!(
           server_url: @oauth_server_url,
           resource_metadata_url: params["resource_metadata"],
           scope: params["scope"],
+        )
+        return unless result == :redirect
+
+        raise MCP::Client::OAuth::Flow::AuthorizationPendingError.new(
+          "Authorization is pending: the user was sent to the authorization server, and the request can be retried " \
+            "once `MCP::Client::OAuth::Flow#finish!` completes the authorization with the redirect's query.",
+          authorization_url: flow.authorization_url,
         )
       end
 
