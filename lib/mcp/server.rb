@@ -13,6 +13,7 @@ require_relative "protocol_deprecations"
 require_relative "server_context"
 require_relative "server/capabilities"
 require_relative "server/input_required_result"
+require_relative "server/oauth"
 require_relative "server/pagination"
 require_relative "server/pending_response"
 require_relative "server/request_state_security"
@@ -274,10 +275,13 @@ module MCP
     # @param session [ServerSession, nil] Per-connection session. Passed by
     #   `ServerSession#handle` for session-scoped notification delivery.
     #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
+    # @param auth_info [Server::OAuth::AccessToken, nil] The verified access token
+    #   for the current request, passed by the transport layer and exposed to
+    #   handlers as `server_context.auth_info`.
     # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
-    def handle(request, session: nil)
+    def handle(request, session: nil, auth_info: nil)
       JsonRpcHandler.handle(request) do |method, request_id|
-        handle_request(request, method, session: session, related_request_id: request_id)
+        handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
       end
     end
 
@@ -287,10 +291,12 @@ module MCP
     # @param session [ServerSession, nil] Per-connection session. Passed by
     #   `ServerSession#handle_json` for session-scoped notification delivery.
     #   When `nil`, progress and logging notifications from tool handlers are silently skipped.
+    # @param auth_info [Server::OAuth::AccessToken, nil] The verified access token
+    #   for the current request, as in `handle`.
     # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
-    def handle_json(request, session: nil)
+    def handle_json(request, session: nil, auth_info: nil)
       JsonRpcHandler.handle_json(request) do |method, request_id|
-        handle_request(request, method, session: session, related_request_id: request_id)
+        handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
       end
     end
 
@@ -595,7 +601,7 @@ module MCP
       end
     end
 
-    def handle_request(request, method, session: nil, related_request_id: nil)
+    def handle_request(request, method, session: nil, related_request_id: nil, auth_info: nil)
       # A well-formed notification carries no JSON-RPC id and receives no response.
       # If a client erroneously sends a notification-only method with an id, the message
       # is framed as a request; since notification methods have no request handler,
@@ -686,25 +692,25 @@ module MCP
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
-            contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
 
             # An SEP-2322 `input_required` result must not be wrapped as `contents` or stamped with SEP-2549 cache hints.
             contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
           when Methods::RESOURCES_SUBSCRIBE, Methods::RESOURCES_UNSUBSCRIBE
             validate_resource_subscription_params!(params)
-            handler_result = dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            handler_result = dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
 
             subscription_result(handler_result)
           when Methods::TOOLS_CALL
-            call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::PROMPTS_GET
-            get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::COMPLETION_COMPLETE
-            complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::LOGGING_SET_LEVEL
             configure_logging_level(params, session: session)
           else
-            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope)
+            dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           end
           client = session&.client || @client
           add_instrumentation_data(client: client) if client
@@ -755,6 +761,15 @@ module MCP
         rescue CancelledError => e
           add_instrumentation_data(cancelled: true, cancellation_reason: e.reason)
           next JsonRpcHandler::NO_RESPONSE
+        rescue OAuth::InsufficientScopeError => e
+          # A handler's `require_scopes!` failure is a client authorization error, not a server fault:
+          # surface it as an invalid-request JSON-RPC error whose message names the missing scopes.
+          # HTTP-level 403 challenges remain the transport `required_scopes` gate's job.
+          report_exception(e, { request: request })
+          add_instrumentation_data(error: :insufficient_scope)
+          converted = RequestHandlerError.new(e.message, request, error_type: :invalid_request, original_error: e)
+          reported_exception = converted
+          raise converted
         rescue RequestHandlerError => e
           report_exception(e.original_error || e, { request: request })
           add_instrumentation_data(error: e.error_type)
@@ -1219,7 +1234,7 @@ module MCP
       apply_cache_metadata({ tools: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def call_tool(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def call_tool(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       tool_name = request[:name]
 
       tool = tools[tool_name]
@@ -1254,12 +1269,13 @@ module MCP
       response = call_tool_with_args(
         tool,
         arguments,
-        server_context_with_meta(request),
+        server_context_with_meta(request, auth_info: auth_info),
         progress_token: progress_token,
         session: session,
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        auth_info: auth_info,
         retry_fields: mrtr_retry_fields(request),
       )
       # An SEP-2322 `input_required` result is not a tool result: output schema
@@ -1273,9 +1289,11 @@ module MCP
         result,
         content_provided: response.respond_to?(:content_provided?) && response.content_provided?,
       )
-    rescue RequestHandlerError, CancelledError
+    rescue RequestHandlerError, CancelledError, OAuth::InsufficientScopeError
       # CancelledError is intentionally not wrapped so `handle_request` can turn it into
-      # `JsonRpcHandler::NO_RESPONSE` per the MCP cancellation spec.
+      # `JsonRpcHandler::NO_RESPONSE` per the MCP cancellation spec, and
+      # `OAuth::InsufficientScopeError` so `require_scopes!` failures keep their
+      # scope-naming message instead of the generic internal-error shape.
       raise
     rescue => e
       # `e.message` is deliberately not included: it can carry internals (class, method
@@ -1295,7 +1313,7 @@ module MCP
       apply_cache_metadata({ prompts: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       prompt_name = request[:name]
       prompt = @prompts[prompt_name]
       unless prompt
@@ -1323,6 +1341,7 @@ module MCP
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        auth_info: auth_info,
       )
 
       call_prompt_template_with_args(prompt, prompt_args, server_context)
@@ -1435,7 +1454,7 @@ module MCP
       { ttlMs: @ttl_ms || 0, cacheScope: @cache_scope || "private" }.merge(result)
     end
 
-    def complete(params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def complete(params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       validate_completion_params!(params)
 
       result = dispatch_optional_context_handler(
@@ -1445,6 +1464,7 @@ module MCP
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        auth_info: auth_info,
       )
 
       normalize_completion_result(result)
@@ -1453,7 +1473,7 @@ module MCP
     # Invokes `resources/read` via the registered handler. If the handler block opts in to `server_context:`,
     # pass an `MCP::ServerContext` so the handler can observe cancellation via `server_context.cancelled?` or
     # `server_context.raise_if_cancelled!`.
-    def read_resource_contents(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def read_resource_contents(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       dispatch_optional_context_handler(
         @handlers[Methods::RESOURCES_READ],
         request,
@@ -1461,6 +1481,7 @@ module MCP
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        auth_info: auth_info,
       )
     end
 
@@ -1468,7 +1489,7 @@ module MCP
     # `completion_handler`, `resources_subscribe_handler`, `resources_unsubscribe_handler`, or `define_custom_method`.
     # Existing handlers that only accept `params` are called unchanged; handlers that declare a `server_context:`
     # keyword receive an `MCP::ServerContext` wrapping the raw server context with cancellation plumbing.
-    def dispatch_optional_context_handler(handler, params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil)
+    def dispatch_optional_context_handler(handler, params, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       return handler.call(params) unless handler_declares_server_context?(handler)
 
       server_context = build_server_context(
@@ -1477,6 +1498,7 @@ module MCP
         related_request_id: related_request_id,
         cancellation: cancellation,
         envelope: envelope,
+        auth_info: auth_info,
       )
       handler.call(params, server_context: server_context)
     end
@@ -1501,13 +1523,13 @@ module MCP
 
     # Builds an `MCP::ServerContext` used to give a handler access to session-scoped helpers
     # (progress, cancellation, nested server-to-client requests).
-    def build_server_context(request:, session:, related_request_id:, cancellation:, envelope: nil)
+    def build_server_context(request:, session:, related_request_id:, cancellation:, envelope: nil, auth_info: nil)
       meta_source = request.is_a?(Hash) ? request : {}
       progress_token = meta_source.dig(:_meta, :progressToken)
       progress = Progress.new(notification_target: session, progress_token: progress_token, related_request_id: related_request_id)
       retry_fields = mrtr_retry_fields(meta_source)
       ServerContext.new(
-        server_context_with_meta(meta_source),
+        server_context_with_meta(meta_source, auth_info: auth_info),
         progress: progress,
         notification_target: session,
         related_request_id: related_request_id,
@@ -1515,6 +1537,7 @@ module MCP
         envelope: envelope,
         input_responses: retry_fields[:input_responses],
         request_state: retry_fields[:request_state],
+        auth_info: auth_info,
       )
     end
 
@@ -1574,7 +1597,7 @@ module MCP
       end
     end
 
-    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, retry_fields: nil)
+    def call_tool_with_args(tool, arguments, context, progress_token: nil, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil, retry_fields: nil)
       # Transports parse incoming JSON with `symbolize_names: true`, so `arguments` already arrives symbolized
       # at every nesting level. This top-level transform only guards callers that hand in string-keyed top-level arguments;
       # it does not recurse, and nested object keys remain symbols. Tools therefore receive symbol keys all the way down.
@@ -1592,6 +1615,7 @@ module MCP
           envelope: envelope,
           input_responses: retry_fields&.fetch(:input_responses, nil),
           request_state: retry_fields&.fetch(:request_state, nil),
+          auth_info: auth_info,
         )
         tool.call(**args, server_context: server_context)
       else
@@ -1609,15 +1633,18 @@ module MCP
       raw_result.is_a?(InputRequiredResult) ? raw_result : raw_result.to_h
     end
 
-    def server_context_with_meta(request)
+    def server_context_with_meta(request, auth_info: nil)
       meta = request[:_meta]
-      if meta && server_context.is_a?(Hash)
-        context = server_context.dup
-        context[:_meta] = meta
+      return server_context if meta.nil? && auth_info.nil?
+
+      if server_context.is_a?(Hash) || server_context.nil?
+        context = (server_context || {}).dup
+        context[:_meta] = meta if meta
+        context[:auth_info] = auth_info if auth_info
         context
-      elsif meta && server_context.nil?
-        { _meta: meta }
       else
+        # A custom (non-Hash) user context is passed through untouched; handlers on that path read
+        # the token via `server_context.auth_info` instead.
         server_context
       end
     end

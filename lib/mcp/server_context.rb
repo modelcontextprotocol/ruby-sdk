@@ -15,8 +15,11 @@ module MCP
     # (the same access model as the envelope readers).
     attr_reader :input_responses, :request_state
 
-    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil, envelope: nil,
-      input_responses: nil, request_state: nil)
+    # The verified `MCP::Server::OAuth::AccessToken` for the current request, or nil when the request was not bearer-authenticated.
+    # This reader is the canonical accessor; when the underlying context is a Hash the same value is also reachable as `server_context[:auth_info]`.
+    attr_reader :auth_info
+
+    def initialize(context, progress:, notification_target:, related_request_id: nil, cancellation: nil, envelope: nil, input_responses: nil, request_state: nil, auth_info: nil)
       @context = context
       @progress = progress
       @notification_target = notification_target
@@ -25,6 +28,7 @@ module MCP
       @envelope = envelope
       @input_responses = input_responses
       @request_state = request_state
+      @auth_info = auth_info
     end
 
     # Reads one entry of {#input_responses} by its `inputRequests` key, tolerating symbol or string keys.
@@ -87,6 +91,26 @@ module MCP
 
       required = path.reverse.inject({}) { |acc, key| { key.to_sym => acc } }
       raise Server::MissingRequiredClientCapabilityError, required
+    end
+
+    # Whether the current request was bearer-authenticated.
+    def authenticated?
+      !@auth_info.nil?
+    end
+
+    # Guards the current operation on OAuth scopes the token must carry, for authorization decisions finer-grained than
+    # the transport-wide `required_scopes`. Raises `Server::OAuth::InsufficientScopeError`, which surfaces as
+    # a JSON-RPC invalid-request error naming the missing scopes. HTTP-level 403 step-up challenges remain the job of
+    # the transport's `required_scopes` gate, matching how the Python and TypeScript SDKs split endpoint-level challenges
+    # from in-handler authorization. The transport's `scope_matcher:` applies here as well: the authenticator attaches it
+    # to the token it hands over, so a scope hierarchy is judged the same way at the gate and in handlers.
+    def require_scopes!(*scopes)
+      raise ArgumentError, "at least one scope is required" if scopes.empty?
+
+      missing_scopes = scopes.reject { |scope| @auth_info&.scope?(scope) }
+      return if missing_scopes.empty?
+
+      raise Server::OAuth::InsufficientScopeError.new("Token is missing required scopes: #{missing_scopes.join(", ")}", required_scopes: scopes)
     end
 
     # Reports progress for the current tool operation.
