@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "set"
 require_relative "../../result_type"
 require_relative "../../transport"
 
@@ -47,6 +48,20 @@ module MCP
         # like the session-flood case `DEFAULT_MAX_SESSIONS` guards. A listen request past the cap is rejected with HTTP 503;
         # pass `max_listen_subscriptions: nil` to opt out.
         DEFAULT_MAX_LISTEN_SUBSCRIPTIONS = 1_000
+
+        # Bound on the bytes of resource URIs one `subscriptions/listen` request may name in `resourceSubscriptions`
+        # (the sum of their byte lengths after duplicates are dropped). The URIs are held for the life of the stream,
+        # so without a bound each stream could retain a request body's worth of URIs and the retained total would be
+        # `max_listen_subscriptions` times `max_request_bytes`. 64 KiB names about a thousand ordinary URIs;
+        # pass `max_resource_subscription_bytes: nil` to opt out. The specification sets no limit, nor do the TypeScript
+        # and Python SDKs; this is the same kind of local safety limit as `max_request_bytes`.
+        DEFAULT_MAX_RESOURCE_SUBSCRIPTION_BYTES = 64 * 1024
+
+        # Bound on the number of distinct resource URIs one `subscriptions/listen` request may name. A byte bound does
+        # not tightly bound the memory a stream keeps, since each retained URI carries a fixed per-object cost however
+        # short it is, so the count is bounded as well. Like `MAX_JSON_NESTING`, it is a structural limit applied
+        # whatever `max_resource_subscription_bytes` is, including `nil`.
+        MAX_RESOURCE_SUBSCRIPTION_URIS = 1_024
 
         # Distinguishes "argument omitted, apply the secure default" from an explicit `nil` (opt out of expiry).
         UNSET_IDLE_TIMEOUT = Object.new.freeze
@@ -125,6 +140,10 @@ module MCP
         # @param max_listen_subscriptions [Integer, nil] cap on concurrent `subscriptions/listen`
         #   streams; a listen request past the cap is rejected with HTTP 503, and `nil` disables
         #   the cap.
+        # @param max_resource_subscription_bytes [Integer, nil] bound on the total byte length of the distinct
+        #   resource URIs one `subscriptions/listen` request names in `resourceSubscriptions`; a request over
+        #   the bound is rejected with HTTP 400 and JSON-RPC `-32602`.
+        #   Defaults to `DEFAULT_MAX_RESOURCE_SUBSCRIPTION_BYTES` (64 KiB), and `nil` disables the bound.
         # @param listen_keepalive_interval [Numeric, nil] seconds between SSE keepalive comment frames
         #   on a `subscriptions/listen` stream; the periodic write frees the stream's slot when the peer
         #   has gone away. Defaults to `DEFAULT_LISTEN_KEEPALIVE_INTERVAL` (15); pass `nil` to disable
@@ -150,6 +169,7 @@ module MCP
           session_request_validator: nil,
           max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
           max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
+          max_resource_subscription_bytes: DEFAULT_MAX_RESOURCE_SUBSCRIPTION_BYTES,
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
           serve_subscriptions_listen: true,
           server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT
@@ -170,8 +190,9 @@ module MCP
           @pending_responses = {}
 
           # Maps a key the transport mints for each `subscriptions/listen` stream to
-          # `{ request_id: listen_request_id, stream: stream_object, filter: honored_subscription_filter, active: boolean,
-          # write_mutex: Mutex, keepalive_wakeup: ConditionVariable }` (SEP-2575). The request id is the client's,
+          # `{ request_id: listen_request_id, stream: stream_object, filter: honored_list_changed_flags,
+          # resource_uris: Set_of_honored_resource_uris, active: boolean, write_mutex: Mutex,
+          # keepalive_wakeup: ConditionVariable }` (SEP-2575). The request id is the client's,
           # unique only among that client's own in-flight requests, so it stamps `subscriptionId` but cannot serve as the key:
           # two clients may pick the same one. Whoever removes an entry signals `keepalive_wakeup` under `@mutex`,
           # so the stream's keepalive thread ends with its slot instead of sleeping out its interval.
@@ -217,6 +238,12 @@ module MCP
           end
 
           @max_listen_subscriptions = max_listen_subscriptions
+
+          if !max_resource_subscription_bytes.nil? && !(max_resource_subscription_bytes.is_a?(Integer) && max_resource_subscription_bytes > 0)
+            raise ArgumentError, "max_resource_subscription_bytes must be a positive Integer or nil"
+          end
+
+          @max_resource_subscription_bytes = max_resource_subscription_bytes
 
           if !listen_keepalive_interval.nil? && !(listen_keepalive_interval.is_a?(Numeric) && listen_keepalive_interval > 0)
             raise ArgumentError, "listen_keepalive_interval must be a positive number or nil"
@@ -876,6 +903,15 @@ module MCP
             )
           end
 
+          if (problem = resource_subscriptions_problem(filter))
+            return json_rpc_error_response(
+              status: 400,
+              code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+              message: "Invalid params: subscriptions/listen #{problem}",
+              id: request_id,
+            )
+          end
+
           # Best-effort cap check before committing to the SSE response; the registration inside
           # `listen_sse_body` re-checks atomically for the race between two concurrent listens
           # crossing the cap together.
@@ -946,10 +982,18 @@ module MCP
           ListenStreamBody.new do |stream|
             subscription_key = SecureRandom.uuid
             subscription = nil
+            # The entry keeps the list-changed flags of the honored filter and the URIs as a frozen Set, both built ahead of the registry lock:
+            # delivery looks each notification's URI up in constant time, so neither the matching cost nor the lock hold grows with
+            # the number of URIs a stream named. The entry does not keep the Array the acknowledgement echoes; that one lives only as long as
+            # the host keeps this response body.
+            entry_filter = honored.reject { |name, _value| name == :resourceSubscriptions }
+            resource_uris = Set.new(honored[:resourceSubscriptions] || []).freeze
+
             @mutex.synchronize do
               unless @max_listen_subscriptions && @listen_subscriptions.size >= @max_listen_subscriptions
                 subscription = {
-                  request_id: request_id, stream: stream, filter: honored, active: false, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new
+                  request_id: request_id, stream: stream, filter: entry_filter, resource_uris: resource_uris, active: false,
+                  write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new,
                 }
                 @listen_subscriptions[subscription_key] = subscription
               end
@@ -1068,10 +1112,34 @@ module MCP
 
           subscriptions = filter[:resourceSubscriptions]
           if capability_flag?(capabilities, :resources, :subscribe) && subscriptions.is_a?(Array) && !subscriptions.empty?
-            honored[:resourceSubscriptions] = subscriptions
+            honored[:resourceSubscriptions] = subscriptions.uniq
           end
 
           honored
+        end
+
+        # Checks a listen filter's `resourceSubscriptions` against the schema, which types it as an optional array of strings,
+        # so a member that is present but `null` is refused like any other non-array; against `MAX_RESOURCE_SUBSCRIPTION_URIS`;
+        # and against `max_resource_subscription_bytes`, returning the problem to report or `nil`. Duplicates are dropped before
+        # the bounds are measured, since they are dropped before storage too. The checks run whether or not the server declares
+        # the `subscribe` capability: a request that violates the schema is invalid regardless of what would be honored,
+        # and the bounds are limits on the request itself, like `max_request_bytes`, not on what the server would retain from it.
+        def resource_subscriptions_problem(filter)
+          return unless filter.key?(:resourceSubscriptions)
+
+          subscriptions = filter[:resourceSubscriptions]
+          unless subscriptions.is_a?(Array) && subscriptions.all? { |uri| uri.is_a?(String) }
+            return "`resourceSubscriptions` must be an array of strings"
+          end
+
+          distinct = subscriptions.uniq
+          if distinct.size > MAX_RESOURCE_SUBSCRIPTION_URIS
+            return "`resourceSubscriptions` exceeds #{MAX_RESOURCE_SUBSCRIPTION_URIS} URIs"
+          end
+          return unless @max_resource_subscription_bytes
+          return if distinct.sum(&:bytesize) <= @max_resource_subscription_bytes
+
+          "`resourceSubscriptions` exceeds #{@max_resource_subscription_bytes} bytes"
         end
 
         # Reads a nested capability flag tolerating both symbol and string keys, since user-supplied capability hashes arrive
@@ -1091,24 +1159,16 @@ module MCP
           field = LISTEN_FILTER_FIELDS[method]
           return if field.nil? && method != Methods::NOTIFICATIONS_RESOURCES_UPDATED
 
-          # The matching snapshot is taken under `@mutex`, but stream writes happen outside it:
-          # a slow or stalled subscriber must not block the transport, matching the legacy delivery paths.
-          matched = @mutex.synchronize do
-            @listen_subscriptions.filter_map do |subscription_key, subscription|
-              # An inactive entry has not finished writing its acknowledgement yet;
-              # delivering to it would put a notification ahead of the acknowledgement.
-              next unless subscription[:active]
+          # Only the snapshot of active entries is taken under `@mutex`, one pass over the entries as before;
+          # the matching and the stream writes happen outside it, so neither the number of URIs the streams named
+          # nor a slow or stalled subscriber can hold the transport's lock, matching the legacy delivery paths.
+          # An inactive entry has not finished writing its acknowledgement yet;
+          # delivering to it would put a notification ahead of the acknowledgement.
+          candidates = @mutex.synchronize { @listen_subscriptions.select { |_key, subscription| subscription[:active] } }
 
-              hit = if field
-                subscription[:filter][field]
-              else
-                uris = subscription[:filter][:resourceSubscriptions]
-                uri = params.is_a?(Hash) ? params[:uri] || params["uri"] : nil
-                uris.is_a?(Array) && uris.include?(uri)
-              end
-
-              [subscription_key, subscription] if hit
-            end
+          uri = params.is_a?(Hash) ? params[:uri] || params["uri"] : nil
+          matched = candidates.select do |_key, subscription|
+            field ? subscription[:filter][field] : subscription[:resource_uris].include?(uri)
           end
 
           matched.each do |subscription_key, subscription|
