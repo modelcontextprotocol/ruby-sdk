@@ -53,7 +53,7 @@ This is the official Ruby SDK for the Model Context Protocol (MCP), implementing
 ## Release process
 
 - Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format in CHANGELOG.md
-- Update CHANGELOG.md before cutting releases
+- Do not edit CHANGELOG.md in non-release PRs; maintainers add entries during release preparation
 - Use git history and PR merge commits to construct changelog entries
 - Format entries as: "Terse description of the change (#nnn)"
 - Keep entries in flat list format (no nesting)
