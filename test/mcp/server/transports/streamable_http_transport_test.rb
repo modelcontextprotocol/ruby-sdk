@@ -6059,6 +6059,182 @@ module MCP
           assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
+        test "subscriptions/listen requires resourceSubscriptions to be an array of strings" do
+          # The specification types the member as an optional `string[]`. The TypeScript SDK refuses anything else, `null` included,
+          # at schema validation, and the Python SDK refuses a non-string element there too (it reads `null` as absent);
+          # either way the refusal comes before any capability is consulted, so it does not depend on `subscribe` being declared.
+          ["file:///a.txt", ["file:///a.txt", 1], [nil], nil].each do |resource_subscriptions|
+            response = @transport.handle_request(modern_rack_request(
+              modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: resource_subscriptions } }),
+            ))
+
+            assert_equal 400, response[0]
+            body = JSON.parse(response[2][0])
+            assert_equal(-32602, body.dig("error", "code"))
+            assert_includes body.dig("error", "message"), "array of strings"
+            assert_empty @transport.instance_variable_get(:@listen_subscriptions)
+          end
+        end
+
+        test "subscriptions/listen refuses resourceSubscriptions over max_resource_subscription_bytes" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          transport = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: 26)
+
+          # Two 13-byte URIs fit exactly; one byte more does not.
+          within = ["file:///a.txt", "file:///b.txt"]
+          over = within + ["x"]
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: over } }),
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal "listen-1", body["id"]
+          assert_equal(-32602, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "26 bytes"
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+
+          io = open_listen_stream(id: "listen-2", notifications: { resourceSubscriptions: within }, transport: transport)
+
+          assert_equal within, sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen counts each resource URI once and stores the URIs as a set" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+
+          # The bound admits one 13-byte URI, so the request passes only because its duplicate is dropped first.
+          transport = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: 13)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { resourceSubscriptions: ["file:///a.txt", "file:///a.txt"] },
+            transport: transport,
+          )
+
+          assert_equal ["file:///a.txt"], sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+          entry = transport.instance_variable_get(:@listen_subscriptions).values.first
+          assert_equal Set.new(["file:///a.txt"]), entry[:resource_uris]
+          refute entry[:filter].key?(:resourceSubscriptions), "the entry keeps the URIs only as the Set"
+
+          transport.send_notification("notifications/resources/updated", { uri: "file:///a.txt" }, **{})
+
+          assert_equal 2, sse_events(io).size
+        ensure
+          transport.close
+        end
+
+        test "max_resource_subscription_bytes: nil removes the bound" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          transport = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: nil)
+
+          # About 100 KiB of URIs, over the default byte bound but within the URI count bound.
+          uris = Array.new(1_000) { |index| "file:///resource/#{index.to_s.rjust(80, "0")}.txt" }
+
+          io = open_listen_stream(id: "listen-1", notifications: { resourceSubscriptions: uris }, transport: transport)
+
+          assert_equal uris, sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen refuses more distinct resource URIs than MAX_RESOURCE_SUBSCRIPTION_URIS" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+
+          # The count bound applies even with the byte bound removed.
+          transport = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: nil)
+          limit = StreamableHTTPTransport::MAX_RESOURCE_SUBSCRIPTION_URIS
+          uris = Array.new(limit + 1) { |index| "u#{index}" }
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: uris } }),
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32602, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "#{limit} URIs"
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+
+          # Exactly at the bound, with the extra URI a duplicate, is accepted.
+          io = open_listen_stream(
+            id: "listen-2",
+            notifications: { resourceSubscriptions: uris.first(limit) + [uris.first] },
+            transport: transport,
+          )
+
+          assert_equal limit, sse_events(io).first.dig("params", "notifications", "resourceSubscriptions").size
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen applies the URI count bound under the default byte bound" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          transport = StreamableHTTPTransport.new(server)
+          limit = StreamableHTTPTransport::MAX_RESOURCE_SUBSCRIPTION_URIS
+
+          # Short URIs: over the count bound while far inside the default 64 KiB byte bound.
+          uris = Array.new(limit + 1) { |index| "u#{index}" }
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: uris } }),
+          ))
+
+          assert_equal 400, response[0]
+          assert_includes JSON.parse(response[2][0]).dig("error", "message"), "#{limit} URIs"
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen measures resource URIs in bytes, not characters" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+
+          # 13 characters but 14 bytes: a bound of the character count refuses the URI, one of the byte count admits it.
+          uri = "file:///#{0xE9.chr(Encoding::UTF_8)}.txt"
+          transport = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: uri.length)
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: [uri] } }),
+          ))
+
+          assert_equal 400, response[0]
+          assert_includes JSON.parse(response[2][0]).dig("error", "message"), "#{uri.length} bytes"
+
+          accepting = StreamableHTTPTransport.new(server, max_resource_subscription_bytes: uri.bytesize)
+          io = open_listen_stream(id: "listen-2", notifications: { resourceSubscriptions: [uri] }, transport: accepting)
+
+          assert_equal [uri], sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+        ensure
+          transport.close
+          accepting.close
+        end
+
+        test "subscriptions/listen applies the resource URI bounds without the subscribe capability" do
+          # The bounds limit the request itself, so a server that honors no resource subscriptions refuses
+          # an over-bound request too rather than acknowledging it with the URIs dropped.
+          transport = StreamableHTTPTransport.new(@server, max_resource_subscription_bytes: 16)
+
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { resourceSubscriptions: ["file:///long-enough.txt"] } }),
+          ))
+
+          assert_equal 400, response[0]
+          assert_includes JSON.parse(response[2][0]).dig("error", "message"), "16 bytes"
+        ensure
+          transport.close
+        end
+
+        test "max_resource_subscription_bytes rejects a non-positive value" do
+          # The message is asserted: an unknown keyword raises `ArgumentError` too, so the class alone would not prove the keyword is validated.
+          [0, "64"].each do |value|
+            error = assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, max_resource_subscription_bytes: value) }
+            assert_equal "max_resource_subscription_bytes must be a positive Integer or nil", error.message
+          end
+        end
+
         test "subscriptions/listen requires the modern _meta envelope" do
           response = @transport.handle_request(modern_rack_request(
             { jsonrpc: "2.0", method: "subscriptions/listen", id: "listen-1", params: { notifications: {} } }.to_json,
@@ -6116,6 +6292,7 @@ module MCP
             request_id: "listen-1",
             stream: io,
             filter: { toolsListChanged: true },
+            resource_uris: Set.new,
             active: false,
             write_mutex: Mutex.new,
             keepalive_wakeup: ConditionVariable.new,
@@ -6201,6 +6378,7 @@ module MCP
             request_id: "listen-1",
             stream: io,
             filter: { toolsListChanged: true },
+            resource_uris: Set.new,
             active: false,
             write_mutex: Mutex.new,
             keepalive_wakeup: ConditionVariable.new,
@@ -6399,7 +6577,7 @@ module MCP
           end
           stream.define_singleton_method(:flush) {}
           @transport.instance_variable_get(:@listen_subscriptions)["listen-1"] = {
-            request_id: "listen-1", stream: stream, filter: {}, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new,
+            request_id: "listen-1", stream: stream, filter: {}, resource_uris: Set.new, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new,
           }
 
           @transport.send(:send_listen_keepalive_ping, "listen-1")

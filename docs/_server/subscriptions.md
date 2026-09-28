@@ -69,10 +69,19 @@ Concurrent streams are capped by `max_listen_subscriptions:` (default 1000; pass
 comment frame every `listen_keepalive_interval:` seconds (default 15) so a dropped connection frees its slot; pass `listen_keepalive_interval: nil`
 when an upstream proxy already keeps the stream alive.
 
+The resource URIs one request names in `resourceSubscriptions` are held for the life of the stream, so the total byte length
+of the distinct URIs is bounded by `max_resource_subscription_bytes:` (default 64 KiB, about a thousand ordinary URIs;
+pass `nil` to remove the bound). The number of distinct URIs is bounded as well, at 1024, and that bound always applies,
+since each retained URI carries a fixed cost however short it is. Duplicates are dropped before either bound is measured,
+and the acknowledgement echoes the deduplicated list. A request over either bound is rejected with HTTP 400 and JSON-RPC `-32602`,
+as is one whose `resourceSubscriptions` is not an array of strings.
+Together with `max_listen_subscriptions`, these bound both the bytes and the number of URIs the listen streams can retain.
+
 ```ruby
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(
   server,
   max_listen_subscriptions: 500,
+  max_resource_subscription_bytes: 16 * 1024,
   listen_keepalive_interval: 30,
 )
 ```
