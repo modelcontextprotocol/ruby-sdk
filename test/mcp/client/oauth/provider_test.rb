@@ -301,6 +301,58 @@ module MCP
           assert_nil(storage.pending_authorization("state-1"))
           assert_equal({ "code_verifier" => "v2" }, storage.pending_authorization("state-2"))
         end
+
+        def test_in_memory_storage_drops_pending_authorizations_older_than_the_max_age_when_one_is_saved
+          storage = InMemoryStorage.new(pending_authorization_max_age: 60)
+          now = Time.now.to_i
+          storage.save_pending_authorization("stale", { "code_verifier" => "v1", "created_at" => now - 61 })
+          storage.save_pending_authorization("fresh", { "code_verifier" => "v2", "created_at" => now - 30 })
+          storage.save_pending_authorization("undated", { "code_verifier" => "v3" })
+
+          assert_nil(storage.pending_authorization("stale"), "the stale entry is dropped by the save that follows it")
+
+          storage.save_pending_authorization("new", { "code_verifier" => "v4", "created_at" => now })
+
+          assert_equal("v2", storage.pending_authorization("fresh")["code_verifier"])
+          assert_equal("v3", storage.pending_authorization("undated")["code_verifier"])
+          assert_equal("v4", storage.pending_authorization("new")["code_verifier"])
+          assert_equal("v4", storage.delete_pending_authorization("new")["code_verifier"])
+          assert_nil(storage.delete_pending_authorization("new"))
+        end
+
+        def test_the_default_storage_drops_pending_authorizations_at_the_provider_max_age
+          arguments = args_for("https://app.example.com/callback")
+          arguments.delete(:callback_handler)
+          provider = Provider.new(**arguments, pending_authorization_max_age: 30)
+          now = Time.now.to_i
+          provider.save_pending_authorization("stale", { "code_verifier" => "v1", "created_at" => now - 31 })
+
+          provider.save_pending_authorization("fresh", { "code_verifier" => "v2", "created_at" => now })
+
+          assert_nil(provider.pending_authorization("stale"))
+          assert_equal("v2", provider.pending_authorization("fresh")["code_verifier"])
+        end
+
+        def test_in_memory_storage_rejects_a_pending_authorization_max_age_that_is_not_a_positive_integer
+          [0, -1, 1.5, "600", nil].each do |max_age|
+            error = assert_raises(ArgumentError) { InMemoryStorage.new(pending_authorization_max_age: max_age) }
+
+            assert_equal("pending_authorization_max_age must be a positive Integer number of seconds (got #{max_age.inspect}).", error.message)
+          end
+        end
+
+        def test_in_memory_storage_inspect_shows_no_secrets
+          storage = InMemoryStorage.new
+          storage.save_tokens("access_token" => "secret-token", "refresh_token" => "secret-refresh")
+          storage.save_client_information("client_id" => "client-1", "client_secret" => "secret-client")
+          storage.save_pending_authorization("state-1", { "code_verifier" => "secret-verifier", "created_at" => Time.now.to_i })
+
+          refute_includes(storage.inspect, "secret")
+          assert_includes(storage.inspect, "tokens=[present]")
+          assert_includes(storage.inspect, "pending_authorizations=1")
+          refute_includes(storage.inspect, "\n")
+          assert_includes(InMemoryStorage.new.inspect, "tokens=nil")
+        end
       end
     end
   end

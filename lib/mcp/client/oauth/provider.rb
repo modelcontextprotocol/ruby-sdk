@@ -45,7 +45,8 @@ module MCP
       #   the stale registration and tokens and re-registers.
       #   Without `callback_handler`, it must also respond to `save_pending_authorization(state, pending)`,
       #   `pending_authorization(state)`, and `delete_pending_authorization(state)`; the last must remove the entry
-      #   and return it atomically, returning `nil` when there was none.
+      #   and return it atomically, returning `nil` when there was none, and the storage should expire entries
+      #   older than `pending_authorization_max_age`, as `InMemoryStorage` does.
       # - `client_id_metadata_document_url` - URL where the client publishes its Client ID Metadata Document
       #   (`draft-ietf-oauth-client-id-metadata-document-00` and the MCP authorization specification).
       #   When the authorization server advertises `client_id_metadata_document_supported: true`,
@@ -91,9 +92,11 @@ module MCP
         # and the request that receives the redirect.
         class PendingAuthorizationStorageError < ArgumentError; end
 
-        # Seconds a pending authorization stays redeemable after the redirect when the provider has no `callback_handler`.
-        # Long enough for a user to sign in and consent at the authorization server, short enough that an abandoned
-        # authorization does not keep its PKCE verifier in `storage` indefinitely.
+        # Seconds a pending authorization stays redeemable, counted from the moment `run!` saves it, when the provider has
+        # no `callback_handler`; long enough for a user to sign in and consent at the authorization server. It is also
+        # the age past which `InMemoryStorage` drops an authorization that was never finished, at its next save, so that
+        # an abandoned one does not keep its PKCE verifier in memory for the life of the process; a custom storage should
+        # expire entries at the same age.
         DEFAULT_PENDING_AUTHORIZATION_MAX_AGE = 600
 
         PENDING_AUTHORIZATION_STORAGE_METHODS = [
@@ -146,7 +149,13 @@ module MCP
 
           http_client_customizer = validated_http_client_customizer(http_client_customizer)
 
-          storage ||= InMemoryStorage.new
+          unless pending_authorization_max_age.is_a?(Integer) && pending_authorization_max_age.positive?
+            raise ArgumentError, "pending_authorization_max_age must be a positive Integer number of seconds (got #{pending_authorization_max_age.inspect})."
+          end
+
+          # The default storage drops abandoned pending authorizations at the same age the flow stops redeeming them.
+          storage ||= InMemoryStorage.new(pending_authorization_max_age: pending_authorization_max_age)
+
           if callback_handler.nil?
             missing = PENDING_AUTHORIZATION_STORAGE_METHODS.reject { |method| storage.respond_to?(method) }
             unless missing.empty?
@@ -154,12 +163,6 @@ module MCP
                 "Without a callback_handler the authorization finishes in a later request, so storage must also respond to " \
                   "#{missing.join(", ")} (#{storage.class} does not)."
             end
-          end
-
-          unless pending_authorization_max_age.is_a?(Integer) && pending_authorization_max_age.positive?
-            raise ArgumentError,
-              "pending_authorization_max_age must be a positive Integer number of seconds " \
-                "(got #{pending_authorization_max_age.inspect})."
           end
 
           @client_metadata = client_metadata
