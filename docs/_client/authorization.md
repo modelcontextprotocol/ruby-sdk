@@ -225,7 +225,9 @@ The storage must also respond to `save_pending_authorization(state, pending)`, `
 `Provider.new` raises `Provider::PendingAuthorizationStorageError` when it does not. A pending authorization is a Hash of JSON-compatible values that includes
 the PKCE verifier, so keep it where you keep credentials, persist it as-is, and share it between the processes that can receive the redirect.
 `delete_pending_authorization` must remove the entry and return it in one atomic step, such as `GETDEL` in Redis or `DELETE ... RETURNING` in SQL,
-and return `nil` when there was none. `InMemoryStorage` implements the methods for a single process.
+and return `nil` when there was none. `finish!` touches only the entry its callback's `state` names, and an authorization the user never finishes gets no callback,
+so the storage should expire entries older than `pending_authorization_max_age`, with a TTL in Redis or a periodic delete in SQL.
+`InMemoryStorage` implements the methods for a single process and drops such entries the next time a pending authorization is saved.
 
 `finish!` redeems the code the way the authorization began, and refuses anything else with `Flow::AuthorizationError`:
 
