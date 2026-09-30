@@ -904,6 +904,14 @@ module MCP
             return invalid_request_response("Invalid Request: subscriptions/listen requires an id")
           end
 
+          # The id is echoed in every message of the stream, so one that cannot be written back as JSON
+          # (a String holding bytes that are not valid UTF-8 parses, but does not generate) is refused here,
+          # while the refusal can still answer with a null id, rather than surfacing as a failed write after
+          # the stream has been registered.
+          unless json_encodable?(request_id)
+            return invalid_request_response("Invalid Request: subscriptions/listen id must be valid UTF-8")
+          end
+
           begin
             if RequestEnvelope.modern?(params)
               RequestEnvelope.parse!(params, request: params)
@@ -946,7 +954,43 @@ module MCP
             return too_many_listen_subscriptions_response(request_id)
           end
 
-          [200, SSE_HEADERS.dup, listen_sse_body(request_id, honored_filter(filter))]
+          honored = honored_filter(filter)
+
+          # The acknowledgement echoes the honored filter, whose resource URIs are client-supplied strings,
+          # so it is encoded before the stream is committed to: a URI that cannot be written as JSON is
+          # refused with a 400 instead of failing the first write after the stream was registered.
+          unless (acknowledgement = listen_acknowledgement_json(request_id, honored))
+            return json_rpc_error_response(
+              status: 400,
+              code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+              message: "Invalid params: subscriptions/listen `notifications` must be valid UTF-8",
+              id: request_id,
+            )
+          end
+
+          [200, SSE_HEADERS.dup, listen_sse_body(request_id, honored, acknowledgement)]
+        end
+
+        # The `notifications/subscriptions/acknowledged` frame for a listen stream as JSON, or `nil` when
+        # the request id or the honored filter holds a string JSON cannot encode.
+        def listen_acknowledgement_json(request_id, honored)
+          {
+            jsonrpc: "2.0",
+            method: Methods::NOTIFICATIONS_SUBSCRIPTIONS_ACKNOWLEDGED,
+            params: {
+              notifications: honored,
+              _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
+            },
+          }.to_json
+        rescue JSON::GeneratorError
+          nil
+        end
+
+        def json_encodable?(value)
+          value.to_json
+          true
+        rescue JSON::GeneratorError
+          false
         end
 
         def listen_subscriptions_full?
@@ -1005,7 +1049,7 @@ module MCP
         # The entry is keyed by an identifier minted here, not by the request id: that id is unique only among
         # the requesting client's own in-flight requests, and two clients that pick the same one must each get
         # their stream, stamped with the id they sent.
-        def listen_sse_body(request_id, honored)
+        def listen_sse_body(request_id, honored, acknowledgement)
           ListenStreamBody.new do |stream|
             subscription_key = SecureRandom.uuid
             subscription = nil
@@ -1029,15 +1073,6 @@ module MCP
             if subscription.nil?
               close_stream_safely(stream)
             else
-              acknowledgement = {
-                jsonrpc: "2.0",
-                method: Methods::NOTIFICATIONS_SUBSCRIPTIONS_ACKNOWLEDGED,
-                params: {
-                  notifications: honored,
-                  _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => request_id },
-                },
-              }
-
               begin
                 acknowledged = subscription[:write_mutex].synchronize do
                   next false if subscription[:closed]

@@ -6564,6 +6564,80 @@ module MCP
           refute(events.any? { |event| event["method"] == "notifications/tools/list_changed" })
         end
 
+        test "subscriptions/listen refuses an id that is not valid UTF-8 without registering a stream" do
+          body = modern_listen_body(id: "listen-BAD", params: { notifications: { toolsListChanged: true } }).b.sub("BAD", "\xFF".b)
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 400, response[0]
+
+          parsed = JSON.parse(response[2][0])
+
+          # The member is present and null, as JSON-RPC 2.0 requires when the id cannot be determined.
+          assert parsed.key?("id")
+          assert_nil parsed["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed.dig("error", "code")
+          assert_empty @transport.instance_variable_get(:@listen_subscriptions)
+        end
+
+        test "subscriptions/listen refuses a resource URI that is not valid UTF-8 without registering a stream" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          transport = StreamableHTTPTransport.new(server, listen_keepalive_interval: nil)
+          body = modern_listen_body(
+            id: "listen-1",
+            params: { notifications: { resourceSubscriptions: ["file:///BAD"] } }
+          ).b.sub("BAD", "\xFF".b)
+
+          response = transport.handle_request(modern_rack_request(body))
+
+          assert_equal 400, response[0]
+
+          parsed = JSON.parse(response[2][0])
+
+          assert_equal "listen-1", parsed["id"]
+          assert_equal(-32602, parsed.dig("error", "code"))
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen acknowledges without a resource URI that is not valid UTF-8 when subscribe is not declared" do
+          # Without the `subscribe` capability the URIs are not honored, so the acknowledgement never echoes
+          # the unencodable one and the request is served.
+          body = modern_listen_body(
+            id: "listen-1",
+            params: { notifications: { toolsListChanged: true, resourceSubscriptions: ["file:///BAD"] } },
+          ).b.sub("BAD", "\xFF".b)
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+
+          io = StringIO.new
+          response[2].call(io)
+          acknowledgement = sse_events(io).first
+
+          assert_equal "notifications/subscriptions/acknowledged", acknowledgement["method"]
+          refute acknowledgement.dig("params", "notifications").key?("resourceSubscriptions")
+        end
+
+        test "subscriptions/listen refuses a request past the stream cap before checking its resource URIs" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          transport = StreamableHTTPTransport.new(server, max_listen_subscriptions: 1, listen_keepalive_interval: nil)
+          open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          body = modern_listen_body(
+            id: "listen-2",
+            params: { notifications: { resourceSubscriptions: ["file:///BAD"] } }
+          ).b.sub("BAD", "\xFF".b)
+
+          response = transport.handle_request(modern_rack_request(body))
+
+          assert_equal 503, response[0]
+          assert_equal "listen-2", JSON.parse(response[2][0])["id"]
+        ensure
+          transport.close
+        end
+
         test "transport close during the acknowledgement write still sends the acknowledgement first" do
           # The stream blocks its first write, the acknowledgement, until released, so the close arrives while
           # that write is in progress and has to queue behind it on the stream's write mutex.
