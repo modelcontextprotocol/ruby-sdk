@@ -222,22 +222,36 @@ This mode is suitable for simple tool servers that do not need server-initiated 
 
 ### Session Limits
 
-By default, stateful sessions are bounded so an `initialize` flood cannot retain sessions until memory is exhausted:
-they expire after `session_idle_timeout` seconds of inactivity (default 1800, i.e. 30 minutes) and the concurrent
-session count is capped at `max_sessions` (default 10000). A session's idle timer is reset by activity that touches it
-(a GET, or a regular-request POST), and expired sessions are collected by a background reaper roughly once a minute,
-so cleanup lags inactivity by up to that interval. At the cap, the transport first reclaims any already-expired slots
-and then, if still full, rejects a new `initialize` with HTTP 503 (it does not evict an existing session).
+By default, stateful sessions are bounded in three ways: they expire after `session_idle_timeout` seconds of inactivity
+(default 1800, i.e. 30 minutes), the concurrent session count is capped at `max_sessions` (default 10000),
+and the `initialize` request whose `clientInfo` and `capabilities` a session keeps may be at most `max_initialize_request_bytes` (default 64 KiB),
+with at most 1024 JSON values in its `params`; a larger one is rejected with HTTP 413 before any session is created.
+The byte bound can be raised or removed with `nil`, in which case `max_request_bytes` still caps the body; the value bound always applies,
+since a session keeps the parsed data and many small values parse into far more objects than their size suggests.
+Together they bound both the serialized input and the number of parsed values each of the `max_sessions` sessions can retain.
+A session's idle timer is reset by activity that touches it (a GET, or a regular-request POST), and expired sessions are collected by
+a background reaper roughly once a minute, so cleanup lags inactivity by up to that interval. At the cap, the transport first reclaims
+any already-expired slots and then, if still full, rejects a new `initialize` with HTTP 503 (it does not evict an existing session).
 
 ```ruby
 # Tune the limits
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: 900, max_sessions: 5000)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+  server,
+  session_idle_timeout: 900,
+  max_sessions: 5000,
+  max_initialize_request_bytes: 16 * 1024,
+)
 
-# Opt out of expiry and/or the cap (not recommended on internet-facing deployments)
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, session_idle_timeout: nil, max_sessions: nil)
+# Opt out of expiry and/or the caps (not recommended on internet-facing deployments)
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+  server,
+  session_idle_timeout: nil,
+  max_sessions: nil,
+  max_initialize_request_bytes: nil,
+)
 ```
 
-Stateless mode (`stateless: true`) retains no sessions, so neither limit applies to it. The same holds
+Stateless mode (`stateless: true`) retains no sessions, so none of these limits applies to it. The same holds
 for requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle), which never create a session;
 their long-lived [`subscriptions/listen`](/server/subscriptions/) streams are bounded separately
 by `max_listen_subscriptions:`.

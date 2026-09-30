@@ -82,13 +82,26 @@ module MCP
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#timeouts
         DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT = 600
 
-        # Default upper bound on the JSON-RPC request body. `handle_post` reads the whole
-        # body into memory and parses it, so without a cap a single unauthenticated POST
-        # can allocate gigabytes and OOM the worker. 4 MiB comfortably
-        # fits a typical JSON-RPC request (a 4 MiB JSON string decodes to ~3 MiB of base64
-        # payload); raise `max_request_bytes:` for unusually large payloads. Matches the
-        # TypeScript SDK's 4 MB default.
+        # Default upper bound on the JSON-RPC request body. `handle_post` reads the whole body into memory and parses it,
+        # so without a cap a single unauthenticated POST can allocate gigabytes and OOM the worker. 4 MiB comfortably fits
+        # a typical JSON-RPC request (a 4 MiB JSON string decodes to ~3 MiB of base64 payload); raise `max_request_bytes:`
+        # for unusually large payloads. Matches the TypeScript SDK's 4 MB default.
         DEFAULT_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+
+        # Bound on the body of an `initialize` request in stateful mode. Its `clientInfo` and `capabilities` are
+        # kept for the life of the session, so without a bound of its own each session could retain a whole
+        # `max_request_bytes` body and the retained total would be `max_sessions` times that. An ordinary
+        # `initialize` is under 2 KiB; 64 KiB leaves room for large `experimental` capabilities. Pass
+        # `max_initialize_request_bytes: nil` to opt out. The TypeScript and Python SDKs keep the initialize
+        # data whole with no bound of their own; this is the same kind of local safety limit as `max_request_bytes`.
+        DEFAULT_MAX_INITIALIZE_REQUEST_BYTES = 64 * 1024
+
+        # Bound on the number of JSON values (objects, arrays, keys, and scalars) in the `params` of an `initialize`
+        # request in stateful mode. A byte bound alone does not tightly bound the memory a session keeps: a body of
+        # many small values parses into far more objects than its size suggests, so the parsed structure is bounded
+        # as well. Like `MAX_JSON_NESTING`, it is a structural limit applied whatever `max_initialize_request_bytes`
+        # is, including `nil`. An ordinary `initialize` holds a few dozen values.
+        MAX_INITIALIZE_PARAMS_VALUES = 1_024
 
         # Conservative bound on JSON nesting depth, so a deeply nested body cannot exhaust
         # the stack or amplify parse cost (complements the byte cap).
@@ -137,6 +150,12 @@ module MCP
         #   ownership is not enforced.
         # @param max_request_bytes [Integer] upper bound in bytes on a POST request body; larger
         #   requests are rejected with HTTP 413. Defaults to 4 MiB.
+        # @param max_initialize_request_bytes [Integer, nil] upper bound in bytes on the body of an `initialize`
+        #   request in stateful mode, whose `clientInfo` and `capabilities` the session keeps; a larger one is
+        #   rejected with HTTP 413 before any session is created. Defaults to `DEFAULT_MAX_INITIALIZE_REQUEST_BYTES`
+        #   (64 KiB), and `nil` disables this bound, leaving `max_request_bytes` as the only cap on the body; `params`
+        #   holding more than `MAX_INITIALIZE_PARAMS_VALUES` JSON values are rejected the same way either way.
+        #   Neither applies in stateless mode, which retains nothing.
         # @param max_listen_subscriptions [Integer, nil] cap on concurrent `subscriptions/listen`
         #   streams; a listen request past the cap is rejected with HTTP 503, and `nil` disables
         #   the cap.
@@ -168,6 +187,7 @@ module MCP
           dns_rebinding_protection: true,
           session_request_validator: nil,
           max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
+          max_initialize_request_bytes: DEFAULT_MAX_INITIALIZE_REQUEST_BYTES,
           max_listen_subscriptions: DEFAULT_MAX_LISTEN_SUBSCRIPTIONS,
           max_resource_subscription_bytes: DEFAULT_MAX_RESOURCE_SUBSCRIPTION_BYTES,
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
@@ -232,6 +252,13 @@ module MCP
           end
 
           @max_request_bytes = max_request_bytes
+
+          if !max_initialize_request_bytes.nil? && !(max_initialize_request_bytes.is_a?(Integer) && max_initialize_request_bytes > 0)
+            raise ArgumentError, "max_initialize_request_bytes must be a positive Integer or nil"
+          end
+
+          # The bound guards what stateful sessions retain; stateless mode keeps none.
+          @max_initialize_request_bytes = stateless ? nil : max_initialize_request_bytes
 
           if !max_listen_subscriptions.nil? && !(max_listen_subscriptions.is_a?(Integer) && max_listen_subscriptions > 0)
             raise ArgumentError, "max_listen_subscriptions must be a positive Integer or nil"
@@ -1356,6 +1383,16 @@ module MCP
           end
 
           if initialize_request?(body)
+            # Checked before a session exists: the body's `clientInfo` and `capabilities` are what the session would keep,
+            # so an oversized `initialize` is refused outright instead of being stored and capped later.
+            if @max_initialize_request_bytes && body_string.bytesize > @max_initialize_request_bytes
+              return initialize_too_large_response(body[:id], "body exceeds #{@max_initialize_request_bytes} bytes")
+            end
+
+            if !@stateless && json_values_exceed?(body[:params], MAX_INITIALIZE_PARAMS_VALUES)
+              return initialize_too_large_response(body[:id], "params exceed #{MAX_INITIALIZE_PARAMS_VALUES} JSON values")
+            end
+
             if !@stateless && session_id
               # An `initialize` request carrying an `Mcp-Session-Id` header is either a duplicate
               # initialization attempt against a live session, or a retry against an unknown/expired
@@ -1582,6 +1619,45 @@ module MCP
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
             message: "Payload too large: request body exceeds #{@max_request_bytes} bytes",
           )
+        end
+
+        def initialize_too_large_response(request_id, reason)
+          json_rpc_error_response(
+            status: 413,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Payload too large: initialize request #{reason}",
+            id: request_id,
+          )
+        end
+
+        # Counts the JSON values in `value` (every object, array, object key, and scalar) and reports whether
+        # they exceed `limit`. The walk is iterative. Every value still queued is at least one more value,
+        # so `count + pending.size` never overstates the total, and a container is refused before its members are
+        # queued if they would take that sum past the limit; the walk therefore stops as soon as the limit is
+        # certain to be passed and never queues more than `limit` values, whatever the shape of the input.
+        def json_values_exceed?(value, limit)
+          count = 0
+          pending = [value]
+
+          until pending.empty?
+            current = pending.pop
+            count += 1
+
+            case current
+            when Hash
+              count += current.size
+              return true if count + pending.size + current.size > limit
+
+              pending.concat(current.values)
+            when Array
+              return true if count + pending.size + current.size > limit
+
+              pending.concat(current)
+            end
+            return true if count + pending.size > limit
+          end
+
+          false
         end
 
         def parse_request_body(body_string)

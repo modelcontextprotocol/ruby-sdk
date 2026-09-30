@@ -4988,6 +4988,244 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "rejects an initialize body over max_initialize_request_bytes with 413 and creates no session" do
+          transport = StreamableHTTPTransport.new(@server, max_initialize_request_bytes: 1024)
+          params = initialize_params.merge(capabilities: { experimental: { padding: "A" * 2048 } })
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: params }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 413, response[0]
+
+          parsed = JSON.parse(response[2][0])
+
+          assert_equal "1", parsed["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed.dig("error", "code")
+          assert_includes parsed.dig("error", "message"), "initialize request body exceeds 1024 bytes"
+          assert_nil response[1]["mcp-session-id"]
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          transport.close
+        end
+
+        test "accepts an initialize body exactly at max_initialize_request_bytes" do
+          transport = StreamableHTTPTransport.new(@server, max_initialize_request_bytes: 4096)
+          build = lambda do |padding|
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params.merge(capabilities: { experimental: { padding: padding } }) }.to_json
+          end
+          body = build.call("A" * (4096 - build.call("").bytesize))
+          assert_equal 4096, body.bytesize
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+          refute_nil response[1]["mcp-session-id"]
+
+          # One byte more is over the bound.
+          body = build.call("A" * (4097 - build.call("").bytesize))
+          assert_equal 4097, body.bytesize
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 413, response[0]
+          assert_equal 1, transport.instance_variable_get(:@sessions).size
+        ensure
+          transport.close
+        end
+
+        test "a regular request over max_initialize_request_bytes is bounded by max_request_bytes alone" do
+          transport = StreamableHTTPTransport.new(@server, max_initialize_request_bytes: 1024)
+          init_response = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          ))
+          session_id = init_response[1]["mcp-session-id"]
+          body = { jsonrpc: "2.0", method: "ping", id: "2", params: { _meta: { padding: "A" * 4096 } } }.to_json
+
+          response = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            body,
+          ))
+
+          assert_equal 200, response[0]
+        ensure
+          transport.close
+        end
+
+        test "rejects an initialize whose params hold too many JSON values, even under the byte bound" do
+          transport = StreamableHTTPTransport.new(@server)
+          many = Array.new(StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES) { {} }
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params(capabilities: { experimental: { many: many } }) }.to_json
+          assert_operator body.bytesize, :<, StreamableHTTPTransport::DEFAULT_MAX_INITIALIZE_REQUEST_BYTES
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 413, response[0]
+          parsed = JSON.parse(response[2][0])
+          assert_equal "1", parsed["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed.dig("error", "code")
+          assert_includes parsed.dig("error", "message"), "params exceed #{StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES} JSON values"
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          transport.close
+        end
+
+        test "accepts an initialize whose params hold exactly MAX_INITIALIZE_PARAMS_VALUES JSON values" do
+          limit = StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES
+          count_values = lambda do |value|
+            case value
+            when Hash then 1 + value.size + value.values.sum { |member| count_values.call(member) }
+            when Array then 1 + value.sum { |member| count_values.call(member) }
+            else 1
+            end
+          end
+
+          # `JSON.parse` here yields String keys where the transport's parse yields Symbols; a key counts once either
+          # way, so the fixed part is counted the same way the transport sees it.
+          build = ->(size) { JSON.parse(initialize_params(capabilities: { experimental: { many: Array.new(size, 0) } }).to_json) }
+          size = limit - count_values.call(build.call(0))
+          params = build.call(size)
+          assert_equal limit, count_values.call(params)
+
+          transport = StreamableHTTPTransport.new(@server)
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: params }.to_json
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+          assert_equal 200, response[0]
+
+          body = { jsonrpc: "2.0", method: "initialize", id: "2", params: build.call(size + 1) }.to_json
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+          assert_equal 413, response[0]
+        ensure
+          transport.close
+        end
+
+        test "the JSON value count includes object keys and stops on nested shapes" do
+          transport = StreamableHTTPTransport.new(@server)
+
+          # An object, its two keys, and their two scalar values: five values.
+          refute transport.send(:json_values_exceed?, { "a" => 1, "b" => 2 }, 5)
+          assert transport.send(:json_values_exceed?, { "a" => 1, "b" => 2 }, 4)
+
+          # Many arrays each within the limit are refused together once their members would pass it.
+          assert transport.send(:json_values_exceed?, Array.new(30) { Array.new(970, 0) }, 1_024)
+        ensure
+          transport.close
+        end
+
+        test "accepts an initialize whose params hold many JSON values within the bound" do
+          transport = StreamableHTTPTransport.new(@server)
+          body = {
+            jsonrpc: "2.0",
+            method: "initialize",
+            id: "1",
+            params: initialize_params(capabilities: { experimental: { many: Array.new(900) { {} } } }),
+          }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+          refute_nil response[1]["mcp-session-id"]
+        ensure
+          transport.close
+        end
+
+        test "accepts a representative initialize with icons, every capability, and experimental members" do
+          # A full `clientInfo` with several icons, every standard capability, an `experimental` object of many members,
+          # and a `_meta` member together stay inside half of the value bound and a quarter of the byte bound.
+          icons = Array.new(8) do |index|
+            { src: "https://example.com/icon-#{index}.png", mimeType: "image/png", sizes: ["48x48", "96x96"], theme: "light" }
+          end
+          experimental = (0...30).to_h do |index|
+            ["feature_#{index}", { enabled: true, level: index, tags: ["a", "b"] }]
+          end
+          params = initialize_params.merge(
+            clientInfo: {
+              name: "representative_client", version: "1.2.3", title: "Representative Client",
+              websiteUrl: "https://example.com", icons: icons,
+            },
+            capabilities: {
+              roots: { listChanged: true }, sampling: {}, elicitation: { form: {}, url: {} }, experimental: experimental,
+            },
+            _meta: { "example.com/trace": "abc123" },
+          )
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: params }.to_json
+          assert_operator body.bytesize, :<, StreamableHTTPTransport::DEFAULT_MAX_INITIALIZE_REQUEST_BYTES / 4
+          transport = StreamableHTTPTransport.new(@server)
+          limit = StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES
+
+          refute transport.send(:json_values_exceed?, JSON.parse(params.to_json), limit / 2)
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+          refute_nil response[1]["mcp-session-id"]
+        ensure
+          transport.close
+        end
+
+        test "max_initialize_request_bytes: nil keeps the JSON value bound" do
+          transport = StreamableHTTPTransport.new(@server, max_initialize_request_bytes: nil)
+          many = Array.new(StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES * 2) { {} }
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params(capabilities: { experimental: { many: many } }) }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 413, response[0]
+          assert_includes JSON.parse(response[2][0]).dig("error", "message"), "JSON values"
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          transport.close
+        end
+
+        test "stateless mode ignores the JSON value bound" do
+          transport = StreamableHTTPTransport.new(@server, stateless: true)
+          many = Array.new(StreamableHTTPTransport::MAX_INITIALIZE_PARAMS_VALUES * 2) { {} }
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params(capabilities: { experimental: { many: many } }) }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+        ensure
+          transport.close
+        end
+
+        test "max_initialize_request_bytes: nil removes the bound" do
+          transport = StreamableHTTPTransport.new(@server, max_initialize_request_bytes: nil)
+          params = initialize_params.merge(capabilities: { experimental: { padding: "A" * (128 * 1024) } })
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: params }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+          refute_nil response[1]["mcp-session-id"]
+        ensure
+          transport.close
+        end
+
+        test "stateless mode ignores max_initialize_request_bytes" do
+          transport = StreamableHTTPTransport.new(@server, stateless: true, max_initialize_request_bytes: 1024)
+          params = initialize_params.merge(capabilities: { experimental: { padding: "A" * 2048 } })
+          body = { jsonrpc: "2.0", method: "initialize", id: "1", params: params }.to_json
+
+          response = transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, body))
+
+          assert_equal 200, response[0]
+        ensure
+          transport.close
+        end
+
+        test "max_initialize_request_bytes rejects a non-positive value" do
+          # The message is asserted: an unknown keyword raises `ArgumentError` too, so the class alone would not prove the keyword is validated.
+          [0, "64"].each do |value|
+            error = assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, max_initialize_request_bytes: value) }
+            assert_equal "max_initialize_request_bytes must be a positive Integer or nil", error.message
+          end
+        end
+
         test "rejects deeply nested JSON beyond the nesting cap as a parse error" do
           depth = StreamableHTTPTransport::MAX_JSON_NESTING + 5
           nested = ("[" * depth) + ("]" * depth)
