@@ -33,8 +33,8 @@ module MCP
       #   Omit it when the redirect arrives in a later request, as it does in a web application:
       #   the flow then stops after `redirect_handler` with a pending authorization saved in `storage`,
       #   and the request that receives the redirect finishes it with `Flow#finish!`.
-      # - `pending_authorization_max_age` - Seconds a pending authorization stays redeemable after the redirect,
-      #   when `callback_handler` is omitted. Defaults to `DEFAULT_PENDING_AUTHORIZATION_MAX_AGE`.
+      # - `pending_authorization_max_age` - Seconds a pending authorization stays redeemable, counted from the moment
+      #   `run!` saves it, when `callback_handler` is omitted. Defaults to `DEFAULT_PENDING_AUTHORIZATION_MAX_AGE`.
       # - `scope`   - String of space-separated scopes to request when the server's
       #   `WWW-Authenticate` does not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
