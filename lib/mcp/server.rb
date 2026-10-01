@@ -181,8 +181,13 @@ module MCP
       Methods::RESOURCES_READ,
     ].freeze
 
-    attr_accessor :description, :icons, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
+    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
+    attr_reader :icons, :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
+
+    # Replaces the icons advertised in `serverInfo`; a Hash is converted through `Icon.from`.
+    def icons=(value)
+      @icons = Icon.from_list(value)
+    end
 
     def initialize(
       description: nil,
@@ -207,7 +212,7 @@ module MCP
       transport: nil
     )
       @description = description
-      @icons = icons
+      @icons = Icon.from_list(icons)
       @name = name
       @title = title
       @version = version

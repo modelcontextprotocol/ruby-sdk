@@ -88,7 +88,7 @@ module MCP
         if value == NOT_SET
           @icons_value
         else
-          @icons_value = value
+          @icons_value = Icon.from_list(value)
         end
       end
 
@@ -147,7 +147,7 @@ module MCP
       @name = name
       @title = title
       @description = description
-      @icons = icons
+      @icons = Icon.from_list(icons)
       @mime_type = mime_type
       @annotations = annotations
       @size = size

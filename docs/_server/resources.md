@@ -140,6 +140,8 @@ server.resources_read_handler do |params|
 end
 ```
 
+Icons for resources and resource templates are documented on the [Icons](/server/icons/) page.
+
 ## Reading Binary Resources
 
 For binary resources, respond with a base64-encoded `blob` field instead of `text`.

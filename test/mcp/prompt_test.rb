@@ -66,7 +66,7 @@ module MCP
 
       assert_equal "my_mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
-      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons)
+      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons.map(&:to_h))
       assert_equal "test_argument", prompt.arguments.first.name
       assert_equal "Test argument", prompt.arguments.first.description
       assert prompt.arguments.first.required
@@ -139,7 +139,7 @@ module MCP
 
       assert_equal "mock_prompt", prompt.name_value
       assert_equal "a mock prompt for testing", prompt.description
-      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons)
+      assert_equal([{ mimeType: "image/png", sizes: ["48x48", "96x96"], src: "https://example.com", theme: "light" }], prompt.icons.map(&:to_h))
       assert_equal "test_argument", prompt.arguments.first.name
       assert_equal "Test argument title", prompt.arguments.first.title
       assert_equal "This is a test argument description", prompt.arguments.first.description
@@ -258,6 +258,28 @@ module MCP
       )
 
       refute prompt.to_h.key?(:icons)
+    end
+
+    test "icons given as Hashes are converted through MCP::Icon" do
+      prompt = Prompt.define(
+        name: "prompt_with_hash_icons",
+        description: "a prompt with icons given as Hashes",
+        icons: [{ mime_type: "image/png", sizes: ["48x48"], src: "https://example.com" }],
+      )
+
+      assert_equal [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com" }], prompt.to_h[:icons]
+    end
+
+    test "icons given as Hashes are validated when the prompt is defined" do
+      exception = assert_raises(ArgumentError) do
+        Prompt.define(
+          name: "prompt_with_invalid_icons",
+          description: "a prompt with an invalid icon",
+          icons: [{ src: "https://example.com", sizes: "51x51" }],
+        )
+      end
+
+      assert_equal('icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
     end
   end
 end
