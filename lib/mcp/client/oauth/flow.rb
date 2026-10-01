@@ -19,6 +19,9 @@ module MCP
         METADATA_DIAGNOSTIC_MAX_LENGTH = 128
         METADATA_URL_MAX_LENGTH = 2048
 
+        # RFC 6749 scope-token: visible ASCII except space, double quote, and backslash.
+        SCOPE_TOKEN_FORMAT = /\A[\x21\x23-\x5B\x5D-\x7E]+\z/.freeze
+
         # Token request parameters the flow sets itself. Its values win over a provider's `token_request_params`,
         # so a provider naming one of these is refused rather than left believing its value was sent.
         RESERVED_TOKEN_REQUEST_PARAMS = [
@@ -266,6 +269,7 @@ module MCP
 
           effective_scope = resolve_scope(scope: scope, prm: prm)
           effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
+          effective_scope = select_scope(effective_scope, as_metadata: as_metadata)
 
           # Asked before registering, not after: a refusal must not leave this client registered at an authorization server
           # the embedding application has just rejected.
@@ -857,9 +861,9 @@ module MCP
         # places on MCP servers rather than on clients.
         # A host that knows which providers its user deals with can apply that knowledge here.
         #
-        # The scopes are passed on unchanged whatever the host decides, because the specification requires
-        # a client to treat the challenged scopes as authoritative for the operation; the choice offered is
-        # to proceed or to stop, not to quietly ask for less. A provider without the hook proceeds as before.
+        # By default, challenged scopes pass through unchanged. An explicit scope selector may narrow
+        # them, accepting that the current operation could remain unauthorized. The validator sees the
+        # final selection and can still refuse the authorization before client registration.
         #
         # Only asked when a new grant is being requested. A refresh is not a new grant, and the host already answered
         # this question for that authorization server, so `refresh!` enforces `ensure_token_issuer!` instead:
@@ -1302,11 +1306,8 @@ module MCP
           AuthorizationError.new(message, error: error, error_description: description)
         end
 
-        # Per MCP 2025-11-25 Authorization and the TS/Python SDKs, scope resolution
-        # prefers the `WWW-Authenticate` challenge first, then `scopes_supported`
-        # from the Protected Resource Metadata, and falls back to a provider-supplied
-        # scope only if both are absent. The provider-supplied scope must not pre-empt
-        # a server-advertised one.
+        # MCP scope selection prefers the challenge, then PRM `scopes_supported`, then the provider's fallback.
+        # A provider's optional selector can adjust the result after `offline_access` augmentation.
         def resolve_scope(scope:, prm:)
           return scope if scope && !scope.empty?
 
@@ -1352,6 +1353,26 @@ module MCP
           supported = as_metadata["scopes_supported"]
 
           supported.is_a?(Array) && supported.include?("offline_access")
+        end
+
+        # Applies application policy after standard scope selection but before validation or registration.
+        def select_scope(scope, as_metadata:)
+          selector = @provider.scope_selector if @provider.respond_to?(:scope_selector)
+          return scope unless selector
+
+          selected = selector.call(scope.to_s.split.freeze)
+          valid = selected.is_a?(Array) &&
+            selected.all? { |token| token.is_a?(String) && SCOPE_TOKEN_FORMAT.match?(token) }
+          unless selected.nil? || valid
+            raise ArgumentError, "scope_selector must return nil or an Array of valid OAuth scope tokens."
+          end
+          return if selected.nil?
+
+          # Custom scopes are allowed, but unsupported offline_access remains refused.
+          unless server_supports_offline_access?(as_metadata)
+            selected = selected.reject { |token| token == "offline_access" }
+          end
+          selected.empty? ? nil : selected.join(" ")
         end
 
         def wants_refresh_token?
@@ -1416,8 +1437,9 @@ module MCP
           # RFC 6749 Section 3.1 forbids sending a parameter twice, and which of two values a server would honor is
           # its own choice; on the legacy path the endpoint URL is served by the MCP server, whose query must not speak
           # for the client's `client_id`, `redirect_uri`, `code_challenge`, or `resource`.
-          # Other parameters in the URL are kept, as the TypeScript SDK's `searchParams.set` keeps them; that includes
-          # a `scope` when the flow has none, since an authorization server may set a default scope there.
+          # Other endpoint parameters are kept, as the TypeScript SDK's `searchParams.set` keeps them.
+          # Without a selector, an endpoint `scope` survives when the flow has none: the AS may set a default there.
+          # A configured selector owns `scope` even when omitting it, so the endpoint query cannot override policy.
           # RFC 9101 `request` and `request_uri` are dropped as well, though the flow sets neither: a server takes
           # the whole authorization request from the object they carry, over every parameter in the query, and both are
           # the client's to send, never an endpoint URL's to supply.
@@ -1432,6 +1454,7 @@ module MCP
           own_params << ["scope", scope] if scope
           own_params << ["resource", resource] if resource
           dropped_names = own_params.map(&:first) + ["request", "request_uri"]
+          dropped_names << "scope" if @provider.respond_to?(:scope_selector) && @provider.scope_selector
 
           params = URI.decode_www_form(uri.query.to_s).reject { |name, _value| dropped_names.include?(name) }
           uri.query = URI.encode_www_form(params + own_params)

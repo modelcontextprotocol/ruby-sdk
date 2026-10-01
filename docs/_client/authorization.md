@@ -47,9 +47,9 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
   The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
-- Request the `offline_access` scope when `client_metadata[:grant_types]` includes `refresh_token` and the authorization server advertises `offline_access` in its metadata
-  `scopes_supported` (SEP-2207). This is what lets the server issue the `refresh_token` used above. As an SDK-level safeguard, when the authorization server does not advertise
-  `offline_access` the scope is also stripped from any other source (challenge, PRM, or provider-supplied scope) so a server that does not support it never receives it.
+- By default, request `offline_access` when the client declares the `refresh_token` grant and the authorization server advertises it in
+  `scopes_supported` (SEP-2207). This can enable refresh tokens. The optional `scope_selector` below can remove it, while a selector
+  cannot reintroduce `offline_access` when the authorization server does not advertise it.
 
 ```ruby
 require "mcp"
@@ -99,7 +99,15 @@ Optional keyword arguments:
   Omit it when the redirect arrives in a later request, as it does in a web application; see [Authorization in Web Applications](#authorization-in-web-applications).
 - `pending_authorization_max_age`: Integer seconds a pending authorization stays redeemable, counted from the moment `run!` saves it, when `callback_handler`
   is omitted. Defaults to 600.
-- `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
+- `scope`: Space-separated fallback scopes when neither a challenge nor PRM advertises scopes.
+- `scope_selector`: Optional callable invoked after the SDK chooses scopes from the challenge, PRM, or `scope` fallback and augments
+  `offline_access`, but before request validation and client registration. It receives a read-only array of candidate scope tokens;
+  return an array of valid OAuth scope tokens to replace them, or `nil` / `[]` to omit the authorization URL's `scope` parameter.
+  The default (`nil`) keeps the MCP scope-selection strategy unchanged. A selector can narrow or add custom scopes, but cannot
+  reintroduce unsupported `offline_access`. Filtering a challenged scope may leave the current operation unauthorized.
+  Return `[]` to omit the client's `scope` parameter on the first request, even if PRM advertises scopes. The AS can still apply
+  default scopes or reject the request ([RFC 6749 §3.3](https://www.rfc-editor.org/rfc/rfc6749#section-3.3)); check the granted
+  scope before treating the connection as unscoped, and allow later challenged scopes when needed.
 - `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
   Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
 - `http_client_customizer`: Callable invoked with the Faraday connection the SDK builds for the OAuth flow's own requests, after its defaults and before its origin guard.

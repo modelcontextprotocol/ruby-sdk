@@ -58,6 +58,25 @@ module MCP
           assert_equal("http_client_customizer must respond to call (got Object).", error.message)
         end
 
+        def test_initialize_accepts_optional_scope_selector
+          default_provider = Provider.new(**args_for("https://app.example.com/callback"))
+          selector = ->(_candidates) { [] }
+          provider = Provider.new(**args_for("https://app.example.com/callback"), scope_selector: selector)
+
+          assert_nil(default_provider.scope_selector)
+          assert_same(selector, provider.scope_selector)
+        end
+
+        def test_initialize_rejects_a_non_callable_scope_selector
+          ["mcp:read", false].each do |selector|
+            error = assert_raises(ArgumentError) do
+              Provider.new(**args_for("https://app.example.com/callback"), scope_selector: selector)
+            end
+
+            assert_equal("scope_selector must respond to call (got #{selector.class}).", error.message)
+          end
+        end
+
         def test_initialize_rejects_non_loopback_http_redirect_uri
           # Communication Security: a non-loopback `http://` redirect URI would
           # let an attacker steal the authorization code from a network sniffer,

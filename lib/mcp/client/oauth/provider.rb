@@ -37,6 +37,11 @@ module MCP
       #   `run!` saves it, when `callback_handler` is omitted. Defaults to `DEFAULT_PENDING_AUTHORIZATION_MAX_AGE`.
       # - `scope`   - String of space-separated scopes to request when the server's
       #   `WWW-Authenticate` does not specify one.
+      # - `scope_selector` - Callable receiving a read-only Array of candidate scope tokens after
+      #   challenge/PRM/provider selection and `offline_access` augmentation. Return an Array of valid
+      #   scope tokens to replace them, or `nil` / `[]` to omit the URL's `scope` parameter. The AS may
+      #   still apply default scopes. Unsupported `offline_access` remains stripped; filtering challenged
+      #   scopes may leave the operation unauthorized.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`,
       #   `client_information`, and `save_client_information(info)`. Defaults to
       #   an `InMemoryStorage`. Persisted `client_information` is stamped with
@@ -108,6 +113,7 @@ module MCP
         attr_reader :client_metadata,
           :redirect_uri,
           :scope,
+          :scope_selector,
           :storage,
           :redirect_handler,
           :callback_handler,
@@ -120,6 +126,7 @@ module MCP
           redirect_handler:,
           callback_handler: nil,
           scope: nil,
+          scope_selector: nil,
           storage: nil,
           client_id_metadata_document_url: nil,
           authorization_request_validator: nil,
@@ -147,6 +154,10 @@ module MCP
                 "per the MCP authorization specification and `draft-ietf-oauth-client-id-metadata-document`."
           end
 
+          unless scope_selector.nil? || scope_selector.respond_to?(:call)
+            raise ArgumentError, "scope_selector must respond to call (got #{scope_selector.class})."
+          end
+
           http_client_customizer = validated_http_client_customizer(http_client_customizer)
 
           unless pending_authorization_max_age.is_a?(Integer) && pending_authorization_max_age.positive?
@@ -170,6 +181,7 @@ module MCP
           @redirect_handler = redirect_handler
           @callback_handler = callback_handler
           @scope = scope
+          @scope_selector = scope_selector
           @storage = storage
           @client_id_metadata_document_url = client_id_metadata_document_url
           @authorization_request_validator = authorization_request_validator
