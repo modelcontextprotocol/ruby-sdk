@@ -493,15 +493,20 @@ module MCP
 
         # Finishes an authorization that `run!` left pending, in the request that receives the redirect to `redirect_uri`,
         # which may run in another process. `callback_params` is that redirect's whole query as a Hash (`code`, `state`, and,
-        # when present, `iss`, `error`, and `error_description`); passing all of it, rather than picking values out, is what
-        # lets the flow tell an absent `iss` from one the caller did not look for.
+        # when present, `iss`, `error`, and `error_description`); passing all of it, rather than picking values out, is
+        # the caller's part of the `iss` check: an `iss` the caller drops reads as absent, and the flow cannot tell the difference.
         #
         # The pending authorization is looked up by `state` before any request is made, and it binds the rest of the exchange:
         # the code is redeemed at the token endpoint recorded when the authorization began, with the client registration,
         # `resource`, and `redirect_uri` used then, and without discovery running again, so the code reaches the authorization
         # server the user was sent to (SEP-2352). The RFC 9207 `iss` is validated against the recorded issuer before the pending
-        # authorization is consumed, so a forged callback carrying a valid `state` cannot discard the verifier the legitimate
-        # callback needs, and before the callback's `error` is read, since in a mix-up those parameters are the attacker's.
+        # authorization is consumed, so a callback from another authorization server, as in a mix-up, is refused without
+        # consuming the entry the legitimate callback needs, and before the callback's `error` is read, since in a mix-up
+        # those parameters are the other server's. The check establishes only that a present `iss` matches the recorded issuer,
+        # not who sent the callback, and a callback without `iss` passes it unless the metadata advertises
+        # `authorization_response_iss_parameter_supported`: whoever holds the `state`, passes that check, and reaches
+        # the consume first takes the entry, and the legitimate callback then finds nothing.
+        #
         # Past that check the pending authorization is consumed with `delete_pending_authorization`, which returns the entry
         # it removed; only a callback that gets the entry back redeems the code, so of callbacks racing on the same `state`
         # (a retried redirect, say), at most one does.
@@ -1285,8 +1290,9 @@ module MCP
         end
 
         # An RFC 6749 Section 4.1.2.1 error response, reported with the bounds a token endpoint error gets.
-        # Reached only after the `iss` check, so the values are the authorization server's own; they are still text it chose,
-        # so they are cut to a bounded length and confined to the printable ASCII the RFC permits.
+        # Reached only after the `iss` check, so any `iss` beside the values matched the recorded issuer; that does not
+        # prove who sent them, and they are text the sender chose, so they are cut to a bounded length and confined to
+        # the printable ASCII the RFC permits.
         def authorization_response_error(error, description)
           error = bounded_diagnostic(error, limit: TOKEN_ENDPOINT_ERROR_MAX_LENGTH)
           description = bounded_diagnostic(description, limit: TOKEN_ENDPOINT_ERROR_DESCRIPTION_MAX_LENGTH)
