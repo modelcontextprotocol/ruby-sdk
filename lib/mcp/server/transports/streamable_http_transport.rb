@@ -1093,11 +1093,11 @@ module MCP
                 if acknowledged
                   start_listen_keepalive_thread(subscription_key, request_id)
                 else
-                  close_stream_safely(stream)
+                  close_removed_listen_stream(subscription)
                 end
               rescue *STREAM_WRITE_ERRORS
                 remove_listen_subscription(subscription_key)
-                close_stream_safely(stream)
+                close_removed_listen_stream(subscription)
               end
             end
           end
@@ -1138,11 +1138,9 @@ module MCP
             # removed the entry already, and the report should still name the stream.
             MCP.configuration.exception_reporter.call(e, { subscription_id: request_id })
           ensure
-            stream = @mutex.synchronize do
-              subscription = @listen_subscriptions.delete(subscription_key)
-              subscription && subscription[:stream]
-            end
-            close_stream_safely(stream) if stream
+            # Through the helper, so the entry is marked closed here as it is for every other removal.
+            subscription = remove_listen_subscription(subscription_key)
+            close_removed_listen_stream(subscription) if subscription
           end
         end
 
@@ -1254,7 +1252,7 @@ module MCP
                 { subscription_id: subscription[:request_id], error: "Failed to send notification" },
               )
               remove_listen_subscription(subscription_key)
-              close_stream_safely(subscription[:stream])
+              close_removed_listen_stream(subscription)
             end
           end
         end
@@ -1262,10 +1260,25 @@ module MCP
         def remove_listen_subscription(subscription_key)
           @mutex.synchronize do
             subscription = @listen_subscriptions.delete(subscription_key)
-            subscription[:keepalive_wakeup].signal if subscription
+            if subscription
+              # Marked closed as teardown does, so a delivery or keepalive that took the entry before the removal skips it under
+              # the write mutex instead of writing to a stream being closed. The flag is set without taking the write mutex,
+              # which must never be taken inside `@mutex`: a write that checks the flag from here on skips, and one already
+              # past its check lands before the stream closes, since `close_removed_listen_stream` waits for the write mutex.
+              subscription[:closed] = true
+              subscription[:keepalive_wakeup].signal
+            end
 
             subscription
           end
+        end
+
+        # Closes a subscription's stream while excluding concurrent writes. The write mutex, taken here outside
+        # `@mutex`, makes the close wait for a write already past its `closed` check, so that write completes or fails
+        # before the stream is closed, and a write that takes the mutex afterwards sees `closed` and skips. Teardown
+        # gets the same ordering by setting `closed` under the write mutex itself.
+        def close_removed_listen_stream(subscription)
+          subscription[:write_mutex].synchronize { close_stream_safely(subscription[:stream]) }
         end
 
         # Graceful teardown (SEP-2575): each open listen stream receives its `SubscriptionsListenResult` response
