@@ -2320,6 +2320,75 @@ module MCP
       assert_equal expected_icons, response[:result][:serverInfo][:icons]
     end
 
+    test "server icons given as Hashes are converted through MCP::Icon" do
+      server = Server.new(
+        name: "test_server",
+        icons: [{ mime_type: "image/png", sizes: ["48x48"], src: "https://example.com" }],
+      )
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: initialize_params,
+      }
+      response = server.handle(request)
+
+      assert_equal [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com" }], response[:result][:serverInfo][:icons]
+    end
+
+    test "server icons assigned after construction are converted through MCP::Icon" do
+      server = Server.new(name: "test_server")
+      server.icons = [{ mime_type: "image/png", src: "https://example.com" }]
+      request = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: initialize_params,
+      }
+      response = server.handle(request)
+
+      assert_equal [{ mimeType: "image/png", src: "https://example.com" }], response[:result][:serverInfo][:icons]
+    end
+
+    test "server icons given as Hashes are validated when built or assigned" do
+      expected_message = 'icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).'
+
+      exception = assert_raises(ArgumentError) do
+        Server.new(name: "test_server", icons: [{ src: "https://example.com", sizes: "51x51" }])
+      end
+      assert_equal expected_message, exception.message
+
+      server = Server.new(name: "test_server")
+      exception = assert_raises(ArgumentError) do
+        server.icons = [{ src: "https://example.com", sizes: "51x51" }]
+      end
+      assert_equal expected_message, exception.message
+    end
+
+    test "resources defined on the server validate icons given as Hashes" do
+      server = Server.new(name: "test_server")
+
+      exception = assert_raises(ArgumentError) do
+        server.define_resource(uri: "file:///test.txt", name: "resource", icons: [{ src: "https://example.com", sizes: "51x51" }])
+      end
+
+      assert_equal('icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
+
+    test "resource templates defined on the server validate icons given as Hashes" do
+      server = Server.new(name: "test_server")
+
+      exception = assert_raises(ArgumentError) do
+        server.define_resource_template(
+          uri_template: "file:///{path}",
+          name: "resource_template",
+          icons: [{ src: "https://example.com", sizes: "51x51" }],
+        )
+      end
+
+      assert_equal('icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
+
     test "server uses default version when not configured" do
       server = Server.new(name: "test_server")
       request = {

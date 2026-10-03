@@ -124,5 +124,101 @@ module MCP
       end
       assert_equal('The value of theme must specify "light" or "dark".', exception.message)
     end
+
+    def test_from_returns_an_icon_as_is
+      icon = Icon.new(src: "https://example.com/icon.png")
+
+      assert_same(icon, Icon.from(icon))
+    end
+
+    def test_from_builds_an_icon_from_a_hash_with_either_key_spelling
+      expected = { mimeType: "image/png", sizes: ["48x48"], src: "https://example.com/icon.png", theme: "light" }
+      [
+        { mimeType: "image/png", sizes: ["48x48"], src: "https://example.com/icon.png", theme: "light" },
+        { mime_type: "image/png", sizes: ["48x48"], src: "https://example.com/icon.png", theme: "light" },
+        { "mimeType" => "image/png", "sizes" => ["48x48"], "src" => "https://example.com/icon.png", "theme" => "light" },
+      ].each do |hash|
+        assert_equal(expected, Icon.from(hash).to_h)
+      end
+    end
+
+    def test_from_rejects_an_unknown_key
+      exception = assert_raises(ArgumentError) do
+        Icon.from({ src: "https://example.com/icon.png", size: "48x48" })
+      end
+      assert_equal("An icon Hash may only hold src, mimeType (or mime_type), sizes, and theme (got :size).", exception.message)
+    end
+
+    def test_from_rejects_a_key_that_is_neither_a_symbol_nor_a_string
+      key = Object.new
+      key.define_singleton_method(:to_s) { "src" }
+
+      [1, key].each do |bad_key|
+        exception = assert_raises(ArgumentError) do
+          Icon.from({ bad_key => "https://example.com/icon.png" })
+        end
+        assert_equal("An icon Hash key must be a Symbol or a String (got #{bad_key.class}).", exception.message)
+      end
+    end
+
+    def test_from_rejects_a_member_given_twice
+      exception = assert_raises(ArgumentError) do
+        Icon.from({ src: "https://example.com/icon.png", mimeType: "image/png", mime_type: "image/png" })
+      end
+      assert_equal("An icon Hash gives mime_type twice.", exception.message)
+    end
+
+    def test_from_rejects_anything_but_an_icon_or_a_hash
+      exception = assert_raises(ArgumentError) do
+        Icon.from("https://example.com/icon.png")
+      end
+      assert_equal("An icon must be an MCP::Icon or a Hash (got String).", exception.message)
+    end
+
+    def test_from_checks_a_hash_the_way_new_does
+      exception = assert_raises(ArgumentError) do
+        Icon.from({ mimeType: "image/png" })
+      end
+      assert_equal("missing keyword: :src", exception.message)
+
+      exception = assert_raises(ArgumentError) do
+        Icon.from({ src: "https://example.com/icon.png", sizes: "51x51" })
+      end
+      assert_equal('The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
+
+    def test_from_list_keeps_nil_and_converts_each_element
+      assert_nil(Icon.from_list(nil))
+      assert_equal([], Icon.from_list([]))
+
+      icon = Icon.new(src: "https://example.com/icon.png")
+      icons = Icon.from_list([icon, { src: "https://example.com/other.png" }])
+
+      assert_same(icon, icons[0])
+      assert_equal({ src: "https://example.com/other.png" }, icons[1].to_h)
+    end
+
+    def test_from_list_returns_a_frozen_array
+      icons = Icon.from_list([{ src: "https://example.com/icon.png" }])
+
+      assert_predicate(icons, :frozen?)
+      assert_raises(FrozenError) do
+        icons << { src: "https://example.com/other.png", sizes: "51x51" }
+      end
+    end
+
+    def test_from_list_rejects_anything_but_nil_or_an_array
+      exception = assert_raises(ArgumentError) do
+        Icon.from_list({ src: "https://example.com/icon.png" })
+      end
+      assert_equal("icons must be nil or an Array of MCP::Icon or Hash (got Hash).", exception.message)
+    end
+
+    def test_from_list_names_the_position_of_a_rejected_element
+      exception = assert_raises(ArgumentError) do
+        Icon.from_list([{ src: "https://example.com/icon.png" }, { src: "https://example.com/other.png", sizes: "51x51" }])
+      end
+      assert_equal('icons[1]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
   end
 end

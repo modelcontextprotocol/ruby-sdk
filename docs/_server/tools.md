@@ -89,6 +89,8 @@ end
 The [`server_context`](/server/server-context/) parameter is the `server_context` passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
+Icons for tools are documented on the [Icons](/server/icons/) page.
+
 ## Tool argument keys
 
 Tool arguments are delivered as a `Hash` whose keys are Ruby symbols at every nesting level, including nested objects

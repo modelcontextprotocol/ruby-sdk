@@ -37,6 +37,28 @@ module MCP
       assert_equal expected_icons, resource.to_h[:icons]
     end
 
+    test "icons given as Hashes are converted through MCP::Icon" do
+      resource = Resource.new(
+        uri: "file:///test.txt",
+        name: "resource_with_hash_icons",
+        icons: [{ mime_type: "image/png", sizes: ["48x48"], src: "https://example.com" }],
+      )
+
+      assert_equal [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com" }], resource.to_h[:icons]
+    end
+
+    test "icons given as Hashes are validated when the resource is built" do
+      exception = assert_raises(ArgumentError) do
+        Resource.new(
+          uri: "file:///test.txt",
+          name: "resource_with_invalid_icons",
+          icons: [{ src: "https://example.com", sizes: "51x51" }],
+        )
+      end
+
+      assert_equal('icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
+
     test "#to_h omits _meta when nil" do
       resource = Resource.new(uri: "file:///test.txt", name: "resource_without_meta")
 

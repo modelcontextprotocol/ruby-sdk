@@ -72,7 +72,7 @@ module MCP
         if value == NOT_SET
           @icons_value
         else
-          @icons_value = value
+          @icons_value = Icon.from_list(value)
         end
       end
 

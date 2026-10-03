@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Logging
-nav_order: 17
+nav_order: 18
 ---
 
 # Logging

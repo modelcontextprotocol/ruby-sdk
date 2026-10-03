@@ -72,6 +72,49 @@ module MCP
       refute tool.to_h.key?(:icons)
     end
 
+    test "icons given as Hashes are converted through MCP::Icon" do
+      tool = Tool.define(
+        name: "tool_with_hash_icons",
+        description: "a tool with icons given as Hashes",
+        icons: [{ mime_type: "image/png", sizes: ["48x48"], src: "https://example.com" }],
+      )
+
+      assert_equal [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com" }], tool.to_h[:icons]
+    end
+
+    test "icons declared in a class definition are converted through MCP::Icon" do
+      tool = Class.new(Tool) do
+        tool_name "tool_with_hash_icons"
+        icons [{ mime_type: "image/png", src: "https://example.com" }]
+      end
+
+      assert_equal [{ mimeType: "image/png", src: "https://example.com" }], tool.to_h[:icons]
+    end
+
+    test "icons cannot be added through the reader after the tool is defined" do
+      tool = Tool.define(
+        name: "tool_with_frozen_icons",
+        description: "a tool whose icons are frozen",
+        icons: [{ src: "https://example.com" }],
+      )
+
+      assert_raises(FrozenError) do
+        tool.icons << { src: "https://example.com", sizes: "51x51" }
+      end
+    end
+
+    test "icons given as Hashes are validated when the tool is defined" do
+      exception = assert_raises(ArgumentError) do
+        Tool.define(
+          name: "tool_with_invalid_icons",
+          description: "a tool with an invalid icon",
+          icons: [{ src: "https://example.com", sizes: "51x51" }],
+        )
+      end
+
+      assert_equal('icons[0]: The value of sizes must be an Array of Strings such as ["48x48"] or ["any"] (got String).', exception.message)
+    end
+
     test "#to_h includes annotations when present" do
       tool = TestTool
       expected_annotations = {
