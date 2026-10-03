@@ -254,11 +254,10 @@ module MCP
           end
         end
 
-        # Runs the full authorization flow and returns the `scope` query parameter
-        # sent on the authorization request. The caller stubs the AS metadata;
-        # this helper supplies a provider whose `grant_types` and optional pre-set
-        # `scope` drive the SEP-2207 offline_access decision.
-        def capture_authorization_scope(grant_types:, provider_scope: nil)
+        # Returns the authorization URL's `scope` query parameter from a full flow.
+        # The caller stubs AS metadata; grant types and selection decide whether
+        # `offline_access` is added automatically.
+        def capture_authorization_scope(grant_types:, provider_scope: nil, scope_selector: nil, requested_scope: nil)
           captured_scope = nil
           state_holder = {}
           provider = Provider.new(
@@ -276,9 +275,14 @@ module MCP
             },
             callback_handler: -> { ["test-auth-code", state_holder[:state]] },
             scope: provider_scope,
+            scope_selector: scope_selector,
           )
 
-          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          Flow.new(provider: provider).run!(
+            server_url: @server_url,
+            resource_metadata_url: @prm_url,
+            scope: requested_scope,
+          )
           captured_scope
         end
 
@@ -1123,7 +1127,7 @@ module MCP
 
         # Runs the authorization-code flow with an `authorization_request_validator` that records what it
         # was handed and answers `approve`.
-        private def run_flow_with_validator(approve:, recorder: [])
+        private def run_flow_with_validator(approve:, recorder: [], scope_selector: nil)
           state_holder = {}
           provider = Provider.new(
             client_metadata: {
@@ -1142,6 +1146,7 @@ module MCP
               recorder << request
               approve
             },
+            scope_selector: scope_selector,
           )
 
           Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
@@ -1167,6 +1172,27 @@ module MCP
           assert_equal(["Mail.Read", "Files.ReadWrite.All"], request.scopes)
           assert_equal(@server_url, request.server_url)
           assert_equal("https://srv.example.com/mcp", request.resource)
+        end
+
+        def test_run_validates_the_selected_scopes_before_client_registration
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: [@auth_base],
+              scopes_supported: ["mcp:read", "admin"],
+            ),
+          )
+
+          recorder = []
+          assert_raises(Flow::AuthorizationRefusedError) do
+            run_flow_with_validator(approve: false, recorder: recorder, scope_selector: ->(_candidates) { [] })
+          end
+
+          assert_empty(recorder.first.scopes)
+          assert_not_requested(:post, "#{@auth_base}/register")
+          refute_includes(recorder, :redirected)
         end
 
         def test_run_refuses_the_flow_and_registers_nothing_when_the_validator_declines
@@ -1616,6 +1642,33 @@ module MCP
             query.map(&:first),
           )
           assert_equal("openid", query.to_h["scope"])
+        end
+
+        def test_run_selector_controls_scope_even_when_endpoint_query_sets_it
+          [
+            ["scope=admin&scope=write&audience=api", []],
+            ["sc%6Fpe=admin&audience=api", nil],
+          ].each do |endpoint_query, selection|
+            observed_scopes = nil
+            query = authorization_url_query_for_endpoint_query(
+              endpoint_query,
+              scope_selector: ->(_candidates) { selection },
+              validator: ->(request) {
+                observed_scopes = request.scopes
+                true
+              },
+            )
+
+            assert_empty(observed_scopes)
+            refute_includes(query.map(&:first), "scope")
+            assert_equal("api", query.to_h["audience"])
+          end
+
+          replaced = authorization_url_query_for_endpoint_query(
+            "scope=admin&scope=write&audience=api",
+            scope_selector: ->(_candidates) { ["mcp:read"] },
+          )
+          assert_equal(["mcp:read"], replaced.filter_map { |name, value| value if name == "scope" })
         end
 
         def test_run_raises_when_prm_resource_is_malformed_uri
@@ -4157,6 +4210,133 @@ module MCP
           )
         end
 
+        def test_scope_selector_omits_prm_and_augmented_offline_scopes
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: [@auth_base],
+              scopes_supported: ["mcp:read", "mcp:write", "admin"],
+            ),
+          )
+          stub_request(:get, @as_metadata_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: @auth_base,
+              authorization_endpoint: "#{@auth_base}/authorize",
+              token_endpoint: "#{@auth_base}/token",
+              registration_endpoint: "#{@auth_base}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+              scopes_supported: ["mcp:read", "mcp:write", "admin", "offline_access"],
+            ),
+          )
+
+          candidates = nil
+          selector = ->(values) {
+            candidates = values
+            []
+          }
+          scope = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            scope_selector: selector,
+          )
+
+          assert_nil(scope)
+          assert_equal(["mcp:read", "mcp:write", "admin", "offline_access"], candidates)
+          assert_predicate(candidates, :frozen?)
+
+          empty_scope = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            scope_selector: ->(_values) { [] },
+            requested_scope: "",
+          )
+          assert_nil(empty_scope)
+
+          nil_scope = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            scope_selector: ->(_values) { nil },
+          )
+          assert_nil(nil_scope)
+
+          selected_scope = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            scope_selector: ->(values) { values },
+            requested_scope: "mcp:read offline_access",
+          )
+          assert_equal("mcp:read offline_access", selected_scope)
+        end
+
+        def test_scope_selector_filters_prm_catalog_and_allows_custom_scopes
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              resource: @server_url,
+              authorization_servers: [@auth_base],
+              scopes_supported: ["mcp:read", "mcp:write", "admin"],
+            ),
+          )
+
+          scope = capture_authorization_scope(
+            grant_types: ["authorization_code"],
+            provider_scope: "mcp:read",
+            scope_selector: ->(values) { values & ["mcp:read"] },
+          )
+
+          assert_equal("mcp:read", scope)
+
+          custom_scope = capture_authorization_scope(
+            grant_types: ["authorization_code"],
+            scope_selector: ->(_values) { ["custom:read"] },
+          )
+          assert_equal("custom:read", custom_scope)
+        end
+
+        def test_scope_selector_receives_requested_scope_before_provider_fallback
+          candidates = nil
+          scope = capture_authorization_scope(
+            grant_types: ["authorization_code"],
+            provider_scope: "mcp:read",
+            scope_selector: ->(values) {
+              candidates = values
+              values
+            },
+            requested_scope: "mcp:write",
+          )
+
+          assert_equal(["mcp:write"], candidates)
+          assert_equal("mcp:write", scope)
+        end
+
+        def test_scope_selector_cannot_reintroduce_unadvertised_offline_access
+          scope = capture_authorization_scope(
+            grant_types: ["authorization_code", "refresh_token"],
+            provider_scope: "mcp:read offline_access",
+            scope_selector: ->(_values) { ["mcp:read", "offline_access"] },
+          )
+
+          assert_equal("mcp:read", scope)
+        end
+
+        def test_scope_selector_rejects_invalid_results_before_registration
+          ["mcp:read", ["mcp:read admin"], [""], [123]].each do |selection|
+            error = assert_raises(ArgumentError) do
+              capture_authorization_scope(
+                grant_types: ["authorization_code"],
+                scope_selector: ->(_candidates) { selection },
+              )
+            end
+            assert_equal("scope_selector must return nil or an Array of valid OAuth scope tokens.", error.message)
+          end
+
+          assert_not_requested(:post, "#{@auth_base}/register")
+        end
+
         def test_resolve_scope_falls_back_to_provider_scope_when_prm_omits_scopes_supported
           captured = nil
           provider = Provider.new(
@@ -4485,7 +4665,7 @@ module MCP
         # Serves authorization server metadata whose `authorization_endpoint` carries `endpoint_query`,
         # runs the authorization-code flow to completion, and returns the query of the URL the browser was
         # sent to as name/value pairs in order.
-        def authorization_url_query_for_endpoint_query(endpoint_query)
+        def authorization_url_query_for_endpoint_query(endpoint_query, scope_selector: nil, validator: nil)
           stub_request(:get, @as_metadata_url).to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
@@ -4505,6 +4685,8 @@ module MCP
               ->(url) { holder[:authorization_url] = url },
               -> { ["test-auth-code", URI.decode_www_form(holder[:authorization_url].query).to_h.fetch("state")] },
             ),
+            scope_selector: scope_selector,
+            authorization_request_validator: validator,
           )
 
           result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
