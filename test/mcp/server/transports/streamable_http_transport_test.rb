@@ -6876,6 +6876,76 @@ module MCP
           assert_equal 2, sse_events(second).count { |event| event["method"] == "notifications/tools/list_changed" }
         end
 
+        test "a delivery that took an entry before its removal does not write to the removed stream" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          subscription_key, entry = registry.first
+          written = io.string.dup
+
+          # Holding the stream's write mutex lets the delivery take its snapshot under the registry lock and then
+          # block ahead of its write, which is where a removal can land between the two.
+          entry[:write_mutex].lock
+          delivery = Thread.new { @server.notify_tools_list_changed }
+
+          begin
+            wait_until_blocked_or_done(delivery)
+            @transport.send(:remove_listen_subscription, subscription_key)
+          ensure
+            entry[:write_mutex].unlock
+          end
+
+          refute_nil delivery.join(5)
+
+          assert entry[:closed]
+          assert_equal written, io.string
+          assert_empty registry
+        ensure
+          delivery&.join(5)
+        end
+
+        test "closing a removed stream waits for a delivery already past its closed check" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          subscription_key, entry = registry.first
+          gate = Queue.new
+          entered_write = false
+          open_at_write = nil
+          # The write blocks once the delivery is inside it: past the `closed` check and holding the write mutex,
+          # which is the window a removal and the close that follows it used to race into.
+          io.define_singleton_method(:write) do |data|
+            entered_write = true
+            gate.pop
+            open_at_write = !closed?
+            super(data)
+          end
+          delivery = Thread.new { @server.notify_tools_list_changed }
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+          until entered_write
+            flunk("the delivery did not reach the write") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.005)
+          end
+
+          closer = Thread.new do
+            @transport.send(:close_removed_listen_stream, @transport.send(:remove_listen_subscription, subscription_key))
+          end
+          wait_until_blocked_or_done(closer)
+
+          assert entry[:closed]
+          assert_empty registry
+          refute_predicate io, :closed?, "the stream was closed under a write still in progress"
+
+          gate << true
+          refute_nil delivery.join(5)
+          refute_nil closer.join(5)
+          assert open_at_write, "the write ran against a closed stream"
+          assert_predicate io, :closed?
+          assert_includes io.string, "notifications/tools/list_changed"
+        ensure
+          gate&.close
+          delivery&.join(5)
+          closer&.join(5)
+        end
+
         test "listen keepalive writes a comment frame outside the mutex" do
           # Register a subscription backed by a mutex-probing stream, then invoke the ping directly.
           mutex = @transport.instance_variable_get(:@mutex)
@@ -6902,15 +6972,21 @@ module MCP
         test "listen keepalive frees the slot and closes the stream when the peer is gone" do
           transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 0.01)
           io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+          entry = transport.instance_variable_get(:@listen_subscriptions).values.first
           io.define_singleton_method(:write) { |_data| raise Errno::ECONNRESET }
 
+          # The keepalive thread frees the slot first and closes the stream second, so wait for both.
           deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
-          until transport.instance_variable_get(:@listen_subscriptions).empty?
-            flunk("keepalive did not free the slot for a dead peer") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+          until transport.instance_variable_get(:@listen_subscriptions).empty? && io.closed?
+            flunk("keepalive did not free the slot and close the stream for a dead peer") if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
             sleep(0.01)
           end
 
           assert_predicate io, :closed?
+
+          # The removal a failed ping performs goes through the same helper as every other, so a delivery that took the entry before
+          # the ping failed skips it instead of writing to the closed stream.
+          assert entry[:closed], "the entry a failed ping removed was not marked closed"
         ensure
           transport.close
         end
