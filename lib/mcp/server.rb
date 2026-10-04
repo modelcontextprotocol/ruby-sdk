@@ -180,14 +180,29 @@ module MCP
       Methods::RESOURCES_LIST,
       Methods::RESOURCES_TEMPLATES_LIST,
       Methods::RESOURCES_READ,
+      # Both Skills results extend `CacheableResult`, so both carry the hints at 2026-07-28 (SEP-2640).
+      Methods::SKILLS_LIST,
+      Methods::SKILLS_GET,
     ].freeze
 
-    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :capabilities, :transport, :logging_message_notification
-    attr_reader :icons, :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security
+    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :transport, :logging_message_notification
+    attr_reader :icons, :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security, :capabilities
+    # The skills registered with `skills:` as a frozen Array (an empty one when only `skills_handlers` configured
+    # the extension), or nil when the server serves no skills.
+    attr_reader :skills
 
     # Replaces the icons advertised in `serverInfo`; a Hash is converted through `Icon.from`.
     def icons=(value)
       @icons = Icon.from_list(value)
+    end
+
+    # Replaces the capabilities (a Hash or an `MCP::Server::Capabilities` builder). The Skills extension rules
+    # are checked before the value is taken, as at construction: the extension may be declared only when skills
+    # are configured, `resources` must be declared alongside it, and `directoryRead` is not served.
+    def capabilities=(value)
+      candidate = normalize_capabilities(value)
+      validate_skills_capabilities!(candidate)
+      @capabilities = candidate
     end
 
     def initialize(
@@ -202,6 +217,7 @@ module MCP
       prompts: [],
       resources: [],
       resource_templates: [],
+      skills: nil,
       server_context: nil,
       configuration: nil,
       capabilities: nil,
@@ -224,6 +240,17 @@ module MCP
       @prompts = prompts.to_h { |p| [p.name_value, p] }
       @resources = resources
       @resource_templates = resource_templates
+      # Skills (SEP-2640): `nil`, whether omitted or supplied, means the extension is not served; an empty Array
+      # serves an empty catalog. The file map of directory-backed skills is built once here and never changes.
+      @skills_configured = !skills.nil?
+      @skills = skills.nil? ? nil : normalize_skills!(skills)
+      @skills_index = (@skills || []).to_h { |skill| [skill.uri, skill] }
+      @skill_files = Skill.file_map(@skills || [])
+      @skill_file_roots = Skill.file_roots(@skills || [])
+      @skills_list_handler = nil
+      @skills_get_handler = nil
+      @skills_methods_registered = false
+      ensure_no_skill_file_collision!(resources.map(&:uri))
       @resource_index = index_resources_by_uri(resources)
       @resources_list_handler = nil
       @server_context = server_context
@@ -240,15 +267,12 @@ module MCP
       @configuration = MCP.configuration.merge(configuration)
       @client = nil
       @client_protocol_version = nil
+      # Accept either a plain Hash or an `MCP::Server::Capabilities` builder, normalized before `validate!`
+      # so the Skills extension rules see the final Hash.
+      @capabilities = normalize_capabilities(capabilities)
 
       validate!
 
-      # Accept either a plain Hash or an `MCP::Server::Capabilities` builder.
-      @capabilities = if capabilities.is_a?(Capabilities)
-        capabilities.to_h
-      else
-        capabilities || default_capabilities
-      end
       @client_capabilities = nil
       @logging_message_notification = nil
 
@@ -274,6 +298,7 @@ module MCP
       # The protocol's own request methods, as opposed to the notifications above and to custom methods
       # registered later: these need a request id to be run.
       @protocol_request_methods = @handlers.keys.reject { |name| Methods.notification?(name) }.freeze
+      register_skills_handlers! if @skills_configured
       @transport = transport
     end
 
@@ -332,6 +357,7 @@ module MCP
         mime_type: mime_type, annotations: annotations, size: size, meta: meta,
         &block
       )
+      ensure_no_skill_file_collision!([resource.uri])
       @resources << resource
       @resource_index[resource.uri] = resource
 
@@ -350,6 +376,7 @@ module MCP
     end
 
     def resources=(resources)
+      ensure_no_skill_file_collision!(resources.map(&:uri))
       @resources = resources
       @resource_index = index_resources_by_uri(resources)
     end
@@ -468,6 +495,48 @@ module MCP
       @handlers[Methods::RESOURCES_READ] = block
     end
 
+    # Serves the Skills extension (SEP-2640) from per-request handlers instead of the `skills:` registry, for
+    # catalogs that depend on the caller. Both handlers are required because a server declaring the extension
+    # MUST answer `skills/get` for every skill it serves, listed or not.
+    #
+    # `list` receives the request params (and `server_context:` when it declares the keyword) and returns
+    # the whole collection of `MCP::Skill` in a stable order; the server paginates it. `get` returns the `MCP::Skill`
+    # for `params[:uri]`, or nil for `-32602`. A result that is not what these contracts describe is answered
+    # with `-32603`.
+    #
+    # A server serves skills from the `skills:` registry or from handlers, never both: a registered skill,
+    # its `SKILL.md` entry in `resources/list`, and its files are served to every caller, which a catalog that
+    # hides a skill from some callers must not inherit, so handlers are refused while the registry holds skills.
+    # With handlers the application serves the files itself and applies the same rule there, for example from
+    # `resources_read_handler` with `MCP::Skill.read_file(skills_for(server_context), params[:uri])`.
+    # A skill nested in the directory of another is served through the enclosing skill as well, whose manifest
+    # lists its files, so hiding it from a caller means withholding the enclosing skill too.
+    # What the handlers answer is never stamped `cacheScope: "public"`: where the `cache_scope` of the server
+    # would make it so, the result says `"private"`.
+    # Every check runs before anything is assigned, so a failure leaves the previous configuration in place.
+    def skills_handlers(list:, get:)
+      unless list.respond_to?(:call) && get.respond_to?(:call)
+        raise ArgumentError, "skills_handlers requires callable list: and get: handlers."
+      end
+      if @skills && !@skills.empty?
+        raise ArgumentError, "skills_handlers cannot be combined with skills in the skills: registry, which are served " \
+          "to every caller, files included. Return the skills from the handlers and serve their files yourself."
+      end
+
+      validate_skills_capabilities!(@capabilities, configured: true)
+      unless @skills_methods_registered
+        [Methods::SKILLS_LIST, Methods::SKILLS_GET].each do |method_name|
+          raise MethodAlreadyDefinedError, method_name if @handlers.key?(method_name)
+        end
+      end
+
+      @skills_list_handler = list
+      @skills_get_handler = get
+      @skills ||= [].freeze
+      @skills_configured = true
+      register_skills_handlers!
+    end
+
     # Sets a custom handler for `completion/complete` requests.
     # The block receives the parsed request params and should return completion values.
     #
@@ -574,6 +643,7 @@ module MCP
 
     def validate!
       validate_tool_name!
+      validate_skills_capabilities!(@capabilities)
 
       # NOTE: The draft protocol version is the next version after 2025-11-25.
       if @configuration.protocol_version <= "2025-06-18"
@@ -683,7 +753,8 @@ module MCP
       end
 
       begin
-        Methods.ensure_capability!(method, capabilities)
+        # The same snapshot `initialize` and `server/discover` advertise, so dispatch cannot disagree with it.
+        Methods.ensure_capability!(method, effective_capabilities)
       rescue Methods::MissingRequiredCapabilityError => e
         # A method of a capability the server does not declare is one the server does not implement, so it is answered as Method not found,
         # which the TypeScript and Python servers return for a handler they never registered, and which the Streamable HTTP transport maps to
@@ -1254,18 +1325,20 @@ module MCP
     # promise delivery over `subscriptions/listen` streams, so they are stripped when the transport does not serve that RPC
     # (e.g. stdio), matching the Python SDK's era-aware capability derivation.
     def discover_capabilities
-      return capabilities if @transport.respond_to?(:serves_subscriptions_listen?) && @transport.serves_subscriptions_listen?
+      advertised = effective_capabilities
+      return advertised if @transport.respond_to?(:serves_subscriptions_listen?) && @transport.serves_subscriptions_listen?
 
-      without_notification_flags(capabilities)
+      without_notification_flags(advertised)
     end
 
     # Capabilities as advertised by `initialize`. A transport that delivers no notifications to its sessions
     # (stateless Streamable HTTP) cannot keep the promise the `listChanged` and `subscribe` flags make, so they are
     # left out, as `server/discover` leaves them out when `subscriptions/listen` is not served.
     def handshake_capabilities
-      return capabilities unless @transport.respond_to?(:delivers_notifications?) && !@transport.delivers_notifications?
+      advertised = effective_capabilities
+      return advertised unless @transport.respond_to?(:delivers_notifications?) && !@transport.delivers_notifications?
 
-      without_notification_flags(capabilities)
+      without_notification_flags(advertised)
     end
 
     def without_notification_flags(capabilities)
@@ -1417,12 +1490,23 @@ module MCP
       resources = if @resources_list_handler
         invoke_resources_list_handler(request, server_context)
       else
-        @resources
+        @resources + skill_manifest_resources
       end
 
       page = paginate(resources, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
       apply_cache_metadata({ resources: page[:items], nextCursor: page[:next_cursor] }.compact)
+    end
+
+    # The `SKILL.md` of every registered skill as a resource entry, with `name` and `description` taken from
+    # the frontmatter and `text/markdown`, as the Skills extension asks of a `SKILL.md` resource; a resource
+    # the application registered at that URI takes its place.
+    def skill_manifest_resources
+      return [] if @skills.nil? || @skills.empty?
+
+      @skills.reject { |skill| @resource_index.key?(skill.uri) }.map do |skill|
+        Resource.new(uri: skill.uri, name: skill.name, description: skill.frontmatter["description"], mime_type: "text/markdown")
+      end
     end
 
     # Calls the `resources_list_handler` block, forwarding `server_context:` only when the block opts in
@@ -1435,6 +1519,229 @@ module MCP
       end
     end
 
+    # `skills/list` (SEP-2640): the registry, or the `list` handler's collection, paginated like `resources/list`.
+    def list_skills(request, server_context: nil)
+      skills = if @skills_list_handler
+        result = invoke_skills_handler(@skills_list_handler, request, server_context)
+        problem = skills_problem(result)
+        raise invalid_skills_result(request, problem) if problem
+
+        result
+      else
+        @skills
+      end
+
+      page = paginate(skills, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+
+      apply_skills_cache_metadata({ skills: page[:items], nextCursor: page[:next_cursor] }.compact, @skills_list_handler)
+    end
+
+    # `skills/get` (SEP-2640): answers for every skill the server serves, listed or not. The URI shape is checked
+    # before any handler runs; a `get` handler's result must be the skill for exactly that URI.
+    def get_skill(request, server_context: nil)
+      # Absent, null, or Array params reach here through the generic JSON-RPC validation.
+      uri = request.is_a?(Hash) ? request[:uri] : nil
+      unless Skill::Uri.manifest_uri?(uri)
+        raise RequestHandlerError.new(
+          "Invalid params: uri is not a skill SKILL.md URI",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
+      end
+
+      skill = if @skills_get_handler
+        result = invoke_skills_handler(@skills_get_handler, request, server_context)
+        unless result.nil?
+          raise invalid_skills_result(request, "skills/get returned #{result.class}") unless result.is_a?(Skill)
+          raise invalid_skills_result(request, "skills/get returned #{result.uri} for #{uri}") unless result.uri == uri
+
+          problem = skills_problem([result])
+          raise invalid_skills_result(request, problem) if problem
+        end
+        result
+      else
+        @skills_index[uri]
+      end
+
+      if skill.nil?
+        raise RequestHandlerError.new(
+          "Skill not found: #{uri}",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
+      end
+
+      apply_skills_cache_metadata({ skill: skill.to_h }, @skills_get_handler)
+    end
+
+    # A handler answers per caller and, returning skills, has no result of its own to carry a scope in,
+    # so what it answered is never marked for shared caches, whatever scope the server was configured with.
+    def apply_skills_cache_metadata(result, handler)
+      stamped = apply_cache_metadata(result)
+      return stamped unless handler && stamped[:cacheScope] == "public"
+
+      stamped.merge(cacheScope: "private")
+    end
+
+    def invoke_skills_handler(handler, request, server_context)
+      if handler_declares_server_context?(handler)
+        handler.call(request, server_context: server_context)
+      else
+        handler.call(request)
+      end
+    end
+
+    # The wire sees one fixed message; what was wrong goes to the exception reporter only.
+    def invalid_skills_result(request, problem)
+      RequestHandlerError.new(
+        "Skills handler returned an invalid result",
+        request,
+        error_type: :internal_error,
+        error_code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
+        original_error: StandardError.new(problem),
+      )
+    end
+
+    # Describes the first problem in a set of skills served together, or returns nil: every element
+    # an `MCP::Skill` and URIs unique. A skill may list any file under its own root, a nested skill's files
+    # included, because the specification wants the enclosing manifest complete.
+    def skills_problem(skills)
+      unless skills.is_a?(Array) && skills.all? { |skill| skill.is_a?(Skill) }
+        return "skills must be an Array of MCP::Skill (got #{skills.class})"
+      end
+
+      registered = {}
+      skills.each do |skill|
+        return "skill #{skill.uri} is listed twice" if registered.key?(skill.uri)
+
+        registered[skill.uri] = true
+      end
+
+      nil
+    end
+
+    def normalize_skills!(skills)
+      problem = skills_problem(skills)
+      raise ArgumentError, "skills: #{problem}." if problem
+
+      skills.dup.freeze
+    end
+
+    def register_skills_handlers!
+      return if @skills_methods_registered
+
+      [Methods::SKILLS_LIST, Methods::SKILLS_GET].each do |method_name|
+        raise MethodAlreadyDefinedError, method_name if @handlers.key?(method_name)
+      end
+      @handlers[Methods::SKILLS_LIST] = method(:list_skills)
+      @handlers[Methods::SKILLS_GET] = method(:get_skill)
+      # Request methods of the extension, so like the protocol's own they are not run without an id; added here
+      # rather than at construction because `skills_handlers` registers them later.
+      @protocol_request_methods = (@protocol_request_methods + [Methods::SKILLS_LIST, Methods::SKILLS_GET]).freeze
+      @skills_methods_registered = true
+    end
+
+    # A file of a directory-backed skill is served ahead of any resource with the same URI, so registering such
+    # a resource would be silently shadowed; it is refused before anything is committed.
+    def ensure_no_skill_file_collision!(uris)
+      uris.each do |uri|
+        next unless @skill_files.key?(uri)
+
+        raise ArgumentError, "Resource URI #{uri} is a file of a directory-backed skill and cannot be registered as a resource."
+      end
+    end
+
+    def normalize_capabilities(value)
+      case value
+      when Capabilities then value.to_h
+      when nil then default_capabilities
+      when Hash then value
+      else raise ArgumentError, "capabilities must be a Hash or an MCP::Server::Capabilities (got #{value.class})."
+      end
+    end
+
+    # The capabilities a client sees in `initialize` and `server/discover`, and that dispatch gates on. The Skills
+    # entry is computed from the configured state rather than read from the stored Hash, which the public reader
+    # exposes for in-place mutation: when skills are configured the extension is advertised with `directoryRead`
+    # removed (nothing serves it) and `resources` is ensured, when they are not it is absent. Only the nested
+    # structures being modified are copied; the stored Hash is left as it is.
+    def effective_capabilities
+      base = @capabilities
+      extensions = declared_extensions(base)
+      declared_keys = skills_extension_keys(extensions)
+      unless @skills_configured
+        return base if declared_keys.empty?
+
+        stripped = extensions.reject { |key, _| declared_keys.include?(key) }
+        snapshot = base.dup
+        snapshot.delete(:extensions)
+        snapshot.delete("extensions")
+        snapshot[:extensions] = stripped unless stripped.empty?
+        return snapshot
+      end
+
+      settings = declared_keys.map { |key| extensions[key] }.find { |value| value.is_a?(Hash) } || {}
+      settings = settings.reject { |key, _| key.to_s == "directoryRead" }
+      others = extensions.reject { |key, _| declared_keys.include?(key) }
+      snapshot = base.dup
+      snapshot.delete("extensions")
+      snapshot[:extensions] = others.merge(Skill::EXTENSION_ID => settings)
+      # One `resources` key, so a second spelling cannot serialize after it and undo the declaration.
+      resources = capability_member(snapshot, :resources)
+      snapshot.delete("resources")
+      snapshot[:resources] = resources.is_a?(Hash) ? resources : {}
+      snapshot
+    end
+
+    # The Skills extension rules for an explicitly supplied capabilities Hash (SEP-2640): the extension is declared
+    # only when skills are configured, its settings are a Hash without `directoryRead`, and `resources` is declared
+    # alongside it. Both key spellings are read, because JSON serialization erases the difference between
+    # `:extensions` and `"extensions"` or between a Symbol and a String extension identifier.
+    # Checked at construction, on `capabilities=`, and when handlers are installed.
+    def validate_skills_capabilities!(caps, configured: @skills_configured)
+      extensions = declared_extensions(caps)
+      declared_keys = skills_extension_keys(extensions)
+
+      if !declared_keys.empty? && !configured
+        raise ArgumentError, "capabilities declare #{Skill::EXTENSION_ID} but no skills are configured; " \
+          "pass skills: (an empty Array serves an empty catalog) or call skills_handlers."
+      end
+
+      declared_keys.each do |key|
+        settings = extensions[key]
+        unless settings.is_a?(Hash)
+          raise ArgumentError, "The #{Skill::EXTENSION_ID} capability must be a Hash (got #{settings.class})."
+        end
+        if settings.any? { |name, value| name.to_s == "directoryRead" && value }
+          raise ArgumentError, "directoryRead is not served by this release; do not declare it under #{Skill::EXTENSION_ID}."
+        end
+      end
+
+      if configured && !capability_member(caps, :resources).is_a?(Hash)
+        raise ArgumentError, "SEP-2640 requires the resources capability alongside #{Skill::EXTENSION_ID}; declare resources too."
+      end
+    end
+
+    def capability_member(caps, name)
+      value = caps[name]
+      value.nil? ? caps[name.to_s] : value
+    end
+
+    # The `extensions` declarations under both key spellings merged into one Hash (empty when there are none),
+    # so a Skills declaration is found whichever spelling holds it and the other extensions survive the rewrite.
+    def declared_extensions(caps)
+      [caps[:extensions], caps["extensions"]].grep(Hash).reduce({}, :merge)
+    end
+
+    # Every key of an `extensions` Hash that spells the Skills extension identifier, as a String or a Symbol.
+    def skills_extension_keys(extensions)
+      extensions.keys.select { |key| key.to_s == Skill::EXTENSION_ID }
+    end
+
     # Default `resources/read` handler: routes to class-based resources and resource templates.
     # Fully replaced when `resources_read_handler` is set. When no class-based resource or template is registered,
     # unknown URIs keep the historical no-op `[]` response instead of raising.
@@ -1442,9 +1749,26 @@ module MCP
       uri = request[:uri]
       add_instrumentation_data(resource_uri: uri)
 
+      # Files of directory-backed skills are looked up by exact string equality in a map built at construction,
+      # so request data never reaches the filesystem; a miss falls through to the routing below.
+      record = @skill_files[uri]
+      return Skill.read_record(record, request) if record
+
       resource = @resource_index[uri]
       if resource.is_a?(Class)
         return normalize_resource_contents(call_resource_contents(resource, server_context))
+      end
+
+      # A URI under a directory-backed skill that names none of its files: the manifest is complete, so the file
+      # is not served, and the Skills extension asks for `-32602` where the base reader keeps its `[]`.
+      if resource.nil? && uri.is_a?(String) && @skill_file_roots.any? { |root| Skill::Uri.under?(uri, root) }
+        raise RequestHandlerError.new(
+          "Skill file not found: #{uri}",
+          request,
+          error_type: :invalid_params,
+          error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+          error_data: { uri: uri },
+        )
       end
 
       @resource_templates.each do |template|

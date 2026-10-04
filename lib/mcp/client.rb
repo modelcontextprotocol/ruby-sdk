@@ -7,6 +7,8 @@ require_relative "client/oauth"
 require_relative "client/stdio"
 require_relative "client/http"
 require_relative "client/paginated_result"
+require_relative "client/skill_errors"
+require_relative "client/skills"
 require_relative "client/tool"
 require_relative "result_type"
 
@@ -114,6 +116,9 @@ module MCP
     STATE_ONLY_BACKOFF_INITIAL_SECONDS = 0.05
     STATE_ONLY_BACKOFF_CAP_SECONDS = 0.25
 
+    # The Skills extension methods (SEP-2640): `list_skills`, `get_skill`, `read_skill_resource`, `skills_capability`.
+    include Skills
+
     # Initializes a new MCP::Client instance.
     #
     # @param transport [Object] The transport object to use for communication with the server.
@@ -144,6 +149,8 @@ module MCP
       # a SEP-2322 `input_required` result.
       @input_required_handlers = {}
       @input_required_max_rounds = input_required_max_rounds
+      # Skills extension state (SEP-2640), bound to the connection by `connect`; see `Client::Skills`.
+      @skills_state = Skills::State.new
     end
 
     # The user may want to access additional transport-specific methods/attributes
@@ -217,7 +224,15 @@ module MCP
 
       effective_mode = resolve_connect_mode(mode, protocol_version)
 
-      if effective_mode == :legacy
+      # Skills state (SEP-2640) follows the connection: a handshake about to run starts a new generation, its
+      # result is recorded only if no newer handshake started meanwhile, and a failure clears readiness under
+      # the same condition, so a stale completion or failure changes nothing. The bundled transports answer
+      # a repeated `connect` with their cached handshake result without any I/O, so when the transport is
+      # connected and Skills is ready nothing is reset: the latches of a live connection stay put.
+      generation = @skills_state.begin_handshake unless skills_ready_on_connected_transport?
+      completed = false
+
+      result = if effective_mode == :legacy
         transport.connect(
           client_info: client_info,
           protocol_version: protocol_version,
@@ -231,6 +246,11 @@ module MCP
           mode: effective_mode,
         )
       end
+      completed = true
+      @skills_state.handshake_completed(generation, result) if generation
+      result
+    ensure
+      @skills_state.handshake_failed(generation) if generation && !completed
     end
 
     # Sends `server/discover` (MCP 2026-07-28, SEP-2575): sessionless capability discovery
@@ -675,6 +695,13 @@ module MCP
 
       warn("MCP::Client: excluding tool #{tool["name"].inspect} from tools/list: #{scan[:reason]}")
       true
+    end
+
+    # Whether a `connect` would only hand back the transport's cached handshake: the transport reports itself
+    # connected and Skills already recorded a handshake of this connection. A transport without connection
+    # state always starts a new generation.
+    def skills_ready_on_connected_transport?
+      transport.respond_to?(:connected?) && transport.connected? && @skills_state.ready?
     end
 
     # Resolves the effective SEP-2575 lifecycle mode for `connect`:
