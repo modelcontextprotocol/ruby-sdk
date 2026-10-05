@@ -70,7 +70,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         # The test passes if the request is made with the correct headers
@@ -94,7 +94,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         client.send_request(request: request)
@@ -119,7 +119,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         custom_client.send_request(request: request)
@@ -138,7 +138,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -157,7 +157,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -176,7 +176,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -196,7 +196,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { tools: [] } }.to_json,
+          body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
         )
 
         client.send_request(request: request)
@@ -215,7 +215,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -254,7 +254,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -273,7 +273,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -292,7 +292,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -313,7 +313,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -332,7 +332,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -351,7 +351,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: {} }.to_json,
+          body: { jsonrpc: "2.0", result: {} }.to_json,
         )
 
         client.send_request(request: request)
@@ -369,12 +369,12 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         response = client.send_request(request: request)
         assert_instance_of(Hash, response)
-        assert_equal({ "result" => { "tools" => [] } }, response)
+        assert_equal({ "jsonrpc" => "2.0", "result" => { "tools" => [] } }, response)
       end
 
       def test_send_request_raises_bad_request_error
@@ -466,7 +466,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -488,7 +488,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -561,7 +561,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { tools: [] } }.to_json,
+          body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
         )
 
         custom_client.send_request(request: request)
@@ -930,14 +930,14 @@ module MCP
         # streaming support; the body must be read from `response.body`.
         stubs = Faraday::Adapter::Test::Stubs.new do |stub|
           stub.post("/") do
-            [200, { "Content-Type" => "application/json" }, { result: { tools: [] } }.to_json]
+            [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: { tools: [] } }.to_json]
           end
         end
         client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
 
         response = client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
 
-        assert_equal({ "result" => { "tools" => [] } }, response)
+        assert_equal({ "jsonrpc" => "2.0", "result" => { "tools" => [] } }, response)
       end
 
       def test_send_request_parses_a_json_body_with_a_parser_taking_keyword_options_only
@@ -946,7 +946,7 @@ module MCP
         # the json 3.0 signature, so the body must reach `JSON.parse` through the client's own call.
         stubs = Faraday::Adapter::Test::Stubs.new do |stub|
           stub.post("/") do
-            [200, { "Content-Type" => "application/json" }, { result: { tools: [] } }.to_json]
+            [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: { tools: [] } }.to_json]
           end
         end
         client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
@@ -957,7 +957,7 @@ module MCP
           client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
         end
 
-        assert_equal({ "result" => { "tools" => [] } }, response)
+        assert_equal({ "jsonrpc" => "2.0", "result" => { "tools" => [] } }, response)
       end
 
       def test_send_request_mirrors_x_mcp_header_params_into_mcp_param_headers
@@ -1132,7 +1132,7 @@ module MCP
         ).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { tools: ["a" * 128] } }.to_json,
+          body: { jsonrpc: "2.0", result: { tools: ["a" * 128] } }.to_json,
         )
 
         error = assert_raises(RequestHandlerError) do
@@ -1737,7 +1737,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1754,7 +1754,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1769,7 +1769,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
@@ -1795,7 +1795,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
-          body: { result: { protocolVersion: counter_offered } }.to_json,
+          body: { jsonrpc: "2.0", result: { protocolVersion: counter_offered } }.to_json,
         )
         stub_notification
 
@@ -1813,7 +1813,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { tools: [] } }.to_json,
+          body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
         )
 
         client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
@@ -1827,7 +1827,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1841,7 +1841,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1857,7 +1857,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "original-session",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1871,7 +1871,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "different-session",
             },
-            body: { result: { tools: [] } }.to_json,
+            body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
@@ -1884,7 +1884,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1901,7 +1901,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -1956,7 +1956,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
         stub_notification
 
@@ -2038,6 +2038,7 @@ module MCP
             status: 200,
             headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "s1" },
             body: {
+              jsonrpc: "2.0",
               result: {
                 protocolVersion: "2025-11-25",
                 capabilities: { tools: {} },
@@ -2082,7 +2083,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION } }.to_json,
           )
 
         client.connect
@@ -2105,7 +2106,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2025-03-26" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-03-26" } }.to_json,
           )
 
         client.connect(
@@ -2129,7 +2130,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+          body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
         )
         stub_notification
 
@@ -2148,7 +2149,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2026-07-28" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2026-07-28" } }.to_json,
           )
 
         error = assert_raises(RequestHandlerError) do
@@ -2175,7 +2176,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         assert_no_deprecation_warning do
@@ -2202,7 +2203,7 @@ module MCP
         stub_request(:post, url).to_return(
           status: 200,
           headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
-          body: { error: { code: -32602, message: "Unsupported protocol version" } }.to_json,
+          body: { jsonrpc: "2.0", error: { code: -32602, message: "Unsupported protocol version" } }.to_json,
         )
 
         error = assert_raises(RequestHandlerError) do
@@ -2240,7 +2241,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
-            body: { result: { protocolVersion: "2099-01-01" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2099-01-01" } }.to_json,
           )
 
         error = assert_raises(RequestHandlerError) do
@@ -2319,7 +2320,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { tools: [] } }.to_json,
+          body: { jsonrpc: "2.0", result: { tools: [] } }.to_json,
         )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
@@ -2333,7 +2334,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+          body: { jsonrpc: "2.0", result: { supportedVersions: ["2025-11-25"] } }.to_json,
         )
 
         error = assert_raises(RequestHandlerError) { client.connect(mode: :modern) }
@@ -2349,7 +2350,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { error: { code: -32601, message: "Method not found" } }.to_json,
+          body: { jsonrpc: "2.0", error: { code: -32601, message: "Method not found" } }.to_json,
         )
         init_stub = stub_initialize
         notification_stub = stub_notification
@@ -2371,7 +2372,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+          body: { jsonrpc: "2.0", result: { supportedVersions: ["2025-11-25"] } }.to_json,
         )
         init_stub = stub_initialize
         stub_notification
@@ -2396,7 +2397,7 @@ module MCP
         end.to_return(
           status: 200,
           headers: { "Content-Type" => "application/json" },
-          body: { result: { supportedVersions: ["2025-11-25"] } }.to_json,
+          body: { jsonrpc: "2.0", result: { supportedVersions: ["2025-11-25"] } }.to_json,
         )
 
         error = assert_raises(RequestHandlerError) do
@@ -2431,7 +2432,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "s2" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.connect
@@ -2452,7 +2453,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-xyz",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "2", method: "initialize" })
@@ -2492,6 +2493,304 @@ module MCP
         assert_match(%r{notifications/cancelled}, error.message)
       end
 
+      def test_send_request_raises_error_for_a_json_response_that_is_not_json_rpc_2_0
+        bodies = [
+          { result: { tools: [] } },
+          { jsonrpc: "1.0", result: { tools: [] } },
+          { jsonrpc: 2.0, result: { tools: [] } },
+          { error: { code: -32600, message: "Invalid request" } },
+          [{ jsonrpc: "2.0", result: { tools: [] } }],
+          "tools",
+        ]
+
+        bodies.each do |body|
+          stub_request(:post, url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: body.to_json,
+          )
+
+          error = assert_raises(RequestHandlerError, body.inspect) do
+            client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+          end
+
+          assert_equal('Server response is not a valid JSON-RPC 2.0 message: "jsonrpc" must be "2.0"', error.message)
+          assert_equal(:parse_error, error.error_type)
+          assert_equal({ method: "tools/list", params: nil }, error.request)
+        end
+      end
+
+      def test_send_request_raises_error_for_a_json_response_that_is_not_json_rpc_2_0_when_adapter_does_not_stream
+        # The Faraday test adapter ignores `on_data`. A String body is parsed by the client;
+        # a Hash body stands for one that a JSON middleware of the customizer parsed already.
+        [{ result: { tools: [] } }.to_json, { "result" => { "tools" => [] } }].each do |body|
+          stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+            stub.post("/") { [200, { "Content-Type" => "application/json" }, body] }
+          end
+          client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+
+          error = assert_raises(RequestHandlerError, body.inspect) do
+            client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+          end
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+          assert_equal(:parse_error, error.error_type)
+        end
+      end
+
+      def test_send_request_does_not_check_the_body_answering_a_notification
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: "{}",
+        )
+
+        response = client.send_request(request: { jsonrpc: "2.0", method: "notifications/initialized" })
+
+        assert_empty(response)
+      end
+
+      def test_send_request_raises_error_for_an_sse_response_that_is_not_json_rpc_2_0
+        # The first response-shaped event settles the exchange, so the valid one after it changes nothing.
+        sse_body = <<~SSE
+          data: {"id":"test_id","result":{"tools":[]}}
+
+          data: {"jsonrpc":"2.0","id":"test_id","result":{"tools":[]}}
+
+        SSE
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+        get_stub = stub_request(:get, url)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_equal('Server response is not a valid JSON-RPC 2.0 message: "jsonrpc" must be "2.0"', error.message)
+        assert_equal(:parse_error, error.error_type)
+        assert_not_requested(get_stub)
+      end
+
+      def test_send_request_raises_error_for_an_sse_response_that_is_not_json_rpc_2_0_when_adapter_does_not_stream
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do
+            [200, { "Content-Type" => "text/event-stream" }, %(data: {"id":"test_id","result":{"tools":[]}}\n\n)]
+          end
+        end
+        client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        # The message tells this rejection apart from a stream that held no response, which is a `:parse_error` too.
+        assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+        assert_equal(:parse_error, error.error_type)
+      end
+
+      def test_send_request_raises_error_for_a_response_that_is_not_json_rpc_2_0_on_the_reconnected_stream
+        stub_request(:post, url).with(
+          body: reconnection_request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 100\ndata:\n\n",
+        )
+        get_stub = stub_request(:get, url).with(
+          headers: { "Last-Event-ID" => "event-1" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: %(id: event-2\ndata: {"id":"test_id","result":{"content":[]}}\n\n),
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: reconnection_request)
+        end
+
+        assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+
+        # The rejection ends the exchange; the client does not reconnect again for another answer.
+        assert_requested(get_stub, times: 1)
+      end
+
+      def test_send_request_does_not_dispatch_a_server_request_that_is_not_json_rpc_2_0
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "ask", arguments: {} } }
+        server_request = { id: 0, method: "elicitation/create", params: { message: "?" } }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        post_stub = stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "event: message\ndata: #{server_request.to_json}\n\nevent: message\ndata: #{tool_result.to_json}\n\n",
+        )
+        handled = false
+        client.on_server_request("elicitation/create") { handled = true }
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+        refute(handled)
+
+        # Neither a handler result nor an error was POSTed back.
+        assert_requested(post_stub, times: 1)
+      end
+
+      def test_listener_skips_a_server_request_that_is_not_json_rpc_2_0
+        stub_initialize
+        stub_notification
+        stub_request(:delete, url).to_return(status: 200)
+
+        skipped = { id: 6, method: "elicitation/create", params: { message: "skipped" } }
+        answered = { jsonrpc: "2.0", id: 7, method: "elicitation/create", params: { message: "answered" } }
+        stub_request(:get, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "event: message\ndata: #{skipped.to_json}\n\nevent: message\ndata: #{answered.to_json}\n\n",
+        )
+        skipped_stub = stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["id"] == 6 }
+          .to_return(status: 202, body: "")
+        answered_stub = stub_request(:post, url).with(
+          body: { jsonrpc: "2.0", id: 7, result: { action: "accept", content: { message: "answered" } } }.to_json,
+        ).to_return(
+          status: 202, body: "",
+        )
+
+        client.connect
+        client.on_server_request("elicitation/create") do |params|
+          { action: "accept", content: { message: params["message"] } }
+        end
+
+        # The events arrive in order, so the first one has been passed over by the time the second is answered.
+        wait_until { requested?(answered_stub) }
+
+        refute(requested?(skipped_stub))
+      ensure
+        client.close
+      end
+
+      def test_connect_raises_on_an_initialize_response_that_is_not_json_rpc_2_0
+        answers = {
+          "application/json" => { result: { protocolVersion: "2025-11-25" } }.to_json,
+          # The `initialize` stream is read to its end instead of being aborted at the response.
+          "text/event-stream" => %(data: {"id":"1","result":{"protocolVersion":"2025-11-25"}}\n\n),
+        }
+        answers.each do |content_type, body|
+          stub_request(:post, url).with { |req|
+            JSON.parse(req.body)["method"] == "initialize"
+          }.to_return(
+            status: 200,
+            headers: { "Content-Type" => content_type, "Mcp-Session-Id" => "session-abc" },
+            body: body,
+          )
+          client = HTTP.new(url: url)
+
+          error = assert_raises(RequestHandlerError, content_type) { client.connect }
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+          refute_predicate(client, :connected?)
+
+          # Nothing is learned from a rejected response.
+          assert_nil(client.session_id)
+          assert_nil(client.protocol_version)
+          assert_nil(client.server_info)
+        end
+      end
+
+      def test_connect_modern_raises_on_a_discover_response_that_is_not_json_rpc_2_0
+        stub_discover_that_is_not_json_rpc_2_0
+
+        error = assert_raises(RequestHandlerError) { client.connect(mode: :modern) }
+
+        assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+        refute_predicate(client, :modern?)
+        refute_predicate(client, :connected?)
+      end
+
+      def test_connect_auto_falls_back_when_the_discover_response_is_not_json_rpc_2_0
+        stub_discover_that_is_not_json_rpc_2_0
+        stub_initialize
+        stub_notification
+
+        result = client.connect(mode: :auto)
+
+        assert_equal("2025-11-25", result["protocolVersion"])
+        refute_predicate(client, :modern?)
+        assert_predicate(client, :connected?)
+      end
+
+      def test_send_request_raises_error_for_a_response_that_is_not_json_rpc_2_0_on_a_modern_connection
+        stub_discover
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "tools/list" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: { result: { tools: [] } }.to_json,
+          )
+        client.connect(mode: :modern)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        end
+
+        assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+        assert_predicate(client, :modern?)
+      end
+
+      def test_send_request_learns_no_x_mcp_header_declarations_from_a_rejected_tools_list
+        call_headers = nil
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do |env|
+            case JSON.parse(env.request_body)["method"]
+            when "server/discover"
+              discover = { supportedVersions: ["2026-07-28"], capabilities: { tools: {} }, ttlMs: 0, cacheScope: "private" }
+              [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: discover }.to_json]
+            when "tools/list"
+              [200, { "Content-Type" => "application/json" }, { result: { tools: [mcp_param_annotated_tool] } }.to_json]
+            else
+              call_headers = env.request_headers
+              [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: { content: [] } }.to_json]
+            end
+          end
+        end
+        client = HTTP.new(url: url) { |faraday| faraday.adapter(:test, stubs) }
+        client.connect(mode: :modern)
+
+        assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: 1, method: "tools/list" })
+        end
+        client.send_request(request: {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "test_custom_headers", arguments: { region: "us-west1" } },
+        })
+
+        refute(call_headers.key?("Mcp-Param-Region"), "a rejected listing must teach no header declarations")
+      end
+
+      def test_call_tool_raises_when_the_response_is_not_json_rpc_2_0
+        stub_initialize
+        stub_notification
+        stub_request(:post, url).with { |req|
+          JSON.parse(req.body)["method"] == "tools/call"
+        }.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { content: [{ type: "text", text: "ok" }] } }.to_json,
+        )
+        mcp_client = Client.new(transport: client)
+        mcp_client.connect(mode: :legacy)
+
+        error = assert_raises(RequestHandlerError) { mcp_client.call_tool(name: "echo", arguments: {}) }
+
+        assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+      end
+
       private
 
       def initialize_session
@@ -2502,7 +2801,7 @@ module MCP
               "Content-Type" => "application/json",
               "Mcp-Session-Id" => "session-abc",
             },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
 
         client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
@@ -2514,7 +2813,7 @@ module MCP
           .to_return(
             status: 200,
             headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
-            body: { result: { protocolVersion: "2025-11-25" } }.to_json,
+            body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
           )
       end
 
@@ -2531,6 +2830,7 @@ module MCP
           status: 200,
           headers: { "Content-Type" => "application/json" },
           body: {
+            jsonrpc: "2.0",
             result: {
               supportedVersions: ["2026-07-28"],
               capabilities: { tools: {} },
@@ -2539,6 +2839,16 @@ module MCP
               cacheScope: "private",
             },
           }.to_json,
+        )
+      end
+
+      def stub_discover_that_is_not_json_rpc_2_0
+        stub_request(:post, url).with do |req|
+          JSON.parse(req.body)["method"] == "server/discover"
+        end.to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { result: { supportedVersions: ["2026-07-28"], capabilities: {}, ttlMs: 0, cacheScope: "private" } }.to_json,
         )
       end
 
@@ -2570,13 +2880,13 @@ module MCP
             case JSON.parse(env.request_body)["method"]
             when "server/discover"
               discover = { supportedVersions: ["2026-07-28"], capabilities: { tools: {} }, ttlMs: 0, cacheScope: "private" }
-              [200, { "Content-Type" => "application/json" }, { result: discover }.to_json]
+              [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: discover }.to_json]
             when "tools/list"
               listing = tools.respond_to?(:call) ? tools.call : tools
-              [200, { "Content-Type" => "application/json" }, { result: { tools: listing } }.to_json]
+              [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: { tools: listing } }.to_json]
             else
               on_call.call(env.request_headers)
-              [200, { "Content-Type" => "application/json" }, { result: { content: [] } }.to_json]
+              [200, { "Content-Type" => "application/json" }, { jsonrpc: "2.0", result: { content: [] } }.to_json]
             end
           end
         end

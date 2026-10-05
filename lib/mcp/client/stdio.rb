@@ -442,17 +442,22 @@ module MCP
           # other server-to-client requests over stdio stay unsupported as documented,
           # and notifications carry no id.
           if parsed.is_a?(Hash) && parsed.key?("method")
-            # A JSON-RPC id is a String or a Number; the reference SDKs reject other shapes at
-            # schema validation, so a ping carrying one is skipped rather than echoed back.
-            answer_ping(parsed) if parsed["method"] == MCP::Methods::PING && json_rpc_id?(parsed["id"])
+            # A JSON-RPC id is a String or a Number, and `jsonrpc` is "2.0"; the reference SDKs reject
+            # other shapes at schema validation, so a ping carrying one is skipped rather than echoed back.
+            answer_ping(parsed) if answerable_ping?(parsed)
             next
           end
 
           # A JSON-RPC message is an object; skip a non-object frame (array or scalar)
           # the same way as a frame without an id.
           next unless parsed.is_a?(Hash) && parsed.key?("id")
+          next unless parsed["id"] == request_id
 
-          return parsed if parsed["id"] == request_id
+          # Nothing else will answer the awaited request, so a response that is not JSON-RPC 2.0 fails it
+          # instead of being skipped: without a `read_timeout`, skipping would wait forever.
+          raise_invalid_response!(method, params) unless JsonRpcHandler.valid_version?(parsed["jsonrpc"])
+
+          return parsed
         end
       rescue JSON::ParserError => e
         raise RequestHandlerError.new(
@@ -473,6 +478,10 @@ module MCP
       rescue RequestHandlerError
         # Best effort: a pong cannot be delivered over a broken stdin, and the failure must not
         # surface as an error of the unrelated request whose response the loop is reading.
+      end
+
+      def answerable_ping?(parsed)
+        parsed["method"] == MCP::Methods::PING && json_rpc_id?(parsed["id"]) && JsonRpcHandler.valid_version?(parsed["jsonrpc"])
       end
 
       def json_rpc_id?(id)
@@ -528,6 +537,16 @@ module MCP
       def raise_connection_error!(method, params)
         raise RequestHandlerError.new(
           "Server process closed stdout unexpectedly",
+          { method: method, params: params },
+          error_type: :internal_error,
+        )
+      end
+
+      # The line framing is intact, so the transport stays usable; the received value is left out of
+      # the message because it can be any JSON value.
+      def raise_invalid_response!(method, params)
+        raise RequestHandlerError.new(
+          'Server response is not a valid JSON-RPC 2.0 message: "jsonrpc" must be "2.0"',
           { method: method, params: params },
           error_type: :internal_error,
         )

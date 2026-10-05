@@ -202,9 +202,10 @@ module MCP
 
             if parsed.key?("result") || parsed.key?("error")
               @response ||= parsed
-            elsif parsed["method"] && parsed.key?("id")
-              # A server-to-client request (e.g. `elicitation/create`) delivered
-              # on the stream while the original request is still pending.
+            elsif parsed["method"] && parsed.key?("id") && JsonRpcHandler.valid_version?(parsed["jsonrpc"])
+              # A server-to-client request (e.g. `elicitation/create`) delivered on the stream while
+              # the original request is still pending. One that is not JSON-RPC 2.0 is dropped unanswered,
+              # as the TypeScript client drops it at schema validation.
               @on_request&.call(parsed)
             end
           end
@@ -425,6 +426,10 @@ module MCP
           end
 
           body = resolve_response_body(stream, response, method, params)
+
+          # Every way a response arrives (JSON body, SSE event, resumed stream) ends here. Checked before
+          # anything is learned from the body, and only for a request: a notification awaits no response.
+          reject_invalid_response!(body, method, params) if request[:id] || request["id"]
 
           capture_session_info(method, response, body) if response
           capture_mcp_param_declarations(method, params, body)
@@ -1167,6 +1172,20 @@ module MCP
       rescue JSON::ParserError => e
         raise RequestHandlerError.new(
           "Failed to parse JSON response: #{e.message}",
+          { method: method, params: params },
+          error_type: :parse_error,
+        )
+      end
+
+      # A response is a JSON object whose `jsonrpc` is exactly "2.0". No body at all (202, or an empty 200)
+      # is not a message and is left to the caller as before; a JSON `null` body parses to the same `nil`.
+      # The received value is left out of the message because it can be any JSON value.
+      def reject_invalid_response!(body, method, params)
+        return if body.nil?
+        return if body.is_a?(Hash) && JsonRpcHandler.valid_version?(body["jsonrpc"])
+
+        raise RequestHandlerError.new(
+          'Server response is not a valid JSON-RPC 2.0 message: "jsonrpc" must be "2.0"',
           { method: method, params: params },
           error_type: :parse_error,
         )
