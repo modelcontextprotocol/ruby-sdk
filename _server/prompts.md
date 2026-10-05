@@ -126,6 +126,8 @@ end
 The [`server_context`](/server/server-context/) parameter is the `server_context` passed into the server and can be used to pass per request information,
 e.g. around authentication state or user preferences.
 
+Icons for prompts are documented on the [Icons](/server/icons/) page.
+
 ## Key Components
 
 - `MCP::Prompt::Argument` - Defines input parameters for the prompt template with name, title, description, and required flag

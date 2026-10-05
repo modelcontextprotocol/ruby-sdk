@@ -90,12 +90,15 @@ Required keyword arguments to `Provider.new`:
   an explicit value always wins.
 - `redirect_uri`: String. Must use HTTPS or be a loopback URL (`localhost`, `127.0.0.0/8`, `::1`); other values raise `Provider::InsecureRedirectURIError`.
 - `redirect_handler`: Callable invoked with the fully-built authorization `URI`. Typically opens the user's browser.
-- `callback_handler`: Callable that returns `[code, state]` or `[code, state, iss]` after the user is redirected back to `redirect_uri`. Returning the 3-element form
-  (with `iss` set to the RFC 9207 `iss` parameter from the redirect, or `nil` when absent) opts into SEP-2468 issuer validation: a present `iss` must match
-  the authorization server's issuer, and a missing one is rejected when the server advertises `authorization_response_iss_parameter_supported`.
 
 Optional keyword arguments:
 
+- `callback_handler`: Callable that returns `[code, state]` or `[code, state, iss]` after the user is redirected back to `redirect_uri`. Returning the 3-element form
+  (with `iss` set to the RFC 9207 `iss` parameter from the redirect, or `nil` when absent) opts into SEP-2468 issuer validation: a present `iss` must match
+  the authorization server's issuer, and a missing one is rejected when the server advertises `authorization_response_iss_parameter_supported`.
+  Omit it when the redirect arrives in a later request, as it does in a web application; see [Authorization in Web Applications](#authorization-in-web-applications).
+- `pending_authorization_max_age`: Integer seconds a pending authorization stays redeemable, counted from the moment `run!` saves it, when `callback_handler`
+  is omitted. Defaults to 600.
 - `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
 - `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
   Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
@@ -106,7 +109,8 @@ Optional keyword arguments:
   issued it (SEP-2352): when the server's authorization server changes, the SDK discards the stale registration and its tokens and re-registers automatically
   (portable CIMD `client_id`s are kept). Saved `tokens` carry an `"issuer"` member of their own, recording the authorization server that minted them, which is what
   lets a later refresh refuse a server the MCP server has since renamed. Treat both hashes as opaque and persist them as-is; a storage that writes out selected members
-  instead drops these bindings with no error.
+  instead drops these bindings with no error. Without `callback_handler`, it must also hold pending authorizations; see
+  [Authorization in Web Applications](#authorization-in-web-applications).
 - `client_id_metadata_document_url`: URL where you publish a Client ID Metadata Document
   (`draft-ietf-oauth-client-id-metadata-document` and the MCP authorization specification).
   When the authorization server advertises `client_id_metadata_document_supported: true`,
@@ -172,6 +176,80 @@ provider = MCP::Client::OAuth::Provider.new(
   storage: FileTokenStorage.new(File.expand_path("~/.config/my-app/oauth.json")),
 )
 ```
+
+### Authorization in Web Applications
+
+`callback_handler` keeps the flow open until the code comes back, so the process that sent the user to the authorization server stays blocked for as long as
+the user takes to sign in and consent. That suits CLI and desktop clients. In a web application the redirect arrives as a separate HTTP request, often served
+by a different process, and relaying the code to a request held open for that long is impractical. Omit `callback_handler` and the authorization spans the two requests:
+
+1. When the transport meets a `401`, or a `403` step-up challenge, the flow runs discovery and registration as usual, saves a pending authorization in `storage`
+   keyed by the `state` it generated, hands the authorization URL to `redirect_handler`, and raises `MCP::Client::OAuth::Flow::AuthorizationPendingError`
+   instead of retrying. The error's `authorization_url` reader returns the same URL, so the application can send the user there from wherever is convenient.
+2. The request that receives the redirect calls `MCP::Client::OAuth::Flow#finish!` with the redirect's whole query. Pass the query as it arrived: an `iss`
+   the caller drops reads as absent, and the flow cannot tell the difference. Requests made afterwards use the stored tokens.
+
+```ruby
+def mcp_oauth_provider(user)
+  MCP::Client::OAuth::Provider.new(
+    client_metadata: {
+      client_name: "My MCP App",
+      redirect_uris: ["https://app.example.com/oauth/mcp/callback"],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    },
+    redirect_uri: "https://app.example.com/oauth/mcp/callback",
+    redirect_handler: ->(_authorization_url) {},
+    storage: McpCredentialStorage.new(user), # per-user storage, including pending authorizations
+  )
+end
+
+# In a request that talks to the MCP server:
+transport = MCP::Client::HTTP.new(url: server_url, oauth: mcp_oauth_provider(current_user))
+begin
+  tools = MCP::Client.new(transport: transport).tools
+rescue MCP::Client::OAuth::Flow::AuthorizationPendingError => e
+  redirect_to(e.authorization_url.to_s, allow_other_host: true)
+end
+
+# In the action serving `redirect_uri`:
+MCP::Client::OAuth::Flow.new(provider: mcp_oauth_provider(current_user)).finish!(
+  server_url: server_url,
+  callback_params: request.query_parameters,
+)
+```
+
+`run!` can also start an authorization without a request to the MCP server: `MCP::Client::OAuth::Flow.new(provider: provider).run!(server_url: server_url)` returns `:redirect`,
+and the flow's `authorization_url` reader returns the URL it handed to `redirect_handler`.
+
+The storage must also respond to `save_pending_authorization(state, pending)`, `pending_authorization(state)`, and `delete_pending_authorization(state)`;
+`Provider.new` raises `Provider::PendingAuthorizationStorageError` when it does not. A pending authorization is a Hash of JSON-compatible values that includes
+the PKCE verifier, so keep it where you keep credentials, persist it as-is, and share it between the processes that can receive the redirect.
+`delete_pending_authorization` must remove the entry and return it in one atomic step, such as `GETDEL` in Redis or `DELETE ... RETURNING` in SQL,
+and return `nil` when there was none. `finish!` touches only the entry its callback's `state` names, and an authorization the user never finishes gets no callback,
+so the storage should expire entries older than `pending_authorization_max_age`, with a TTL in Redis or a periodic delete in SQL.
+`InMemoryStorage` implements the methods for a single process and drops such entries the next time a pending authorization is saved.
+
+`finish!` redeems the code the way the authorization began, and refuses anything else with `Flow::AuthorizationError`:
+
+- The pending authorization is looked up by `state` before any request is made. An unknown, already used, or malformed one is refused,
+  and one older than `pending_authorization_max_age`, counted from when `run!` saved it, is discarded and refused.
+- `server_url` must name the MCP server the authorization began with.
+- The RFC 9207 `iss` parameter is validated against the recorded issuer before the pending authorization is consumed, so a callback from another authorization
+  server, as in a mix-up attack, is refused without consuming the entry the legitimate callback needs. The check establishes only that a present `iss`
+  matches the recorded issuer, not who sent the callback; a callback without `iss` passes it unless the authorization server advertises
+  `authorization_response_iss_parameter_supported`, in which case a missing `iss` is refused. Whoever holds the `state`, passes that check, and reaches
+  the consume first takes the entry, with an `error` or an unusable code as well as with the code itself, and the legitimate callback then finds nothing.
+- The pending authorization is then consumed through `delete_pending_authorization`, and only a callback that gets the entry back proceeds, so of two callbacks
+  racing on the same `state`, such as a retried redirect, at most one redeems the code. An `error` response is raised with its `error` and `error_description`,
+  bounded as [token endpoint errors](#token-endpoint-errors) are; it is read only after the `iss` check, since in a mix-up those parameters are another server's.
+- The code is redeemed at the recorded token endpoint, with the client registration, `resource`, and `redirect_uri` used when the authorization began,
+  without running discovery again (SEP-2352). A registration whose `client_id` or issuer changed in the meantime is refused; its other members may change.
+
+{: .important }
+> `state` proves that this SDK started the authorization, not which user did. Binding the callback to the user who started it is the application's responsibility:
+> scope `storage` to that user, as in the example, so that a callback delivered to another user's session finds no pending authorization.
 
 ### Token Endpoint Errors
 
