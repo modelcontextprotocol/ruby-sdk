@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-05
+
+This release lets a web application finish the OAuth authorization in the request that receives the redirect,
+bounds the `initialize` request a session retains and the resource URIs a `subscriptions/listen` stream retains,
+validates icons given as Hashes through `MCP::Icon`, and repairs two `subscriptions/listen` cases: a request that
+cannot be encoded is refused, and a removed stream is marked closed.
+The two bounds and the icon validation reject what earlier releases accepted and ship in a minor release under
+the exceptions described in [VERSIONING.md](VERSIONING.md); raise `max_initialize_request_bytes:` and
+`max_resource_subscription_bytes:` (or set them to `nil`) where the byte bounds are too tight, and give Hash icons only
+the `MCP::Icon` members with a valid `src`.
+
+### Added
+
+- Let a web application finish authorization in the request that receives the redirect (#573)
+- Bound the resource URIs a `subscriptions/listen` stream retains (#582)
+- Bound the `initialize` request a session retains (#583)
+
+### Changed
+
+- Validate icons given as Hashes through `MCP::Icon` (#586)
+
+### Fixed
+
+- Refuse `subscriptions/listen` requests that cannot be encoded (#585)
+- Mark a removed `subscriptions/listen` stream closed (#587)
+
 ## [1.6.1] - 2026-09-27
 
 This release makes the OAuth client parse `WWW-Authenticate` headers and URLs in linear time and repairs
