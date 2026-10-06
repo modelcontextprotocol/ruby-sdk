@@ -709,6 +709,170 @@ module MCP
         stdout_write.close
       end
 
+      def test_send_request_raises_error_on_a_response_that_is_not_json_rpc_2_0
+        answers = [
+          { result: { tools: [] } },
+          { jsonrpc: "1.0", result: { tools: [] } },
+          { jsonrpc: 2.0, result: { tools: [] } },
+          { jsonrpc: nil, result: { tools: [] } },
+          { error: { code: -32600, message: "Invalid request" } },
+        ]
+        answers.each do |answer|
+          server = lambda do |requests, frames|
+            answer_handshake(requests, frames)
+            first = JSON.parse(requests.gets)
+            write_frame(frames, answer.merge(id: first["id"]))
+            second = JSON.parse(requests.gets)
+            write_frame(frames, { jsonrpc: "2.0", id: second["id"], result: { tools: [] } })
+          end
+
+          with_scripted_server(server) do |transport|
+            transport.connect
+            error = assert_raises(RequestHandlerError, answer.inspect) do
+              transport.send_request(request: { jsonrpc: "2.0", id: "first", method: "tools/list" })
+            end
+
+            assert_equal('Server response is not a valid JSON-RPC 2.0 message: "jsonrpc" must be "2.0"', error.message)
+            assert_equal(:internal_error, error.error_type)
+            assert_equal({ method: "tools/list", params: nil }, error.request)
+
+            # The line framing is intact, so the same connection answers the next request.
+            response = transport.send_request(request: { jsonrpc: "2.0", id: "second", method: "tools/list" })
+
+            assert_equal("second", response["id"])
+          end
+        end
+      end
+
+      def test_send_request_skips_frames_that_are_not_json_rpc_2_0_unless_they_answer_the_awaited_request
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          request = JSON.parse(requests.gets)
+
+          # The stale answer to another request and a notification, neither of them JSON-RPC 2.0.
+          write_frame(frames, { id: "stale", result: {} })
+          write_frame(frames, { jsonrpc: "1.0", method: "notifications/progress", params: {} })
+          write_frame(frames, { jsonrpc: "2.0", id: request["id"], result: { tools: [] } })
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "test-id", method: "tools/list" })
+
+          assert_equal("test-id", response["id"])
+        end
+      end
+
+      def test_a_ping_that_is_not_json_rpc_2_0_is_not_answered
+        written = []
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          first = JSON.parse(requests.gets)
+          write_frame(frames, { id: "srv-ping-1", method: "ping" })
+          write_frame(frames, { jsonrpc: "2.0", id: "srv-ping-2", method: "ping" })
+          write_frame(frames, { jsonrpc: "2.0", id: first["id"], result: { tools: [] } })
+
+          # Everything the client writes up to its next request, so that no pong can go unseen.
+          loop do
+            written << JSON.parse(requests.gets)
+            break if written.last["method"]
+          end
+
+          write_frame(frames, { jsonrpc: "2.0", id: written.last["id"], result: { tools: [] } })
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect
+          transport.send_request(request: { jsonrpc: "2.0", id: "first", method: "tools/list" })
+          transport.send_request(request: { jsonrpc: "2.0", id: "second", method: "tools/list" })
+        end
+
+        pongs = written.reject { |frame| frame["method"] }
+
+        assert_equal(["srv-ping-2"], pongs.map { |frame| frame["id"] })
+      end
+
+      def test_connect_raises_on_an_initialize_response_that_is_not_json_rpc_2_0
+        server = lambda do |requests, frames|
+          init_request = JSON.parse(requests.gets)
+          write_frame(frames, { id: init_request["id"], result: handshake_result })
+        end
+
+        with_scripted_server(server) do |transport|
+          error = assert_raises(RequestHandlerError) { transport.connect }
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+          refute_predicate(transport, :connected?)
+          assert_nil(transport.server_info)
+        end
+      end
+
+      def test_connect_modern_raises_on_a_discover_response_that_is_not_json_rpc_2_0
+        server = lambda do |requests, frames|
+          discover_request = JSON.parse(requests.gets)
+          write_frame(frames, { id: discover_request["id"], result: discover_result })
+        end
+
+        with_scripted_server(server) do |transport|
+          error = assert_raises(RequestHandlerError) { transport.connect(mode: :modern) }
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+          refute_predicate(transport, :modern?)
+          refute_predicate(transport, :connected?)
+        end
+      end
+
+      def test_connect_auto_falls_back_when_the_discover_response_is_not_json_rpc_2_0
+        server = lambda do |requests, frames|
+          discover_request = JSON.parse(requests.gets)
+          write_frame(frames, { id: discover_request["id"], result: discover_result })
+          answer_handshake(requests, frames)
+        end
+
+        with_scripted_server(server) do |transport|
+          result = transport.connect(mode: :auto)
+
+          assert_equal("2025-11-25", result["protocolVersion"])
+          refute_predicate(transport, :modern?)
+          assert_predicate(transport, :connected?)
+        end
+      end
+
+      def test_send_request_raises_error_on_a_response_that_is_not_json_rpc_2_0_on_a_modern_connection
+        server = lambda do |requests, frames|
+          discover_request = JSON.parse(requests.gets)
+          write_frame(frames, { jsonrpc: "2.0", id: discover_request["id"], result: discover_result })
+          request = JSON.parse(requests.gets)
+          write_frame(frames, { id: request["id"], result: { tools: [] } })
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect(mode: :modern)
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "t1", method: "tools/list" })
+          end
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+          assert_predicate(transport, :modern?)
+        end
+      end
+
+      def test_call_tool_raises_when_the_response_is_not_json_rpc_2_0
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          request = JSON.parse(requests.gets)
+          write_frame(frames, { id: request["id"], result: { content: [{ type: "text", text: "ok" }] } })
+        end
+
+        with_scripted_server(server) do |transport|
+          client = Client.new(transport: transport)
+          client.connect(mode: :legacy)
+          error = assert_raises(RequestHandlerError) { client.call_tool(name: "echo", arguments: {}) }
+
+          assert_includes(error.message, "not a valid JSON-RPC 2.0 message")
+        end
+      end
+
       def test_close_kills_process_on_timeout
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe
@@ -1951,6 +2115,52 @@ module MCP
         thread.stubs(:alive?).returns(true)
         thread.stubs(:value).returns(nil)
         thread
+      end
+
+      # Yields a transport whose server side is `server`, a callable given the pipe the server reads
+      # client frames from and the pipe it writes its own frames to. The `read_timeout` turns a regression
+      # that waits for a frame into a failure instead of a hang.
+      def with_scripted_server(server, read_timeout: 2)
+        stdin_read, stdin_write = IO.pipe
+        stdout_read, stdout_write = IO.pipe
+        stderr_read, stderr_write = IO.pipe
+        Open3.stubs(:popen3).returns([stdin_write, stdout_read, stderr_read, mock_wait_thread])
+
+        server_thread = Thread.new { server.call(stdin_read, stdout_write) }
+        yield Stdio.new(command: "ruby", args: ["server.rb"], read_timeout: read_timeout)
+      ensure
+        server_thread.kill
+        server_thread.join
+        [stdin_read, stdin_write, stdout_read, stdout_write, stderr_read, stderr_write].compact.each do |io|
+          io.close unless io.closed?
+        end
+      end
+
+      def answer_handshake(requests, frames)
+        init_request = JSON.parse(requests.gets)
+        write_frame(frames, { jsonrpc: "2.0", id: init_request["id"], result: handshake_result })
+
+        # `notifications/initialized`
+        requests.gets
+      end
+
+      def write_frame(frames, frame)
+        frames.puts(JSON.generate(frame))
+        frames.flush
+      end
+
+      def handshake_result
+        { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "test-server", version: "1.0.0" } }
+      end
+
+      def discover_result
+        {
+          supportedVersions: ["2026-07-28"],
+          capabilities: {},
+          serverInfo: { name: "test-server", version: "1.0" },
+          ttlMs: 0,
+          cacheScope: "private",
+        }
       end
     end
   end

@@ -10,6 +10,11 @@ nav_order: 2
 This page covers the bundled [stdio](#stdio-transport-layer) and [Streamable HTTP](#http-transport-layer) transports,
 their sessions and server-to-client request handling, and the interface a custom transport must implement.
 
+Both bundled transports check the `jsonrpc` member of the messages a server sends: the response to a pending request fails
+that request with `MCP::Client::RequestHandlerError` instead of being returned when the member is missing or is not exactly `"2.0"`,
+and a server-to-client request with such a member is ignored rather than answered.
+A custom transport does its own checking; `MCP::Client` uses the Hash it returns as is.
+
 ## Stdio Transport Layer
 
 Use the `MCP::Client::Stdio` transport to interact with MCP servers running as subprocesses over standard input/output.
