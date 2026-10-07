@@ -418,8 +418,10 @@ module MCP
           yield if block_given?
 
           response = begin
-            client.post("", request, session_headers.merge(request_metadata_headers(method, params))) do |req|
-              req.options.on_data = stream.on_data
+            redacting_authorization_header do
+              client.post("", request, session_headers.merge(request_metadata_headers(method, params))) do |req|
+                req.options.on_data = stream.on_data
+              end
             end
           rescue StreamAbort
             nil
@@ -527,7 +529,7 @@ module MCP
       def send_notification(notification:)
         method = notification[:method] || notification["method"]
 
-        client.post("", notification, session_headers)
+        redacting_authorization_header { client.post("", notification, session_headers) }
         nil
       rescue Faraday::Error => e
         raise RequestHandlerError.new(
@@ -555,7 +557,7 @@ module MCP
         end
 
         begin
-          client.delete("", nil, session_headers)
+          redacting_authorization_header { client.delete("", nil, session_headers) }
         rescue Faraday::ClientError => e
           raise unless [404, 405].include?(e.response&.dig(:status))
         ensure
@@ -1050,6 +1052,51 @@ module MCP
         [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0.001].max
       end
 
+      # Runs a request on the transport's connection and, when Faraday raises, replaces the value of the `Authorization` header
+      # in the request headers the exception retains before it leaves the transport.
+      # Faraday's `raise_error` middleware keeps a reference to `env.request_headers` in `Faraday::Error#response`
+      # under `:request`, so the exception that becomes `RequestHandlerError#original_error` (and its `cause`) would otherwise print
+      # the bearer token through `inspect`, which is what error reporters and log lines do with it. The request is complete by
+      # the time the exception surfaces, and every request builds its own headers from the connection's defaults,
+      # so the rewrite reaches neither those defaults nor a later request.
+      def redacting_authorization_header
+        yield
+      rescue Faraday::Error => e
+        redact_authorization_header!(e)
+        raise
+      end
+
+      # `raise_error` retains the request as a Hash under `:request`; a JSON middleware the customizer added raises
+      # `Faraday::ParsingError` with the `Faraday::Response` itself, whose `env` holds the request headers.
+      def redact_authorization_header!(error)
+        response = error.response
+
+        if response.is_a?(Hash)
+          request = response[:request]
+          redact_authorization_header_in!(request, :headers) if request.is_a?(Hash)
+        elsif response.respond_to?(:env) && response.env.respond_to?(:request_headers)
+          redact_authorization_header_in!(response.env, :request_headers)
+        end
+      end
+
+      # The headers are a `Faraday::Utils::Headers`, which spells the name `Authorization` whatever the caller wrote,
+      # unless a customizer middleware replaced them with a plain Hash or froze them: the name is matched regardless
+      # of case so such a Hash is covered too, and a frozen object is swapped for a copy, so the redaction never
+      # raises in place of the error it is redacting.
+      def redact_authorization_header_in!(holder, key)
+        headers = holder[key]
+        return unless headers.is_a?(Hash)
+
+        names = headers.each_key.select { |name| name.to_s.casecmp?("authorization") }
+        return if names.empty?
+
+        headers = holder[key] = headers.dup if headers.frozen?
+
+        names.each do |name|
+          headers[name] = "[redacted]"
+        end
+      end
+
       def require_faraday!
         require "faraday"
       rescue LoadError
@@ -1162,7 +1209,7 @@ module MCP
       end
 
       def send_client_response(response)
-        client.post("", response, session_headers)
+        redacting_authorization_header { client.post("", response, session_headers) }
       end
 
       def parse_json_buffer(buffer, method, params)
@@ -1225,12 +1272,14 @@ module MCP
           read_timeout = remaining_reconnection_budget(deadline)
 
           reconnect_response = begin
-            client.get("") do |req|
-              req.headers.update(session_headers)
-              req.headers["Accept"] = SSE_ACCEPT_HEADER
-              req.headers[LAST_EVENT_ID_HEADER] = stream.last_event_id if stream.last_event_id
-              req.options.read_timeout = read_timeout
-              req.options.on_data = stream.on_data
+            redacting_authorization_header do
+              client.get("") do |req|
+                req.headers.update(session_headers)
+                req.headers["Accept"] = SSE_ACCEPT_HEADER
+                req.headers[LAST_EVENT_ID_HEADER] = stream.last_event_id if stream.last_event_id
+                req.options.read_timeout = read_timeout
+                req.options.on_data = stream.on_data
+              end
             end
           rescue StreamAbort
             # The awaited response arrived on the reconnected stream.

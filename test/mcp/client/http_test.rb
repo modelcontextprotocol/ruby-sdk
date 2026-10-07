@@ -417,6 +417,174 @@ module MCP
         assert_equal({ method: "tools/list", params: nil }, error.request)
       end
 
+      def test_send_request_redacts_the_authorization_header_from_the_original_error
+        # Faraday keeps the request headers on the error it raises, so without redaction the bearer token
+        # would travel into logs through `original_error` (also the `cause`) and its `inspect`.
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" })
+        stub_request(:post, url).to_return(status: 401)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        assert_same(error.original_error, error.cause)
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_send_notification_redacts_the_authorization_header_from_the_original_error
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" })
+        stub_request(:post, url).to_return(status: 500)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_notification(notification: { jsonrpc: "2.0", method: "notifications/initialized" })
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_resuming_a_stream_redacts_the_authorization_header_from_the_original_error
+        # The server closes the stream after a priming event (SEP-1699), so the client resumes it with
+        # a GET carrying `Last-Event-ID`; that GET runs after the initial POST completes, still inside `send_request`.
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" })
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "test_tool", arguments: {} } }
+        stub_request(:post, url).with(body: request.to_json).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 10\ndata:\n\n",
+        )
+        stub_request(:get, url).with(headers: { "Last-Event-ID" => "event-1" }).to_return(status: 500)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        assert_same(error.original_error, error.cause)
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_answering_a_server_request_redacts_the_authorization_header_from_the_original_error
+        # The resumed stream carries a request from the server, which the client answers with a POST of its own.
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" })
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "test_tool", arguments: {} } }
+        stub_request(:post, url).with(body: request.to_json).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 10\ndata:\n\n",
+        )
+        stub_request(:get, url).with(headers: { "Last-Event-ID" => "event-1" }).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "event: message\nid: event-2\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"server_id\",\"method\":\"roots/list\"}\n\n",
+        )
+        stub_request(:post, url).with { |answer| answer.body.include?("server_id") }.to_return(status: 500)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        assert_same(error.original_error, error.cause)
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_answering_a_buffered_server_request_redacts_the_authorization_header_from_the_original_error
+        # An adapter without streaming support, like the test adapter, hands the SSE body over whole once
+        # the POST has completed, so the answer to a server request it carries is sent outside that POST
+        # and only the answer's own redaction covers it.
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") do |env|
+            if env.body.include?("server_id")
+              [500, {}, ""]
+            else
+              [
+                200,
+                { "Content-Type" => "text/event-stream" },
+                "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"server_id\",\"method\":\"roots/list\"}\n\n",
+              ]
+            end
+          end
+        end
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" }) do |faraday|
+          faraday.adapter(:test, stubs)
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        assert_same(error.original_error, error.cause)
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_send_request_redacts_the_authorization_header_from_a_parsing_error
+        # A JSON middleware added through the connection block raises `Faraday::ParsingError` on a malformed body,
+        # and that error retains the `Faraday::Response` itself rather than the Hash `raise_error` builds.
+        # The body reaches the middleware through an adapter without streaming support, like the test adapter.
+        stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+          stub.post("/") { [200, { "Content-Type" => "application/json" }, "{"] }
+        end
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" }) do |faraday|
+          faraday.response(:json)
+          faraday.adapter(:test, stubs)
+        end
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_instance_of(Faraday::ParsingError, error.original_error)
+        assert_equal("[redacted]", error.original_error.response.env.request_headers["Authorization"])
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_send_request_redacts_frozen_request_headers_through_a_copy
+        # A middleware that freezes the request headers must not turn the redaction into a `FrozenError` raised
+        # in place of the HTTP error, which would also skip the OAuth retry and the `RequestHandlerError` wrapping.
+        freezing = Class.new(Faraday::Middleware) do
+          def call(env)
+            env.request_headers.freeze
+            @app.call(env)
+          end
+        end
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" }) do |faraday|
+          faraday.use(freezing)
+        end
+        stub_request(:post, url).to_return(status: 401)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["Authorization"])
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
+      def test_send_request_redacts_a_lowercase_authorization_key_in_replaced_request_headers
+        # A middleware that replaces the headers with a plain Hash loses the canonical spelling
+        # `Faraday::Utils::Headers` guarantees, so the name is matched regardless of case.
+        downcasing = Class.new(Faraday::Middleware) do
+          def call(env)
+            env.request_headers = env.request_headers.to_h.transform_keys(&:downcase)
+            @app.call(env)
+          end
+        end
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" }) do |faraday|
+          faraday.use(downcasing)
+        end
+        stub_request(:post, url).to_return(status: 401)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+        end
+
+        assert_equal("[redacted]", error.original_error.response[:request][:headers]["authorization"])
+        refute_includes(error.original_error.inspect, "secret-token")
+      end
+
       def test_send_request_raises_forbidden_error
         request = {
           jsonrpc: "2.0",
@@ -2008,6 +2176,27 @@ module MCP
         end
 
         assert_nil(client.session_id)
+      end
+
+      def test_close_redacts_the_authorization_header_from_the_propagated_error
+        client = HTTP.new(url: url, headers: { "Authorization" => "Bearer secret-token" })
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
+          body: { jsonrpc: "2.0", result: { protocolVersion: "2025-11-25" } }.to_json,
+        )
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+        stub_request(:delete, url).to_return(status: 401)
+
+        error = assert_raises(Faraday::UnauthorizedError) do
+          client.close
+        end
+
+        assert_equal("[redacted]", error.response[:request][:headers]["Authorization"])
+
+        # Only the `Authorization` header is replaced; the session header stays as it was sent.
+        assert_equal("session-abc", error.response[:request][:headers]["Mcp-Session-Id"])
+        refute_includes(error.inspect, "secret-token")
       end
 
       def test_close_propagates_connection_failure_and_still_clears_state

@@ -308,6 +308,38 @@ module MCP
           )
         end
 
+        def test_send_request_keeps_the_challenge_and_the_retried_bearer_through_the_redaction
+          # The 401 error is redacted before the OAuth flow reads its `WWW-Authenticate` challenge, and the retry
+          # builds its own headers, so the flow still runs and the retried request carries the token it produced.
+          # The challenge names a metadata URL off the well-known paths, which are left unstubbed: were the challenge
+          # lost with the redaction, discovery would fall back to those paths and the flow would fail.
+          @prm_url = "https://srv.example.com/oauth/protected-resource"
+          stub_step_up_authorization_server
+          stub_request(:post, @mcp_url).with(
+            headers: { "Authorization" => "Bearer initial-token" }
+          ).to_return(
+            status: 401,
+            headers: { "WWW-Authenticate" => %(Bearer error="invalid_token", resource_metadata="#{@prm_url}") },
+            body: "",
+          )
+          stub_request(:post, @mcp_url).with(
+            headers: { "Authorization" => "Bearer escalated-token" }
+          ).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+          )
+          provider = build_step_up_provider
+
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "1", method: "tools/list" })
+
+          assert_equal({ "ok" => true }, response["result"])
+          assert_equal("escalated-token", provider.access_token)
+          assert_requested(:post, @mcp_url, headers: { "Authorization" => "Bearer initial-token" }, times: 1)
+          assert_requested(:post, @mcp_url, headers: { "Authorization" => "Bearer escalated-token" }, times: 1)
+        end
+
         def test_send_request_does_not_follow_a_resource_metadata_challenge_off_the_server_origin
           # End to end over the transport, which is where the header is actually parsed:
           # a server that answers 401 must not be able to name an unrelated host in
