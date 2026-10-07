@@ -19,6 +19,9 @@ module MCP
         METADATA_DIAGNOSTIC_MAX_LENGTH = 128
         METADATA_URL_MAX_LENGTH = 2048
 
+        # RFC 6749 scope-token: visible ASCII except space, double quote, and backslash.
+        SCOPE_TOKEN_FORMAT = /\A[\x21\x23-\x5B\x5D-\x7E]+\z/.freeze
+
         # Token request parameters the flow sets itself. Its values win over a provider's `token_request_params`,
         # so a provider naming one of these is refused rather than left believing its value was sent.
         RESERVED_TOKEN_REQUEST_PARAMS = [
@@ -264,12 +267,14 @@ module MCP
 
           ensure_pkce_supported!(as_metadata)
 
-          effective_scope = resolve_scope(scope: scope, prm: prm)
+          effective_scope = resolve_scope(scope: scope, prm: prm, select_prm_scope: true)
           effective_scope = normalize_offline_access_scope(effective_scope, as_metadata: as_metadata)
+          endpoint_uri, endpoint_params = authorization_endpoint_parameters(as_metadata: as_metadata)
+          request_scope = authorization_request_scope(scope: effective_scope, endpoint_params: endpoint_params)
 
           # Asked before registering, not after: a refusal must not leave this client registered at an authorization server
-          # the embedding application has just rejected.
-          authorize_request!(as_metadata: as_metadata, scope: effective_scope, server_url: server_url, resource: resource)
+          # the embedding application has just rejected. Use the scopes that will actually reach the browser URL.
+          authorize_request!(as_metadata: as_metadata, scope: request_scope, server_url: server_url, resource: resource)
 
           client_info = ensure_client_registered(as_metadata: as_metadata)
 
@@ -277,7 +282,8 @@ module MCP
           state = SecureRandom.urlsafe_base64(32)
 
           authorization_url = build_authorization_url(
-            as_metadata: as_metadata,
+            endpoint_uri: endpoint_uri,
+            endpoint_params: endpoint_params,
             client_id: client_info_required_value(client_info, "client_id"),
             scope: effective_scope,
             state: state,
@@ -850,16 +856,16 @@ module MCP
         # Hands the embedding application the authorization server and the scopes that are about to be requested,
         # and abandons the flow when it refuses them.
         #
-        # Both values are chosen by the MCP server: it names its own authorization server in Protected
-        # Resource Metadata and states the scopes in `scopes_supported` or the `WWW-Authenticate` challenge.
+        # The MCP server names its authorization server in Protected Resource Metadata and states scopes
+        # in `scopes_supported` or the `WWW-Authenticate` challenge. Authorization-code policy also sees
+        # any prefilled endpoint scope that will survive URL assembly.
         # Neither the specification nor any MCP SDK binds that choice to the server's own identity,
         # and validating that a token was issued for the intended audience is a responsibility the specification
         # places on MCP servers rather than on clients.
         # A host that knows which providers its user deals with can apply that knowledge here.
         #
-        # The scopes are passed on unchanged whatever the host decides, because the specification requires
-        # a client to treat the challenged scopes as authoritative for the operation; the choice offered is
-        # to proceed or to stop, not to quietly ask for less. A provider without the hook proceeds as before.
+        # Challenged scopes are authoritative for the operation and bypass the PRM scope selector.
+        # The validator can accept or refuse them, not quietly request fewer scopes.
         #
         # Only asked when a new grant is being requested. A refresh is not a new grant, and the host already answered
         # this question for that authorization server, so `refresh!` enforces `ensure_token_issuer!` instead:
@@ -1302,17 +1308,18 @@ module MCP
           AuthorizationError.new(message, error: error, error_description: description)
         end
 
-        # Per MCP 2025-11-25 Authorization and the TS/Python SDKs, scope resolution
-        # prefers the `WWW-Authenticate` challenge first, then `scopes_supported`
-        # from the Protected Resource Metadata, and falls back to a provider-supplied
-        # scope only if both are absent. The provider-supplied scope must not pre-empt
-        # a server-advertised one.
-        def resolve_scope(scope:, prm:)
+        # MCP scope selection prefers the challenge, then PRM `scopes_supported`, then the provider's fallback.
+        # Authorization-code clients may narrow only the PRM default, before `offline_access` augmentation.
+        def resolve_scope(scope:, prm:, select_prm_scope: false)
           return scope if scope && !scope.empty?
 
           # `prm` is nil on the legacy path, where nothing advertises scopes.
           supported = prm && prm["scopes_supported"]
-          return supported.join(" ") if supported.is_a?(Array) && !supported.empty?
+          if supported.is_a?(Array) && !supported.empty?
+            return select_prm_scopes(supported) if select_prm_scope
+
+            return supported.join(" ")
+          end
 
           return @provider.scope if @provider.scope && !@provider.scope.empty?
 
@@ -1334,7 +1341,8 @@ module MCP
         #   the authorization request even though the AS will not honour it. Stripping here keeps the SDK's
         #   own request consistent with the AS's advertisement.
         #
-        # Returns `nil` when the result is empty so `build_authorization_url` omits the `scope` parameter entirely.
+        # Returns `nil` when empty so the URL builder adds no flow-owned scope parameter; a prefilled scope
+        # can still survive and is checked by the authorization-request validator.
         # https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2207
         def normalize_offline_access_scope(scope, as_metadata:)
           scopes = scope.to_s.split
@@ -1352,6 +1360,28 @@ module MCP
           supported = as_metadata["scopes_supported"]
 
           supported.is_a?(Array) && supported.include?("offline_access")
+        end
+
+        # Selects a subset of the PRM default without changing challenges, provider fallback, or refresh policy.
+        def select_prm_scopes(scopes)
+          selector = @provider.scope_selector if @provider.respond_to?(:scope_selector)
+          return scopes.join(" ") unless selector
+
+          unless scopes.all? { |token| token.is_a?(String) && SCOPE_TOKEN_FORMAT.match?(token) }
+            raise AuthorizationError, "Protected Resource Metadata `scopes_supported` contains invalid OAuth scope tokens."
+          end
+
+          candidates = scopes.map { |token| token.dup.freeze }.freeze
+          candidate_index = candidates.to_h { |token| [token, true] }
+          selected = selector.call(candidates)
+          valid = selected.is_a?(Array) && selected.all? do |token|
+            token.is_a?(String) && SCOPE_TOKEN_FORMAT.match?(token) && candidate_index.key?(token)
+          end
+          unless valid
+            raise ArgumentError, "scope_selector must return an Array containing only scopes from PRM scopes_supported."
+          end
+
+          selected.empty? ? nil : selected.join(" ")
         end
 
         def wants_refresh_token?
@@ -1398,7 +1428,7 @@ module MCP
           @provider.client_id_metadata_document_url
         end
 
-        def build_authorization_url(as_metadata:, client_id:, scope:, state:, code_challenge:, resource:)
+        def authorization_endpoint_parameters(as_metadata:)
           authorization_endpoint = as_metadata["authorization_endpoint"]
           unless authorization_endpoint
             raise AuthorizationError,
@@ -1412,6 +1442,23 @@ module MCP
               "Authorization server metadata `authorization_endpoint` is not a valid URI: #{e.message}."
           end
 
+          [uri, URI.decode_www_form(uri.query.to_s)]
+        end
+
+        # A flow scope replaces every endpoint scope; otherwise a single prefilled value survives.
+        # Decode once before policy approval and reuse those parameters when building the URL.
+        def authorization_request_scope(scope:, endpoint_params:)
+          return scope if scope
+
+          endpoint_scopes = endpoint_params.filter_map { |name, value| value if name == "scope" }
+          if endpoint_scopes.length > 1
+            raise AuthorizationError, "Authorization endpoint contains repeated `scope` parameters."
+          end
+
+          endpoint_scopes.first
+        end
+
+        def build_authorization_url(endpoint_uri:, endpoint_params:, client_id:, scope:, state:, code_challenge:, resource:)
           # A parameter the flow sets replaces any of the same name the endpoint URL already carries.
           # RFC 6749 Section 3.1 forbids sending a parameter twice, and which of two values a server would honor is
           # its own choice; on the legacy path the endpoint URL is served by the MCP server, whose query must not speak
@@ -1433,10 +1480,10 @@ module MCP
           own_params << ["resource", resource] if resource
           dropped_names = own_params.map(&:first) + ["request", "request_uri"]
 
-          params = URI.decode_www_form(uri.query.to_s).reject { |name, _value| dropped_names.include?(name) }
-          uri.query = URI.encode_www_form(params + own_params)
+          params = endpoint_params.reject { |name, _value| dropped_names.include?(name) }
+          endpoint_uri.query = URI.encode_www_form(params + own_params)
 
-          uri
+          endpoint_uri
         end
 
         def exchange_authorization_code(as_metadata:, client_info:, code:, code_verifier:, resource:, redirect_uri: @provider.redirect_uri)
