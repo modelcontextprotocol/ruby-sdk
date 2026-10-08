@@ -450,7 +450,7 @@ module MCP
             )
 
           stub_step_up_authorization_server
-          provider = build_step_up_provider
+          provider = build_step_up_provider(scope_selector: ->(_scopes) { flunk("step-up scopes must bypass the selector") })
           # The provider already holds a token granted for `mcp:read`.
           provider.save_tokens(
             "access_token" => "initial-token",
@@ -2018,7 +2018,7 @@ module MCP
           end
         end
 
-        def build_step_up_provider(grant_types: ["authorization_code"], client_id_metadata_document_url: nil)
+        def build_step_up_provider(grant_types: ["authorization_code"], client_id_metadata_document_url: nil, scope_selector: nil)
           state_holder = {}
           captured_authorization_url = nil
           provider = Provider.new(
@@ -2036,6 +2036,7 @@ module MCP
             },
             callback_handler: -> { ["test-auth-code", state_holder[:state]] },
             client_id_metadata_document_url: client_id_metadata_document_url,
+            scope_selector: scope_selector,
           )
           provider.save_tokens("access_token" => "initial-token", "token_type" => "Bearer")
 

@@ -47,9 +47,9 @@ pass an `MCP::Client::OAuth::Provider` to the transport instead of a static `Aut
 - On a `403 Forbidden` whose `WWW-Authenticate` header carries `error="insufficient_scope"` (OAuth 2.0 step-up, RFC 6750 Section 3.1 and the MCP scope-selection-strategy),
   run a fresh authorization request for the union of the currently granted scope and the scope named in the challenge, then retry the failed request once.
   The refresh path is bypassed because refreshing would re-issue the same scope set the server just rejected. A `403` without that challenge is surfaced unchanged.
-- Request the `offline_access` scope when `client_metadata[:grant_types]` includes `refresh_token` and the authorization server advertises `offline_access` in its metadata
-  `scopes_supported` (SEP-2207). This is what lets the server issue the `refresh_token` used above. As an SDK-level safeguard, when the authorization server does not advertise
-  `offline_access` the scope is also stripped from any other source (challenge, PRM, or provider-supplied scope) so a server that does not support it never receives it.
+- Request `offline_access` when the client declares the `refresh_token` grant and the authorization server advertises it in
+  `scopes_supported` (SEP-2207). The PRM scope selector below runs before this augmentation and cannot disable it.
+  Unsupported `offline_access` is stripped from resolved challenge, PRM, and provider scopes.
 
 ```ruby
 require "mcp"
@@ -99,7 +99,22 @@ Optional keyword arguments:
   Omit it when the redirect arrives in a later request, as it does in a web application; see [Authorization in Web Applications](#authorization-in-web-applications).
 - `pending_authorization_max_age`: Integer seconds a pending authorization stays redeemable, counted from the moment `run!` saves it, when `callback_handler`
   is omitted. Defaults to 600.
-- `scope`: Space-separated scopes to request when the server's `WWW-Authenticate` does not specify one.
+- `scope`: Space-separated fallback scopes when neither a challenge nor PRM advertises scopes.
+- `scope_selector`: Optional callable for narrowing Protected Resource Metadata (PRM) defaults in the authorization-code flow.
+  It is invoked only when no nonempty challenged scope was supplied and PRM supplies the default `scopes_supported` list,
+  before `offline_access` augmentation, request validation, and client registration. It receives a read-only array of PRM tokens.
+  Malformed PRM tokens raise `Flow::AuthorizationError` before the callback. It must return an array containing a subset;
+  custom scopes and `nil` results raise `ArgumentError`. Return `[]` to request
+  none of those PRM defaults. Challenged scopes, including the step-up union, and provider fallback bypass the selector;
+  use `authorization_request_validator` to accept or refuse challenged scopes. With no selector, default behavior is unchanged.
+  This hook does not control `offline_access` augmentation or alter authorization-endpoint query parameters. Returning `[]`
+  does not guarantee an omitted `scope` parameter: refresh policy can add `offline_access`, and a prefilled endpoint scope
+  survives when the flow has no scope of its own and is included in the validator's scope list. Repeated endpoint `scope`
+  parameters that would survive are rejected before registration. The authorization server can also apply defaults or reject
+  the request ([RFC 6749 Section 3.3](https://www.rfc-editor.org/rfc/rfc6749#section-3.3)); inspect the granted scopes.
+  For example, with PRM defaults `mcp:read mcp:write`, `scope_selector: ->(scopes) { scopes & ["mcp:read"] }` narrows the
+  default request to `mcp:read`; `scope_selector: ->(_scopes) { [] }` requests no PRM defaults. If the authorization server supports
+  `offline_access` and the client declares `refresh_token`, either request still includes `offline_access` afterward.
 - `authorization_request_validator`: Callable invoked with an `MCP::Client::OAuth::AuthorizationRequest` before any authorization request is built.
   Returning a falsy value abandons the flow with `Flow::AuthorizationRefusedError`. See [Reviewing the authorization request](#reviewing-the-authorization-request).
 - `http_client_customizer`: Callable invoked with the Faraday connection the SDK builds for the OAuth flow's own requests, after its defaults and before its origin guard.
@@ -436,8 +451,8 @@ provider = MCP::Client::OAuth::Provider.new(
 )
 ```
 
-The argument is an `MCP::Client::OAuth::AuthorizationRequest` carrying `authorization_server` (the selected issuer), `scopes` (an Array, empty when neither
-the challenge nor the metadata named any), `server_url`, and `resource`. It is one object rather than keyword arguments so that later revisions of the specification
+The argument is an `MCP::Client::OAuth::AuthorizationRequest` carrying `authorization_server` (the selected issuer), `scopes` (an Array of explicit requested scope tokens),
+`server_url`, and `resource`. It is one object rather than keyword arguments so that later revisions of the specification
 can add to it without changing the shape you wrote. Only the named readers are the contract. The positional access a `Struct` also happens to provide
 (`request[0]`, `to_a`, `each`) is not, and can break when the representation changes.
 
@@ -450,7 +465,10 @@ Compare the issuer as a whole string, the way the SDK compares it everywhere els
 and a legacy authorization server whose metadata never named an issuer arrives as `nil`, which an exact comparison refuses instead of raising.
 
 The provider is only half of the decision. The MCP server chose the scopes too, so a request naming a provider you allow can still ask for more than that server has
-any business asking for. `scopes` rides on the request so that a host with a policy per server can apply it:
+any business asking for. `scopes` rides on the request so that a host with a policy per server can apply it. On the authorization-code flow,
+this includes any single prefilled endpoint scope that survives when the flow has no scope of its own, including after a selector returns `[]`.
+The query names are decoded the same way as the URL builder; repeated `scope` parameters that would survive are rejected before registration.
+The following policy therefore checks the explicit scopes that the authorization URL will send:
 
 ```ruby
 ALLOWED_SCOPES = { "https://api.example.com/mcp" => ["mcp:read", "mcp:write"] }
@@ -462,6 +480,9 @@ provider = MCP::Client::OAuth::Provider.new(
   },
 )
 ```
+
+In this example, an empty `request.scopes` approves a request with no explicit scope tokens. This is not a ceiling on what the authorization server may grant:
+it can still apply defaults, so inspect the granted token scopes before treating a connection as unscoped.
 
 A host with a user to ask can put the decision to them instead. The request carries what such a prompt has to name: the provider, the scopes, and the server that asked for them.
 
