@@ -1459,8 +1459,9 @@ module MCP
         test "send_keepalive_ping writes outside the mutex" do
           session_id = initialize_test_session
           writes = install_mutex_probe_stream(session_id)
+          stream = @transport.instance_variable_get(:@sessions).fetch(session_id).fetch(:get_sse_stream)
 
-          @transport.send(:send_keepalive_ping, session_id)
+          @transport.send(:send_keepalive_ping, session_id, stream)
 
           assert_equal 1, writes[:total]
           assert_equal 0, writes[:under_mutex], "keepalive write must not hold @mutex"
@@ -1526,7 +1527,7 @@ module MCP
 
           begin
             assert_raises(Errno::ECONNRESET) do
-              @transport.send(:send_keepalive_ping, session_id)
+              @transport.send(:send_keepalive_ping, session_id, mock_stream)
             end
 
             assert_equal(1, reported_errors.size)
@@ -1535,6 +1536,23 @@ module MCP
           ensure
             MCP.configuration.exception_reporter = original_reporter
           end
+        end
+
+        test "GET stream keepalive detects a dead peer on a session opened without a token" do
+          session_id = initialize_test_session
+          dead_peer = Object.new
+          dead_peer.define_singleton_method(:write) { |_data| raise Errno::ECONNRESET }
+          dead_peer.define_singleton_method(:close) {}
+          # The keepalive tick is a fixed 30 seconds; skipping the wait lets the first ping run at once.
+          @transport.stubs(:sleep)
+
+          response = @transport.handle_request(create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          response[2].call(dead_peer)
+
+          # Only the keepalive thread notices the dead peer; without it the session lingers until the idle timeout.
+          wait_until { !@transport.instance_variable_get(:@sessions).key?(session_id) }
+
+          refute(@transport.instance_variable_get(:@sessions).key?(session_id))
         end
 
         test "responds with 405 for unsupported methods" do
