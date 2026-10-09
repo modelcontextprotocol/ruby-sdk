@@ -2444,22 +2444,24 @@ module MCP
         # The expiry of the token that authenticated the GET is kept with the stream so the keepalive loop and
         # the delivery paths can close the stream once that token expires.
         def store_stream_for_session(session_id, stream, auth_info = nil)
-          @mutex.synchronize do
+          stored = @mutex.synchronize do
             session = @sessions[session_id]
-            if session && !session[:get_sse_stream]
-              session[:get_sse_stream] = stream
-              session[:get_sse_stream_expires_at] = stream_token_expiry(auth_info)
-              # The expiry is nil for a stream opened without a token, and callers read a falsy return as "not stored",
-              # so the stream itself is the return value.
-              stream
-            else
-              # Either session was removed, or another request already established a stream.
-              stream.close
-              # `stream.close` may return a truthy value depending on the stream class.
-              # Explicitly return nil to guarantee a falsy return for callers.
-              nil
-            end
+            next false unless session && !session[:get_sse_stream]
+
+            session[:get_sse_stream] = stream
+            session[:get_sse_stream_expires_at] = stream_token_expiry(auth_info)
+            true
           end
+
+          # The expiry is nil for a stream opened without a token, and callers read a falsy return as "not stored",
+          # so the stream itself is the return value.
+          return stream if stored
+
+          # Either the session was removed, or another request already established a stream. The refused stream is
+          # closed outside the lock like every other stream this transport closes, so a close that blocks on the peer
+          # cannot hold every other session on `@mutex`.
+          close_stream_safely(stream)
+          nil
         end
 
         # The thread acts on the stream it was started for and on no other: the session may have detached that
