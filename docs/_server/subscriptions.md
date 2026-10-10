@@ -88,5 +88,7 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(
 
 A stream stays open until the client closes the connection; on graceful shutdown via `transport.close`,
 each open stream receives its `subscriptions/listen` response before closing.
+`close` waits at most 5 seconds in all for those responses to be written: a stream whose client stopped reading
+is closed without one when that time is up, and the client re-sends its `subscriptions/listen` request.
 
 See [Notifications](/server/notifications/) for the notification types themselves and their session scoping.
