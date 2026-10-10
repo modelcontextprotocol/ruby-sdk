@@ -12,15 +12,9 @@ Given a version number `MAJOR.MINOR.PATCH`:
 - **MINOR** is incremented for backwards-compatible new functionality.
 - **PATCH** is incremented for backwards-compatible bug fixes.
 
-### Current 0.x Phase
-
-While the SDK is at version 0.x, the public API is not yet considered stable.
-Following SemVer conventions for initial development, minor releases (0.x -> 0.y) may contain breaking changes.
-All breaking changes are recorded in [CHANGELOG.md](CHANGELOG.md).
-
-### After 1.0.0
-
-Once 1.0.0 is released, breaking changes will only ship in major releases, with the exceptions described below.
+Breaking changes ship only in major releases, with the exceptions described below.
+Before 1.0.0, minor releases (0.x -> 0.y) could contain breaking changes, following SemVer conventions
+for initial development; [CHANGELOG.md](CHANGELOG.md) records them.
 
 ## What Counts as a Breaking Change
 
