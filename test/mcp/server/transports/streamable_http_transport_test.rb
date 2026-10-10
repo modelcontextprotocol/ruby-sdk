@@ -743,6 +743,56 @@ module MCP
           assert stream_b.closed?
         end
 
+        test "store_stream_for_session closes a refused stream outside the mutex" do
+          session_id = initialize_test_session
+          @transport.send(:store_stream_for_session, session_id, StringIO.new)
+
+          mutex = @transport.instance_variable_get(:@mutex)
+          closed_outside_mutex = false
+          refused = Object.new
+          refused.define_singleton_method(:close) do
+            if mutex.try_lock
+              closed_outside_mutex = true
+              mutex.unlock
+            end
+          end
+
+          assert_nil @transport.send(:store_stream_for_session, session_id, refused)
+          assert closed_outside_mutex, "the refused stream was closed while the mutex was held"
+        end
+
+        test "store_stream_for_session swallows an error from closing a refused stream" do
+          session_id = initialize_test_session
+          @transport.send(:store_stream_for_session, session_id, StringIO.new)
+
+          failing = Object.new
+          failing.define_singleton_method(:close) { raise IOError, "already closed by the peer" }
+
+          assert_nil @transport.send(:store_stream_for_session, session_id, failing)
+          assert_equal 200, @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "ping", id: "ping-1" }.to_json,
+          ))[0]
+        end
+
+        test "store_stream_for_session closes the stream outside the mutex when the session is gone" do
+          # The session was removed between the GET's checks and its body running, so there is nothing to attach to.
+          mutex = @transport.instance_variable_get(:@mutex)
+          closed_outside_mutex = false
+          orphan = Object.new
+          orphan.define_singleton_method(:close) do
+            if mutex.try_lock
+              closed_outside_mutex = true
+              mutex.unlock
+            end
+          end
+
+          assert_nil @transport.send(:store_stream_for_session, "no-such-session", orphan)
+          assert closed_outside_mutex, "the orphaned stream was closed while the mutex was held"
+        end
+
         test "handles GET request with invalid session ID" do
           request = create_rack_request(
             "GET",
