@@ -4373,6 +4373,123 @@ module MCP
           assert_nil transport.instance_variable_get(:@reaper_thread)
         end
 
+        test "close lets a reap in progress finish closing the streams of the sessions it removed" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+
+          # A stream whose close blocks until released stands in for a reap caught between removing the session and closing its stream.
+          entered = Queue.new
+          release = Queue.new
+          closed = false
+          blocking_stream = Object.new
+          blocking_stream.define_singleton_method(:close) do
+            entered << :closing
+            release.pop
+            closed = true
+          end
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = blocking_stream
+
+          sleep(0.02) # Wait for the session to expire.
+
+          # Wake the reaper ahead of its interval; it removes the expired session and blocks inside the close.
+          assert wake_reaper_until(transport) { !entered.empty? }, "the reaper did not reach the stream's close"
+          assert_empty transport.instance_variable_get(:@sessions)
+
+          closer = Thread.new { transport.close }
+
+          refute closer.join(0.1), "close returned while the reaper was still closing a stream"
+
+          release << :go
+
+          assert closer.join(2), "close did not return once the reaper had finished"
+          assert closed, "the stream of the reaped session was never closed"
+          assert_nil transport.instance_variable_get(:@reaper_thread)
+        ensure
+          release << :go
+          transport.close
+        end
+
+        test "close tears the transport down even when the reaper died with an exception" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 3600)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+          stream = StringIO.new
+          transport.send(:store_stream_for_session, session_id, stream)
+
+          # A reap that raises, met by an exception reporter that raises as well, ends the reaper thread with an exception,
+          # which `Thread#join` would re-raise.
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(_error, _context) { raise "reporter failed" }
+          transport.define_singleton_method(:reap_expired_sessions) { raise "reap failed" }
+          reaper_thread = transport.instance_variable_get(:@reaper_thread)
+          reaper_thread.report_on_exception = false
+
+          assert wake_reaper_until(transport) { !reaper_thread.alive? }, "the reaper did not die"
+          assert_raises(RuntimeError) { reaper_thread.join }
+
+          transport.close
+
+          assert_nil transport.instance_variable_get(:@reaper_thread)
+          assert_empty transport.instance_variable_get(:@sessions)
+          assert stream.closed?
+        ensure
+          MCP.configuration.exception_reporter = original_reporter if original_reporter
+          transport.close
+        end
+
+        test "close kills a reaper still closing a stream once the join timed out" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+
+          # A stream whose close never returns while the test runs; the join is made to time out at once instead of after
+          # its interval.
+          entered = Queue.new
+          never = Queue.new
+          stuck_stream = Object.new
+          stuck_stream.define_singleton_method(:close) do
+            entered << :closing
+            never.pop
+          end
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stuck_stream
+
+          sleep(0.02) # Wait for the session to expire.
+
+          assert wake_reaper_until(transport) { !entered.empty? }, "the reaper did not reach the stream's close"
+
+          reaper_thread = transport.instance_variable_get(:@reaper_thread)
+          reaper_thread.stubs(:join).returns(nil)
+          closer = Thread.new { transport.close }
+
+          assert closer.join(2), "close did not return after the join timed out"
+          assert wait_until_thread_dead(reaper_thread), "the reaper was not killed"
+          assert_nil transport.instance_variable_get(:@reaper_thread)
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          # A failure would otherwise leave the reaper stuck in the close, and the closer with it; releasing the close
+          # also keeps the final `transport.close` from blocking on a stream still registered when an early step failed.
+          never&.close
+          reaper_thread&.kill
+          closer&.kill
+          transport.close
+        end
+
         test "reaper thread is not started when session_idle_timeout is nil" do
           transport = StreamableHTTPTransport.new(@server, session_idle_timeout: nil)
           assert_nil(transport.instance_variable_get(:@reaper_thread))
@@ -7182,6 +7299,34 @@ module MCP
         end
 
         private
+
+        # Signals the reaper's wakeup under the transport's lock until the block holds or the timeout elapses; the signal
+        # is repeated because one sent before the reaper reached its wait would be lost. Returns the final outcome.
+        def wake_reaper_until(transport, timeout: 2)
+          mutex = transport.instance_variable_get(:@mutex)
+          wakeup = transport.instance_variable_get(:@reaper_wakeup)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+
+          loop do
+            mutex.synchronize { wakeup.signal }
+            return true if yield
+            return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+            sleep(0.005)
+          end
+        end
+
+        # Polls until `thread` is no longer alive or the timeout elapses; returns the final outcome.
+        def wait_until_thread_dead(thread, timeout: 2)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+
+          loop do
+            return true unless thread.alive?
+            return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+            sleep(0.005)
+          end
+        end
 
         def initialize_test_session(id: "init")
           init_request = create_rack_request(

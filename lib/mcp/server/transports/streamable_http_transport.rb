@@ -347,6 +347,10 @@ module MCP
 
           @max_stream_lifetime = max_stream_lifetime
 
+          # `close` sets the flag and signals the reaper under `@mutex`, so the reaper leaves its wait at once instead of
+          # being killed in the middle of a reap.
+          @closing = false
+          @reaper_wakeup = ConditionVariable.new
           start_reaper_thread if @session_idle_timeout
         end
 
@@ -355,6 +359,8 @@ module MCP
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
         SESSION_REAP_INTERVAL = 60
+        # Seconds `close` waits for a reap in progress to finish closing its streams before it kills the reaper.
+        REAPER_JOIN_TIMEOUT = 5
 
         # Loopback hosts always accepted by DNS rebinding protection. A locally bound MCP server (the canonical pattern) is
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
@@ -453,8 +459,28 @@ module MCP
           end
         end
 
+        # The reaper is asked to stop and joined before it is killed: `reap_expired_sessions` removes expired sessions
+        # under `@mutex` and closes their streams after releasing it, and a kill landing between the two would leave
+        # those streams open with no session left to find them by. Waking the reaper ends its wait at once, and the join
+        # lets a reap already past its removal finish its closes before the rest of the transport is torn down.
+        # The join is bounded, so a stream whose close never returns cannot hold the shutdown, and a reaper that died
+        # with a `StandardError` does not stop the teardown below: `join` re-raises the exception a thread died with,
+        # which is not this method's to raise. A reaper still alive after the wait is killed as before, leaving
+        # the streams of that reap it had not closed yet as they were.
         def close
-          @reaper_thread&.kill
+          reaper = @mutex.synchronize do
+            @closing = true
+            @reaper_wakeup.signal
+            @reaper_thread
+          end
+
+          begin
+            reaper&.join(REAPER_JOIN_TIMEOUT)
+          rescue StandardError
+            # The reaper is gone either way; the exception that ended it is not this method's to report.
+          end
+
+          reaper.kill if reaper&.alive?
           @reaper_thread = nil
 
           teardown_listen_subscriptions
@@ -772,10 +798,18 @@ module MCP
 
         private
 
+        # The wait between reaps is a condition variable wait under `@mutex` rather than a sleep, so `close` can end it
+        # by signalling; a spurious wakeup only runs a reap early.
         def start_reaper_thread
           @reaper_thread = Thread.new do
             loop do
-              sleep(SESSION_REAP_INTERVAL)
+              closing = @mutex.synchronize do
+                @reaper_wakeup.wait(@mutex, SESSION_REAP_INTERVAL) unless @closing
+                @closing
+              end
+
+              break if closing
+
               reap_expired_sessions
             rescue StandardError => e
               MCP.configuration.exception_reporter.call(e, error: "Session reaper error")
