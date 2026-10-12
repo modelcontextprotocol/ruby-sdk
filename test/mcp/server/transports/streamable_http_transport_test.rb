@@ -6927,6 +6927,129 @@ module MCP
           assert_equal events, sse_events(io)
         end
 
+        test "listen teardown returns once its timeout passed behind a held write mutex" do
+          # A delivery stalled in its write holds the stream's write mutex for as long as the peer leaves
+          # the socket buffers full; the test holds the mutex in that delivery's place.
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          closes = 0
+          io.define_singleton_method(:close) do
+            closes += 1
+            super()
+          end
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          entry = registry.values.first
+          before = Thread.list
+
+          entry[:write_mutex].lock
+          begin
+            teardown = Thread.new { @transport.send(:teardown_listen_subscriptions, timeout: 0.1) }
+
+            refute_nil teardown.join(5), "the teardown did not return while the write mutex stayed held"
+            assert_predicate io, :closed?
+            assert_empty registry
+          ensure
+            entry[:write_mutex].unlock
+          end
+
+          # Released, the helper finds the stream closed and ends without a result written or a second close.
+          wait_until { (Thread.list - before).empty? }
+          assert_nil sse_events(io).find { |event| event.dig("result", "resultType") == "complete" }
+          assert_equal 1, closes
+        end
+
+        test "listen teardown ends a stalled closing result write by closing its stream" do
+          gate = Queue.new
+          reached = Queue.new
+          stalled = Class.new(StringIO) do
+            attr_accessor :stall
+            attr_reader :closes
+
+            # Blocks like a write to a socket whose peer stopped reading, until the stream is closed from another thread.
+            define_method(:write) do |data|
+              return super(data) unless stall
+
+              reached.push(true)
+              gate.pop
+              raise IOError, "closed stream"
+            end
+
+            define_method(:close) do
+              @closes = (@closes || 0) + 1
+              gate.close
+              super()
+            end
+          end.new
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+          response[2].call(stalled)
+          stalled.stall = true
+          before = Thread.list
+
+          begin
+            teardown = Thread.new { @transport.send(:teardown_listen_subscriptions, timeout: 0.5) }
+
+            # The helper is parked in the stalled write, with the stream still open, before the timeout runs out.
+            wait_until { !reached.empty? }
+            refute_predicate stalled, :closed?
+
+            refute_nil teardown.join(5), "the teardown did not return while the result write stalled"
+            assert_predicate stalled, :closed?
+          ensure
+            # A failed step must not leave the helper parked in the stalled write for the rest of the suite.
+            gate.close
+          end
+
+          # The close ended the write, so the helper finished on its own, without closing the stream again.
+          wait_until { (Thread.list - before).empty? }
+          assert_nil sse_events(stalled).find { |event| event.dig("result", "resultType") == "complete" }
+          assert_equal 1, stalled.closes
+        end
+
+        test "transport close reports a closing result write failing unexpectedly and still closes the other streams" do
+          failing = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          healthy = open_listen_stream(id: "listen-2", notifications: { toolsListChanged: true })
+          failing.define_singleton_method(:write) { |_data| raise "boom" }
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, context) { reported << [error, context] }
+
+          begin
+            @transport.close
+          ensure
+            MCP.configuration.exception_reporter = original_reporter
+          end
+
+          assert_predicate failing, :closed?
+          assert_predicate healthy, :closed?
+          assert_equal "complete", sse_events(healthy).last.dig("result", "resultType")
+          assert_equal 1, reported.size
+          assert_equal "boom", reported.first[0].message
+          assert_equal({ subscription_id: "listen-1", error: "Failed to close listen stream" }, reported.first[1])
+        end
+
+        test "transport close tears down even when the exception reporter raises on a failed closing result write" do
+          failing = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          healthy = open_listen_stream(id: "listen-2", notifications: { toolsListChanged: true })
+          failing.define_singleton_method(:write) { |_data| raise "boom" }
+          session_stream = StringIO.new
+          open_sse_session(@transport, io: session_stream)
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(_error, _context) { raise "reporter failed" }
+
+          begin
+            @transport.close
+          ensure
+            MCP.configuration.exception_reporter = original_reporter
+          end
+
+          assert_predicate failing, :closed?
+          assert_predicate healthy, :closed?
+          assert_equal "complete", sse_events(healthy).last.dig("result", "resultType")
+          assert_predicate session_stream, :closed?
+          assert_empty @transport.instance_variable_get(:@sessions)
+        end
+
         test "subscriptions/listen honoring reads the capability flags, not capability presence" do
           # A server declaring `tools` without `listChanged: true` promises no
           # list-changed delivery, so the acknowledgement omits the type.

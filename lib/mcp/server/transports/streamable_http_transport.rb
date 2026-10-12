@@ -361,6 +361,9 @@ module MCP
         SESSION_REAP_INTERVAL = 60
         # Seconds `close` waits for a reap in progress to finish closing its streams before it kills the reaper.
         REAPER_JOIN_TIMEOUT = 5
+        # How long `close` waits in all for the closing results of the open `subscriptions/listen` streams
+        # before closing the streams still open without one.
+        LISTEN_TEARDOWN_TIMEOUT = 5
 
         # Loopback hosts always accepted by DNS rebinding protection. A locally bound MCP server (the canonical pattern) is
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
@@ -1453,8 +1456,14 @@ module MCP
         end
 
         # Graceful teardown (SEP-2575): each open listen stream receives its `SubscriptionsListenResult` response
-        # before the stream closes.
-        def teardown_listen_subscriptions
+        # before the stream closes. The results are written on a helper thread that is waited for at most `timeout`
+        # seconds in all, because a peer that stopped reading stalls the write of its result, or a delivery already
+        # holding the stream's write mutex, for as long as its socket buffers stay full. Once the time is up, every stream
+        # still open is closed from here: closing a Ruby IO ends a write stalled on it with an `IOError` the helper rescues,
+        # while a stream object of another kind may keep the helper blocked, which no longer holds `close`. Either way
+        # the stream goes without its result, like one whose acknowledgement was never written. The helper is left
+        # to finish on its own rather than killed, so a write mutex is never dropped in the middle of a write.
+        def teardown_listen_subscriptions(timeout: LISTEN_TEARDOWN_TIMEOUT)
           removed = @mutex.synchronize do
             subscriptions = @listen_subscriptions.dup
             @listen_subscriptions.clear
@@ -1465,35 +1474,72 @@ module MCP
 
             subscriptions
           end
+          return if removed.empty?
 
-          removed.each_value do |subscription|
-            # Marking the entry closed and writing the result under the stream's write mutex orders
-            # this against in-flight deliveries and against the acknowledgement write: each one either lands
-            # before the result or observes `closed` and skips, keeping the graceful result the stream's final message.
-            subscription[:write_mutex].synchronize do
-              subscription[:closed] = true
-
-              # A stream whose acknowledgement was never written gets no result either: SEP-2575 makes
-              # the acknowledgement the first message, so the stream closes abruptly and the client re-sends.
-              next unless subscription[:active]
-
-              begin
-                send_to_stream(subscription[:stream], {
-                  jsonrpc: "2.0",
-                  id: subscription[:request_id],
-                  result: {
-                    # `SubscriptionsListenResult` is served at the transport layer and never
-                    # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
-                    # stamped at its construction site.
-                    resultType: ResultType::COMPLETE,
-                    _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => subscription[:request_id] },
-                  },
-                })
-              rescue *STREAM_WRITE_ERRORS
-                nil
-              end
+          # Whichever side takes an entry out of `pending` closes its stream: the helper after the write, or `close` once
+          # the time is up. Claiming before closing keeps a stream from being closed by both in either order.
+          pending = removed.dup
+          pending_mutex = Mutex.new
+          writer = Thread.new do
+            removed.each do |subscription_key, subscription|
+              write_listen_closing_result(subscription)
+              close_stream_safely(subscription[:stream]) if pending_mutex.synchronize { pending.delete(subscription_key) }
             end
-            close_stream_safely(subscription[:stream])
+          end
+
+          begin
+            writer.join(timeout)
+          rescue StandardError
+            # A helper that died with an exception has stopped writing; the streams it did not finish are closed below.
+          end
+
+          left = pending_mutex.synchronize do
+            subscriptions = pending.values
+            pending.clear
+            subscriptions
+          end
+          left.each { |subscription| close_stream_safely(subscription[:stream]) }
+        end
+
+        # Marking the entry closed and writing the result under the stream's write mutex orders
+        # this against in-flight deliveries and against the acknowledgement write: each one either lands
+        # before the result or observes `closed` and skips, keeping the graceful result the stream's final message.
+        # The stream is left open for the caller to close.
+        def write_listen_closing_result(subscription)
+          subscription[:write_mutex].synchronize do
+            subscription[:closed] = true
+
+            # A stream whose acknowledgement was never written gets no result either: SEP-2575 makes
+            # the acknowledgement the first message, so the stream closes abruptly and the client re-sends.
+            next unless subscription[:active]
+
+            begin
+              send_to_stream(subscription[:stream], {
+                jsonrpc: "2.0",
+                id: subscription[:request_id],
+                result: {
+                  # `SubscriptionsListenResult` is served at the transport layer and never
+                  # passes through the dispatch path, so the REQUIRED 2026-07-28 `resultType` is
+                  # stamped at its construction site.
+                  resultType: ResultType::COMPLETE,
+                  _meta: { RequestEnvelope::SUBSCRIPTION_ID_META_KEY.to_sym => subscription[:request_id] },
+                },
+              })
+            rescue *STREAM_WRITE_ERRORS
+              nil
+            end
+          end
+        rescue StandardError => e
+          # Reported rather than raised: on the helper thread an error would end the teardown of every stream after this one,
+          # and `close` is past waiting for it by the time a stalled write fails. A reporter that raises is dropped for
+          # the same reason.
+          begin
+            MCP.configuration.exception_reporter.call(
+              e,
+              { subscription_id: subscription[:request_id], error: "Failed to close listen stream" },
+            )
+          rescue StandardError
+            nil
           end
         end
 
