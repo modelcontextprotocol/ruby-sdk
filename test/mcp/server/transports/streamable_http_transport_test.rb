@@ -6887,6 +6887,56 @@ module MCP
           assert_predicate io, :closed?
         end
 
+        test "transport close that marks an entry closed before its acknowledgement closes the stream once" do
+          # The acknowledgement waits on the stream's write mutex while the teardown marks the entry closed and closes the stream;
+          # the skipped acknowledgement then leaves the close to the teardown. The write mutex the body creates is swapped at
+          # registration for one the test can hold the acknowledgement on while letting the teardown through.
+          reached = Queue.new
+          release = Queue.new
+          first_call = true
+          write_mutex = Object.new
+          write_mutex.define_singleton_method(:synchronize) do |&block|
+            if first_call
+              first_call = false
+              reached.push(true)
+              release.pop
+            end
+            block.call
+          end
+
+          registry = Class.new(Hash) do
+            define_method(:[]=) do |key, subscription|
+              subscription[:write_mutex] = write_mutex
+              super(key, subscription)
+            end
+          end.new
+          @transport.instance_variable_set(:@listen_subscriptions, registry)
+
+          io = StringIO.new
+          closes = 0
+          io.define_singleton_method(:close) do
+            closes += 1
+            super()
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "listen-1", params: { notifications: { toolsListChanged: true } }),
+          ))
+          body_thread = Thread.new { response[2].call(io) }
+
+          begin
+            wait_until { !reached.empty? }
+            @transport.close
+          ensure
+            release.push(true)
+          end
+
+          assert(body_thread.join(5), "the listen body did not finish")
+          assert_empty sse_events(io)
+          assert_predicate io, :closed?
+          assert_equal 1, closes
+        end
+
         # Waits until `thread` is either blocked (asleep on a lock or queue) or finished, so the step after it
         # runs against a thread that has made its move.
         def wait_until_blocked_or_done(thread)
@@ -7059,6 +7109,36 @@ module MCP
           @server.notify_tools_list_changed
 
           assert_equal 2, sse_events(second).count { |event| event["method"] == "notifications/tools/list_changed" }
+        end
+
+        test "a delivery whose write fails leaves closing the stream to the path that removed its entry" do
+          io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true })
+          registry = @transport.instance_variable_get(:@listen_subscriptions)
+          subscription_key, entry = registry.first
+          transport = @transport
+          closes = 0
+
+          io.define_singleton_method(:close) do
+            closes += 1
+            super()
+          end
+
+          # The peer went away: the keepalive loop removed the entry a moment before this write failed on the same stream.
+          io.define_singleton_method(:write) do |_data|
+            transport.send(:remove_listen_subscription, subscription_key)
+            raise Errno::EPIPE
+          end
+
+          @server.notify_tools_list_changed
+
+          assert_equal 0, closes, "the delivery closed a stream whose removal belonged to another path"
+          assert_empty registry
+
+          # The path that removed the entry closes the stream, once.
+          @transport.send(:close_removed_listen_stream, entry)
+
+          assert_equal 1, closes
+          assert_predicate io, :closed?
         end
 
         test "a delivery that took an entry before its removal does not write to the removed stream" do

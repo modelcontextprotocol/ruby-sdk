@@ -1204,14 +1204,11 @@ module MCP
                   true
                 end
 
-                if acknowledged
-                  start_listen_keepalive_thread(subscription_key, request_id)
-                else
-                  close_removed_listen_stream(subscription)
-                end
+                # An acknowledgement skipped because the entry was marked closed leaves the stream to the path that marked
+                # it, the teardown, which closes the stream itself once it holds the write mutex.
+                start_listen_keepalive_thread(subscription_key, request_id) if acknowledged
               rescue *STREAM_WRITE_ERRORS
-                remove_listen_subscription(subscription_key)
-                close_removed_listen_stream(subscription)
+                close_removed_listen_stream(subscription) if remove_listen_subscription(subscription_key)
               end
             end
           end
@@ -1422,8 +1419,9 @@ module MCP
                 e,
                 { subscription_id: subscription[:request_id], error: "Failed to send notification" },
               )
-              remove_listen_subscription(subscription_key)
-              close_removed_listen_stream(subscription)
+              # Closed only when the removal is this path's own, as every other removal path does: the keepalive loop,
+              # a token expiry, or the teardown that removed the entry first closes the stream itself.
+              close_removed_listen_stream(subscription) if remove_listen_subscription(subscription_key)
             end
           end
         end
