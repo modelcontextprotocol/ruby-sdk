@@ -282,8 +282,10 @@ and never cached on the MCP session, so token expiry takes effect mid-session; r
 which `IntrospectionVerifier` does on every request, while a locally validated JWT stays accepted until it expires.
 
 `require_scopes!` raises `MCP::Server::OAuth::InsufficientScopeError`, which the server turns into a JSON-RPC invalid-request error (`-32600`)
-whose `data` names the missing scopes; the HTTP status stays 200 and no `WWW-Authenticate` challenge is sent,
+whose `data` names the missing scopes, and no `WWW-Authenticate` challenge is sent,
 because step-up challenges (403 `insufficient_scope`) are the job of the transport-level `required_scopes:` gate.
+The HTTP status is the one the transport gives every `-32600`: 200 on the legacy path and on a modern response streamed as SSE,
+400 on a modern response returned as JSON.
 The Python and TypeScript SDKs split endpoint-level challenges from in-handler authorization the same way.
 Without bearer authentication `auth_info` is `nil` and `require_scopes!` fails closed.
 Use it where one operation needs more than the endpoint as a whole:
@@ -324,7 +326,7 @@ and `scope` when `required_scopes:` is set or the metadata document advertises `
 | `Bearer` header not carrying exactly one token                                                                     | 400 `error="invalid_request"`                                                                 |
 | Valid token used against a session initialized by another principal                                                | 404 as for an unknown session                                                                 |
 | Verifier raised anything outside the `OAuth::Error` hierarchy (JWKS or introspection endpoint down)                | 500 without a challenge, reported through the exception reporter                              |
-| `require_scopes!` failure inside a handler                                                                         | JSON-RPC `-32600` in the normal 200 response, no HTTP challenge                               |
+| `require_scopes!` failure inside a handler                                                                         | JSON-RPC `-32600`, no HTTP challenge; 200 on the legacy path, 400 on a modern JSON response   |
 
 ## Client Side
 
