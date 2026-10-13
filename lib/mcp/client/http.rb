@@ -427,7 +427,7 @@ module MCP
             nil
           end
 
-          body = resolve_response_body(stream, response, method, params)
+          body = resolve_response_body(stream, response, method, params, notification: !(request[:id] || request["id"]))
 
           # Every way a response arrives (JSON body, SSE event, resumed stream) ends here. Checked before
           # anything is learned from the body, and only for a request: a notification awaits no response.
@@ -1107,7 +1107,7 @@ module MCP
 
       # Determines the logical JSON-RPC body of the exchange after the POST stream finished
       # (or was aborted because the response already arrived).
-      def resolve_response_body(stream, response, method, params)
+      def resolve_response_body(stream, response, method, params, notification: false)
         return stream.response if stream.response
 
         # 202 Accepted is the server's ACK for a JSON-RPC notification or response; no body is expected.
@@ -1141,6 +1141,10 @@ module MCP
           # added by the Faraday customizer may have parsed it already.
           response.body.is_a?(String) ? parse_json_buffer(response.body, method, params) : response.body
         else
+          # A notification awaits no response, so a server that acknowledges it with 200 and no body
+          # instead of 202 has still accepted it. The TypeScript and Python SDKs also accept this.
+          return if notification && response.success?
+
           raise RequestHandlerError.new(
             "Unsupported Content-Type: #{content_type.inspect}. Expected application/json or text/event-stream.",
             { method: method, params: params },

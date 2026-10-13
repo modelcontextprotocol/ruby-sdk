@@ -831,6 +831,58 @@ module MCP
         assert_nil(response)
       end
 
+      def test_send_request_returns_nil_for_notification_acknowledged_with_empty_200
+        request = {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(status: 200, body: "")
+
+        response = client.send_request(request: request)
+
+        assert_nil(response)
+      end
+
+      def test_send_request_raises_error_for_notification_answered_with_empty_4xx_or_5xx
+        request = {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }
+
+        [400, 500].each do |status|
+          stub_request(:post, url)
+            .with(body: request.to_json)
+            .to_return(status: status, body: "")
+
+          error = assert_raises(RequestHandlerError) do
+            client.send_request(request: request)
+          end
+
+          assert_equal(status, error.original_error.response[:status])
+        end
+      end
+
+      def test_send_request_raises_error_for_request_answered_with_empty_200
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+
+        stub_request(:post, url)
+          .with(body: request.to_json)
+          .to_return(status: 200, body: "")
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_equal(:unsupported_media_type, error.error_type)
+      end
+
       def test_send_request_raises_error_for_sse_without_response
         request = {
           jsonrpc: "2.0",
@@ -2247,6 +2299,31 @@ module MCP
         assert_equal("2025-11-25", result["protocolVersion"])
         assert_equal({ "tools" => {} }, result["capabilities"])
         assert_equal({ "name" => "test-server", "version" => "1.0" }, result["serverInfo"])
+      end
+
+      def test_connect_accepts_initialized_notification_acknowledged_with_empty_200
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "initialize" }
+          .to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: {
+              jsonrpc: "2.0",
+              result: {
+                protocolVersion: "2025-11-25",
+                capabilities: {},
+                serverInfo: { name: "test-server", version: "1.0" },
+              },
+            }.to_json,
+          )
+        stub_request(:post, url)
+          .with { |req| JSON.parse(req.body)["method"] == "notifications/initialized" }
+          .to_return(status: 200, body: "")
+
+        result = client.connect
+
+        assert_predicate(client, :connected?)
+        assert_equal("2025-11-25", result["protocolVersion"])
       end
 
       def test_connect_caches_server_info
