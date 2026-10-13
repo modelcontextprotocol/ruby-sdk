@@ -2739,6 +2739,82 @@ module MCP
         assert_empty(response)
       end
 
+      def test_connect_succeeds_when_the_initialized_notification_is_acknowledged_with_any_2xx
+        # The spec has the server answer a notification with 202 and no body; the TypeScript and Python
+        # clients accept any 2xx, whatever the body, and some hosted servers answer an empty 200.
+        acknowledgements = [
+          { status: 200, headers: {}, body: "" },
+          { status: 204, headers: {}, body: "" },
+          { status: 200, headers: { "Content-Type" => "text/plain" }, body: "OK" },
+        ]
+        acknowledgements.each do |acknowledgement|
+          WebMock.reset!
+
+          stub_request(:post, url).with { |req| JSON.parse(req.body)["method"] == "initialize" }.to_return do |req|
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json", "Mcp-Session-Id" => "session-abc" },
+              body: { jsonrpc: "2.0", id: JSON.parse(req.body)["id"], result: { protocolVersion: "2025-11-25" } }.to_json,
+            }
+          end
+
+          stub_request(:post, url).with { |req|
+            JSON.parse(req.body)["method"] == "notifications/initialized"
+          }.to_return(**acknowledgement)
+
+          client = HTTP.new(url: url)
+          client.connect(mode: :legacy)
+
+          assert_predicate(client, :connected?, acknowledgement.inspect)
+          assert_equal("session-abc", client.session_id)
+        end
+      end
+
+      def test_send_request_returns_nil_for_a_notification_answered_with_an_sse_stream_carrying_no_response
+        # A primed stream that closes without a response would make a request reconnect; a notification has
+        # no response to resume for, so the stream is its acknowledgement.
+        stub_request(:post, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "id: event-1\nretry: 100\ndata:\n\n",
+        )
+
+        response = client.send_request(request: { jsonrpc: "2.0", method: "notifications/initialized" })
+
+        assert_nil(response)
+        assert_not_requested(:get, url)
+      end
+
+      def test_send_request_still_raises_for_a_notification_answered_with_a_3xx
+        # Only a success status acknowledges a notification; a redirect, which the transport does not follow,
+        # keeps its handling, on both the body-less and the SSE path.
+        answers = [
+          { status: 302, headers: { "Location" => "https://example.com/elsewhere" }, body: "", error_type: :unsupported_media_type },
+          { status: 302, headers: { "Content-Type" => "text/event-stream" }, body: "data:\n\n", error_type: :parse_error },
+        ]
+        answers.each do |answer|
+          stub_request(:post, url).to_return(status: answer[:status], headers: answer[:headers], body: answer[:body])
+
+          error = assert_raises(RequestHandlerError, answer.inspect) do
+            client.send_request(request: { jsonrpc: "2.0", method: "notifications/initialized" })
+          end
+
+          assert_equal(answer[:error_type], error.error_type)
+        end
+      end
+
+      def test_send_request_raises_error_for_a_request_answered_without_a_json_or_sse_body
+        [{ status: 200, headers: {}, body: "" }, { status: 204, headers: {}, body: "" }].each do |answer|
+          stub_request(:post, url).to_return(**answer)
+
+          error = assert_raises(RequestHandlerError, answer.inspect) do
+            client.send_request(request: { jsonrpc: "2.0", id: "test_id", method: "tools/list" })
+          end
+
+          assert_equal(:unsupported_media_type, error.error_type)
+        end
+      end
+
       def test_send_request_raises_error_for_an_sse_response_that_is_not_json_rpc_2_0
         # The first response-shaped event settles the exchange, so the valid one after it changes nothing.
         sse_body = <<~SSE
