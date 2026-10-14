@@ -288,7 +288,7 @@ module MCP
     #   handlers as `server_context.auth_info`.
     # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
     def handle(request, session: nil, auth_info: nil)
-      JsonRpcHandler.handle(request) do |method, request_id|
+      JsonRpcHandler.handle(request, id_validation_pattern: nil) do |method, request_id|
         handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
       end
     end
@@ -303,7 +303,7 @@ module MCP
     #   for the current request, as in `handle`.
     # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
     def handle_json(request, session: nil, auth_info: nil)
-      JsonRpcHandler.handle_json(request) do |method, request_id|
+      JsonRpcHandler.handle_json(request, id_validation_pattern: nil) do |method, request_id|
         handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
       end
     end

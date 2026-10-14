@@ -1960,6 +1960,58 @@ module MCP
       assert_equal ["custom"], seen
     end
 
+    test "#handle accepts any string as the request id and echoes it" do
+      # MCP, like JSON-RPC 2.0, allows any string or integer id; the TypeScript and Python servers accept these.
+      ["req.1", "call:42", "urn:uuid:6f1c4e0a-2b7d-4c1e-9a3f-0d2c8b1e5f77", "request 123", "<script>alert('x')</script>", ""].each do |id|
+        response = @server.handle({ jsonrpc: "2.0", id: id, method: "ping" })
+
+        assert_equal({ jsonrpc: "2.0", id: id, result: {} }, response, id.inspect)
+      end
+    end
+
+    test "#handle_json keeps a request id with a newline on one line of the response" do
+      json = @server.handle_json({ jsonrpc: "2.0", id: "line1\nline2", method: "ping" }.to_json)
+
+      refute_includes json, "\n"
+      assert_equal "line1\nline2", JSON.parse(json)["id"]
+    end
+
+    test "#handle echoes a string request id on an error response" do
+      response = @server.handle({ jsonrpc: "2.0", id: "req.1", method: "unsupported_method" })
+
+      assert_equal "req.1", response[:id]
+      assert_equal(-32601, response[:error][:code])
+    end
+
+    test "#handle still refuses a request id that is neither a string nor an integer" do
+      [3.14, true, false, { a: 1 }, [1]].each do |id|
+        response = @server.handle({ jsonrpc: "2.0", id: id, method: "ping" })
+
+        assert_nil response[:id], id.inspect
+        assert_equal(-32600, response[:error][:code], id.inspect)
+      end
+    end
+
+    test "#handle refuses a request id that is not valid UTF-8 without running the method" do
+      # Such an id cannot be written into the response; refused up front, the write it asks for does not run.
+      calls = 0
+      @server.define_tool(name: "count") do
+        calls += 1
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      response = @server.handle({
+        jsonrpc: "2.0",
+        id: [0xFF].pack("C").force_encoding(Encoding::UTF_8),
+        method: "tools/call",
+        params: { name: "count", arguments: {} },
+      })
+
+      assert_nil response[:id]
+      assert_equal(-32600, response[:error][:code])
+      assert_equal 0, calls
+    end
+
     test "#handle handles custom methods" do
       @server.define_custom_method(method_name: "add") do |params|
         params[:a] + params[:b]
