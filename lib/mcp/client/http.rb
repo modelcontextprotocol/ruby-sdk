@@ -400,6 +400,7 @@ module MCP
           )
         end
 
+        request_id = request[:id] || request["id"]
         method = request[:method] || request["method"]
         params = request[:params] || request["params"]
         oauth_retried = false
@@ -427,11 +428,11 @@ module MCP
             nil
           end
 
-          body = resolve_response_body(stream, response, method, params)
+          body = resolve_response_body(stream, response, request_id, method, params)
 
           # Every way a response arrives (JSON body, SSE event, resumed stream) ends here. Checked before
           # anything is learned from the body, and only for a request: a notification awaits no response.
-          reject_invalid_response!(body, method, params) if request[:id] || request["id"]
+          reject_invalid_response!(body, method, params) if request_id
 
           capture_session_info(method, response, body) if response
           capture_mcp_param_declarations(method, params, body)
@@ -1106,8 +1107,11 @@ module MCP
       end
 
       # Determines the logical JSON-RPC body of the exchange after the POST stream finished
-      # (or was aborted because the response already arrived).
-      def resolve_response_body(stream, response, method, params)
+      # (or was aborted because the response already arrived). A notification (no `request_id`) awaits
+      # no response, so any success status acknowledges it, as it does for the TypeScript and Python clients,
+      # which check the content type of a response only for a request; the spec has the server answer
+      # a notification with 202, but a server answering with another 2xx is accepted as well.
+      def resolve_response_body(stream, response, request_id, method, params)
         return stream.response if stream.response
 
         # 202 Accepted is the server's ACK for a JSON-RPC notification or response; no body is expected.
@@ -1125,6 +1129,9 @@ module MCP
             return stream.response if stream.response
           end
 
+          # A stream that ends without a response has acknowledged a notification; there is nothing to resume for.
+          return if request_id.nil? && response.success?
+
           # SEP-1699: a graceful close after a priming event (an event with an id) but before
           # the response means "reconnect via GET to resume".
           return await_response_after_disconnect(stream, method, params) if stream.primed?
@@ -1141,6 +1148,8 @@ module MCP
           # added by the Faraday customizer may have parsed it already.
           response.body.is_a?(String) ? parse_json_buffer(response.body, method, params) : response.body
         else
+          return if request_id.nil? && response.success?
+
           raise RequestHandlerError.new(
             "Unsupported Content-Type: #{content_type.inspect}. Expected application/json or text/event-stream.",
             { method: method, params: params },
