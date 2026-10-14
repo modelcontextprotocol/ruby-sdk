@@ -125,6 +125,21 @@ module MCP
       assert_instrumentation_data({ method: "ping" })
     end
 
+    # https://modelcontextprotocol.io/specification/latest/basic#requests
+    test "#handle accepts any string as request id" do
+      ["req.1", "call:42", "urn:uuid:5e7f1b2c-0c1a-4d6e-9f3b-2a8c7d6e5f4a"].each do |id|
+        response = @server.handle({ jsonrpc: "2.0", method: "ping", id: id })
+
+        assert_equal({ jsonrpc: "2.0", id: id, result: {} }, response)
+      end
+    end
+
+    test "#handle_json accepts any string as request id" do
+      response = JSON.parse(@server.handle_json(JSON.generate({ jsonrpc: "2.0", method: "ping", id: "req.1" })), symbolize_names: true)
+
+      assert_equal({ jsonrpc: "2.0", id: "req.1", result: {} }, response)
+    end
+
     test "#handle server/discover returns supported versions, capabilities, server info, and instructions" do
       response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
       result = response[:result]
