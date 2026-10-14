@@ -2037,8 +2037,9 @@ module MCP
           [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 
+        # A null id makes the message a request, not a notification, so its Invalid Request error reaches the client.
         def notification?(body)
-          !body[:id] && !!body[:method]
+          !body.key?(:id) && !!body[:method]
         end
 
         # Dispatches a client-originated notification (e.g. `notifications/cancelled`,

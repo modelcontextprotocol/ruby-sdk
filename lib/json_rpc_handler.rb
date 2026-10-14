@@ -88,10 +88,12 @@ module JsonRpcHandler
 
     id = request[:id]
 
+    # Unlike base JSON-RPC, MCP does not allow a null request id,
+    # so only a message without an `id` member is a notification.
     error = if !valid_version?(request[:jsonrpc])
       "JSON-RPC version must be 2.0"
-    elsif !valid_id?(id, id_validation_pattern)
-      "Request ID must match validation pattern, or be an integer or null"
+    elsif request.key?(:id) && !valid_id?(id, id_validation_pattern)
+      "Request ID must match validation pattern, or be an integer"
     elsif !valid_method_name?(request[:method])
       'Method name must be a string and not start with "rpc."'
     end
@@ -175,7 +177,7 @@ module JsonRpcHandler
   end
 
   def valid_id?(id, pattern = nil)
-    return true if id.nil? || id.is_a?(Integer)
+    return true if id.is_a?(Integer)
     return false unless id.is_a?(String)
 
     pattern ? id.match?(pattern) : true

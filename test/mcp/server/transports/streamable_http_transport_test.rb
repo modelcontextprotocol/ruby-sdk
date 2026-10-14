@@ -2521,6 +2521,30 @@ module MCP
           assert_nil(body)
         end
 
+        test "stateless mode answers a request with a null id with -32600 without running it" do
+          calls = 0
+          @server.define_tool(name: "counting_tool") do
+            calls += 1
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "tools/call", id: nil, params: { name: "counting_tool", arguments: {} } }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+          assert_equal 200, response[0]
+
+          body = JSON.parse(response[2][0])
+          assert_equal(-32600, body.dig("error", "code"))
+          assert_nil(body["id"])
+          assert_equal 0, calls
+        end
+
         test "POST request returns SSE response even with GET SSE connected" do
           init_request = create_rack_request(
             "POST",
@@ -6045,6 +6069,23 @@ module MCP
 
           assert_equal 404, response[0]
           assert_equal(-32601, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST answers a request with a null id with 400 and -32600 without running it" do
+          calls = 0
+          @server.define_tool(name: "counting_tool") do
+            calls += 1
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          body = JSON.parse(modern_body("tools/call", { name: "counting_tool", arguments: {} })).merge("id" => nil)
+
+          response = @transport.handle_request(modern_rack_request(body.to_json))
+
+          assert_equal 400, response[0]
+          parsed = JSON.parse(response[2][0])
+          assert_equal(-32600, parsed.dig("error", "code"))
+          assert_nil(parsed["id"])
+          assert_equal 0, calls
         end
 
         test "modern POST requires the _meta envelope" do
