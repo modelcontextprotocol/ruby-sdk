@@ -202,6 +202,6 @@ module JsonRpcHandler
       jsonrpc: Version::V2_0,
       id: valid_id?(id, id_validation_pattern) ? id : nil,
       error: error.compact,
-    } unless id.nil?
+    }.compact unless id.nil?
   end
 end

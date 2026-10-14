@@ -2033,7 +2033,7 @@ module MCP
         def json_rpc_error_response(status:, code:, message:, data: nil, id: nil)
           error = { code: code, message: message }
           error[:data] = data if data
-          body = { jsonrpc: "2.0", id: id, error: error }
+          body = { jsonrpc: "2.0", id: id, error: error }.compact
           [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 
@@ -2486,7 +2486,7 @@ module MCP
               code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
               message: message,
             },
-          }
+          }.compact
           [400, { "content-type" => "application/json" }, [body.to_json]]
         end
 
