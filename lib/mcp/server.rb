@@ -648,7 +648,14 @@ module MCP
         # Re-raise through RequestHandlerError, the one channel whose message is
         # deliberately surfaced to clients: `JsonRpcHandler`'s blind `rescue StandardError`
         # no longer echoes exception messages into the error `data` member (CWE-209).
-        raise RequestHandlerError.new(e.message, request, error_type: :internal_error, original_error: e)
+        # A server that does not declare a capability does not implement its methods, hence Method not found.
+        raise RequestHandlerError.new(
+          e.message,
+          request,
+          error_type: :method_not_found,
+          error_code: JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND,
+          original_error: e,
+        )
       end
 
       # `initialize` MUST NOT be cancelled (MCP spec 2025-11-25, cancellation item 2),

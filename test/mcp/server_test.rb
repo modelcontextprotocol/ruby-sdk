@@ -1880,7 +1880,7 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_equal(-32603, response[:error][:code])
+      assert_equal(-32601, response[:error][:code])
       assert_includes response[:error][:data], "Server does not support logging"
     end
 
@@ -1888,15 +1888,18 @@ module MCP
       @server.capabilities = {}
 
       response = @server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 1 })
+      assert_equal(-32601, response[:error][:code])
       assert_equal "Server does not support prompts (required for prompts/list)", response[:error][:data]
 
       response = @server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      assert_equal(-32601, response[:error][:code])
       assert_equal "Server does not support resources (required for resources/list)", response[:error][:data]
     end
 
     test "#handle method with missing required nested capability returns an error" do
       @server.capabilities = { resources: {} }
       response = @server.handle({ jsonrpc: "2.0", method: "resources/subscribe", id: 1 })
+      assert_equal(-32601, response[:error][:code])
       assert_equal "Server does not support resources.subscribe (required for resources/subscribe)",
         response[:error][:data]
     end

@@ -6100,6 +6100,17 @@ module MCP
           end
         end
 
+        test "modern POST answers a method of an undeclared capability with 404 and -32601" do
+          @server.capabilities = { tools: {} }
+
+          response = @transport.handle_request(modern_rack_request(modern_body("prompts/list", {})))
+
+          assert_equal 404, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32601, body.dig("error", "code"))
+          assert_equal "Server does not support prompts (required for prompts/list)", body.dig("error", "message")
+        end
+
         test "modern POST maps a missing client capability to 400 with -32021" do
           @server.define_tool(name: "guarded_tool") do |server_context:|
             server_context.require_client_capability!(:elicitation, :form)
