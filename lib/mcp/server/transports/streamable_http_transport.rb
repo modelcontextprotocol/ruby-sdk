@@ -1020,7 +1020,7 @@ module MCP
 
           # The id is echoed in every message of the stream, so one that cannot be written back as JSON
           # (a String holding bytes that are not valid UTF-8 parses, but does not generate) is refused here,
-          # while the refusal can still answer with a null id, rather than surfacing as a failed write after
+          # while the refusal can still answer without an id, rather than surfacing as a failed write after
           # the stream has been registered.
           unless json_encodable?(request_id)
             return invalid_request_response("Invalid Request: subscriptions/listen id must be valid UTF-8")
@@ -2030,10 +2030,14 @@ module MCP
           )
         end
 
+        # The body leaves the `id` member out when there is no request id to echo, as the MCP schema allows
+        # only a string or an integer there.
         def json_rpc_error_response(status:, code:, message:, data: nil, id: nil)
           error = { code: code, message: message }
           error[:data] = data if data
-          body = { jsonrpc: "2.0", id: id, error: error }
+          body = { jsonrpc: "2.0" }
+          body[:id] = id unless id.nil?
+          body[:error] = error
           [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 
@@ -2479,15 +2483,12 @@ module MCP
         end
 
         def invalid_request_response(message, request_id: nil)
-          body = {
-            jsonrpc: "2.0",
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: message,
             id: request_id,
-            error: {
-              code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
-              message: message,
-            },
-          }
-          [400, { "content-type" => "application/json" }, [body.to_json]]
+          )
         end
 
         def session_already_connected_response

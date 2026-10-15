@@ -125,6 +125,15 @@ module MCP
       assert_instrumentation_data({ method: "ping" })
     end
 
+    test "#handle_json leaves the id out of an error response when the request id cannot be read" do
+      # The MCP schema types the id of an error response as an optional string or integer, where JSON-RPC 2.0
+      # puts a null; the TypeScript client refuses a null there at schema validation.
+      json = @server.handle_json({ jsonrpc: "2.0", id: true, method: "ping" }.to_json)
+
+      refute_includes json, '"id"'
+      assert_equal(-32600, JSON.parse(json).dig("error", "code"))
+    end
+
     test "#handle server/discover returns supported versions, capabilities, server info, and instructions" do
       response = @server.handle({ jsonrpc: "2.0", method: "server/discover", id: 1 })
       result = response[:result]

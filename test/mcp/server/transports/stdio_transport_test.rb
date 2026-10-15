@@ -95,7 +95,7 @@ module MCP
             @transport.send(:handle_request, JSON.generate(request))
             response = JSON.parse(output.string, symbolize_names: true)
             assert_equal("2.0", response[:jsonrpc])
-            assert_nil(response[:id])
+            refute(response.key?(:id))
             assert_nil(response[:result])
           ensure
             $stdout = original_stdout
@@ -147,7 +147,7 @@ module MCP
             @transport.open
 
             response = JSON.parse(output.string, symbolize_names: true)
-            assert_nil(response[:id])
+            refute(response.key?(:id))
             assert_equal(-32600, response[:error][:code])
             assert_equal("Invalid Request", response[:error][:message])
           ensure
@@ -217,7 +217,7 @@ module MCP
             @transport.send(:handle_request, invalid_json)
             response = JSON.parse(output.string, symbolize_names: true)
             assert_equal("2.0", response[:jsonrpc])
-            assert_nil(response[:id])
+            refute(response.key?(:id))
             assert_equal(-32600, response[:error][:code])
             assert_equal("Invalid Request", response[:error][:message])
             assert_equal("Request must be an array or a hash", response[:error][:data])

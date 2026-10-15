@@ -315,7 +315,7 @@ describe JsonRpcHandler do
       assert_nil @response[:result]
     end
 
-    it "returns nil for id when there is an error and and error detecting the id" do
+    it "leaves the id out when there is an error detecting the id" do
       register("ping") { "pong" }
 
       handle jsonrpc: "2.0", id: {}, method: "ping"
@@ -325,7 +325,7 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: "Request ID must match validation pattern, or be an integer or null",
       }
-      assert_nil @response[:id]
+      refute @response.key?(:id)
     end
 
     it "returns the same request id on an Invalid Request error when the id is detectable" do
@@ -339,7 +339,7 @@ describe JsonRpcHandler do
       assert_equal 3, @response[:id]
     end
 
-    it "returns nil for id on an Invalid Request error when the request has no id" do
+    it "leaves the id out of an Invalid Request error when the request has no id" do
       handle jsonrpc: "1.0", method: "ping", params: {}
 
       assert_rpc_error expected_error: {
@@ -347,10 +347,10 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: "JSON-RPC version must be 2.0",
       }
-      assert_nil @response[:id]
+      refute @response.key?(:id)
     end
 
-    it "returns nil for id on an Invalid Request error when the request id is explicitly null" do
+    it "leaves the id out of an Invalid Request error when the request id is explicitly null" do
       handle jsonrpc: "1.0", id: nil, method: "ping", params: {}
 
       assert_rpc_error expected_error: {
@@ -358,10 +358,10 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: "JSON-RPC version must be 2.0",
       }
-      assert_nil @response[:id]
+      refute @response.key?(:id)
     end
 
-    it "returns nil for id on an Invalid Request error when the id fails validation" do
+    it "leaves the id out of an Invalid Request error when the id fails validation" do
       handle jsonrpc: "1.0", id: "<script>alert('xss')</script>", method: "ping", params: {}
 
       assert_rpc_error expected_error: {
@@ -369,7 +369,7 @@ describe JsonRpcHandler do
         message: "Invalid Request",
         data: "JSON-RPC version must be 2.0",
       }
-      assert_nil @response[:id]
+      refute @response.key?(:id)
     end
 
     # 5.1 Error object
@@ -687,7 +687,7 @@ describe JsonRpcHandler do
 
           assert_equal(-32600, @response.dig(:error, :code))
           assert_equal "Invalid Request", @response.dig(:error, :message)
-          assert_nil @response[:id]
+          refute @response.key?(:id)
         end
       end
 
@@ -702,7 +702,7 @@ describe JsonRpcHandler do
         assert @response.is_a?(Array)
         assert_equal 3, @response.first[:result]
         assert_equal(-32600, @response.last.dig(:error, :code))
-        assert_nil @response.last[:id]
+        refute @response.last.key?(:id)
       end
 
       it "does not raise from handle_json when a batch element is not an object" do
