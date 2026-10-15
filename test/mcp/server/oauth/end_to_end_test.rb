@@ -46,7 +46,14 @@ module MCP
           WhoamiTool.observations.clear
 
           @server = MCP::Server.new(name: "e2e_server", tools: [WhoamiTool])
-          @transport = Transports::StreamableHTTPTransport.new(@server, enable_json_response: true)
+          # The transport serves `mcp.example.com`, so the host is allow-listed as a deployment there would:
+          # DNS rebinding protection rejects any other `Host`, and WebMock 3.34 and later hand the Rack app
+          # the host of the request URL.
+          @transport = Transports::StreamableHTTPTransport.new(
+            @server,
+            enable_json_response: true,
+            allowed_hosts: [URI(MCP_URL).host],
+          )
 
           @metadata = ProtectedResourceMetadata.new(
             resource: MCP_URL,
