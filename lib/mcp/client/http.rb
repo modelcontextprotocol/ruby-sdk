@@ -120,7 +120,7 @@ module MCP
       # the incrementally parsed JSON-RPC response, the last received SSE event id (for `Last-Event-ID`),
       # and the server's `retry:` reconnection delay. Non-SSE bodies accumulate in `buffer` for the JSON path.
       class SSEStream
-        attr_reader :buffer, :response, :last_event_id, :retry_ms
+        attr_reader :buffer, :response, :response_headers, :last_event_id, :retry_ms
         attr_accessor :abortable
 
         def initialize(abortable:, max_message_bytes: MAX_MESSAGE_BYTES, on_request: nil)
@@ -132,6 +132,7 @@ module MCP
           @response = nil
           @last_event_id = nil
           @retry_ms = nil
+          @response_headers = nil
         end
 
         # Whether the server sent a SEP-1699 priming event (any event carrying an id),
@@ -146,9 +147,10 @@ module MCP
         # abort the stream so an over-limit tail cannot mask a response that already arrived.
         def on_data
           proc do |chunk, _received_bytes, env|
+            @response_headers ||= env.response_headers if env
             if event_stream?(env)
               feed(chunk)
-              raise StreamAbort if @abortable && @response
+              raise StreamAbort if @abortable && @response && !error_status?(env)
 
               if parser_buffered_bytes > @max_message_bytes
                 raise MessageTooLargeError, "Server SSE event exceeds #{@max_message_bytes} bytes without completing"
@@ -161,6 +163,16 @@ module MCP
               end
             end
           end
+        end
+
+        # An error status must reach Faraday's `raise_error` middleware (which drives the
+        # OAuth and step-up retries in `send_request`), so the stream is read to EOF instead
+        # of aborting when the server answered with one. This is the behavior every
+        # method had before the abort shortcut. It is the only case that still needs
+        # the finished response object.
+        def error_status?(env)
+          status = env.status if env.respond_to?(:status)
+          status.is_a?(Integer) && status >= 400
         end
 
         # A fresh parser for a new HTTP connection (reconnection GET),
@@ -408,10 +420,13 @@ module MCP
 
         begin
           # The response is consumed incrementally so that an SSE stream the server holds open
-          # (or closes early per SEP-1699) can be handled; `initialize` streams are read to EOF
-          # so the response object (and its `Mcp-Session-Id` header) is always available for capture.
+          # (or closes early per SEP-1699) can be handled. Every request, `initialize` included,
+          # aborts once its response event arrives: `SSEStream` has already captured the response
+          # headers from the streaming `env` by then, so `Mcp-Session-Id` survives the abort.
+          # When `env` is unavailable (Faraday < 2.5 or an adapter without `on_data` support)
+          # nothing aborts and the stream is still read to EOF, as before.
           stream = SSEStream.new(
-            abortable: method.to_s != MCP::Methods::INITIALIZE,
+            abortable: true,
             max_message_bytes: @max_message_bytes,
             on_request: ->(message) { dispatch_server_request(message) },
           )
@@ -434,7 +449,7 @@ module MCP
           # anything is learned from the body, and only for a request: a notification awaits no response.
           reject_invalid_response!(body, method, params) if request_id
 
-          capture_session_info(method, response, body) if response
+          capture_session_info(method, response ? response.headers : stream.response_headers, body)
           capture_mcp_param_declarations(method, params, body)
 
           body
@@ -963,11 +978,11 @@ module MCP
         !(tokens["refresh_token"] || tokens[:refresh_token]).to_s.empty?
       end
 
-      def capture_session_info(method, response, body)
+      def capture_session_info(method, headers, body)
         return unless method.to_s == Methods::INITIALIZE
 
         # Faraday normalizes header names to lowercase.
-        session_id = response.headers[SESSION_ID_HEADER.downcase]
+        session_id = headers[SESSION_ID_HEADER.downcase]
         @session_id ||= session_id unless session_id.to_s.empty?
         @protocol_version ||= body.is_a?(Hash) ? body.dig("result", "protocolVersion") : nil
       end
