@@ -1756,6 +1756,21 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "POST request with empty members in the Accept header succeeds" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_ACCEPT" => ", application/json,, text/event-stream",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+        end
+
         test "POST request with Accept: */* succeeds" do
           request = create_rack_request_without_accept(
             "POST",

@@ -1884,8 +1884,9 @@ module MCP
         end
 
         def parse_accept_header(header)
-          header.split(",").map do |part|
-            part.split(";").first.strip.downcase
+          header.split(",").filter_map do |part|
+            media_type = part.split(";").first.to_s.strip.downcase
+            media_type unless media_type.empty?
           end
         end
 
