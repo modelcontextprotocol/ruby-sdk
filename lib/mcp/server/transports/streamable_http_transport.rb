@@ -907,7 +907,7 @@ module MCP
                 supported: MCP::Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
                 requested: header_version,
               },
-              id: body[:id],
+              id: echoable_id(body[:id]),
             )
           end
 
@@ -916,7 +916,7 @@ module MCP
               status: 400,
               code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
               message: "Bad Request: Mcp-Session-Id is not accepted in the modern lifecycle",
-              id: body[:id],
+              id: echoable_id(body[:id]),
             )
           end
 
@@ -1133,6 +1133,14 @@ module MCP
           true
         rescue JSON::GeneratorError
           false
+        end
+
+        # The id a refusal built here can echo: an Integer, or a String that is valid UTF-8. A String holding other
+        # bytes would make the body's `to_json` raise, so the refusal carries no id, as for an id it could not read.
+        def echoable_id(id)
+          return id if id.is_a?(Integer) || (id.is_a?(String) && id.valid_encoding?)
+
+          nil
         end
 
         def listen_subscriptions_full?
@@ -1576,7 +1584,7 @@ module MCP
             status: 400,
             code: ErrorCodes::HEADER_MISMATCH,
             message: "Header mismatch: #{message}",
-            id: id,
+            id: echoable_id(id),
           )
         end
 
@@ -1653,7 +1661,7 @@ module MCP
             if header_version && MCP::Configuration.modern_protocol_version?(header_version)
               return invalid_request_response(
                 "Invalid Request: the session already negotiated the legacy lifecycle via `initialize`",
-                request_id: body[:id],
+                request_id: echoable_id(body[:id]),
               )
             end
 
@@ -1699,7 +1707,7 @@ module MCP
                 session = @mutex.synchronize { @sessions[session_id] }
                 return session_not_found_response unless session && session_principal_matches?(session, request)
 
-                return already_initialized_response(body[:id])
+                return already_initialized_response(echoable_id(body[:id]))
               end
 
               return session_not_found_response
@@ -1966,7 +1974,7 @@ module MCP
             status: 413,
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
             message: "Payload too large: initialize request #{reason}",
-            id: request_id,
+            id: echoable_id(request_id),
           )
         end
 
