@@ -135,6 +135,25 @@ module MCP
           end
         end
 
+        test "open passes a request to the session without a keyword argument warning" do
+          request = { jsonrpc: "2.0", method: "ping", id: "1" }
+          input = StringIO.new(JSON.generate(request) + "\n")
+          original_stdin = $stdin
+          original_deprecated = Warning[:deprecated]
+
+          begin
+            $stdin = input
+            Warning[:deprecated] = true
+
+            _out, err = capture_io { @transport.open }
+
+            assert_empty(err)
+          ensure
+            $stdin = original_stdin
+            Warning[:deprecated] = original_deprecated
+          end
+        end
+
         test "open handles a malformed JSON-RPC batch element and emits an error response" do
           input = StringIO.new("[[]]\n")
           output = StringIO.new
