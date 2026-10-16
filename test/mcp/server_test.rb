@@ -164,6 +164,64 @@ module MCP
       assert_equal({ tools: { listChanged: true } }, result[:capabilities])
     end
 
+    test "#handle initialize strips listChanged and subscribe flags on a transport that delivers no notifications" do
+      # A stateless transport drops every notification, so the handshake must not promise them, as `server/discover`
+      # already does not when `subscriptions/listen` is not served.
+      server = Server.new(name: "handshake_test", capabilities: {
+        tools: { listChanged: true },
+        resources: { listChanged: true, subscribe: true },
+        logging: {},
+      })
+      transport = mock
+      transport.stubs(:delivers_notifications?).returns(false)
+      server.transport = transport
+
+      result = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })[:result]
+
+      assert_equal({ tools: {}, resources: {}, logging: {} }, result[:capabilities])
+    end
+
+    test "#handle initialize keeps the flags on a transport that delivers notifications or does not say" do
+      capabilities = { tools: { listChanged: true }, resources: { listChanged: true, subscribe: true } }
+      delivering = mock
+      delivering.stubs(:delivers_notifications?).returns(true)
+
+      [delivering, mock].each do |transport|
+        server = Server.new(name: "handshake_test", capabilities: capabilities)
+        server.transport = transport
+
+        result = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })[:result]
+
+        assert_equal capabilities, result[:capabilities]
+      end
+    end
+
+    test "#handle initialize strips the flags of a Capabilities builder without changing the configured capabilities" do
+      capabilities = Server::Capabilities.new
+      capabilities.support_tools_list_changed
+      capabilities.support_resources_subscribe
+      server = Server.new(name: "handshake_test", capabilities: capabilities)
+      transport = mock
+      transport.stubs(:delivers_notifications?).returns(false)
+      server.transport = transport
+
+      result = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })[:result]
+
+      assert_equal({ tools: {}, resources: {} }, result[:capabilities])
+      assert_equal({ tools: { listChanged: true }, resources: { subscribe: true } }, server.capabilities)
+    end
+
+    test "#handle initialize strips string-keyed flags on a transport that delivers no notifications" do
+      server = Server.new(name: "handshake_test", capabilities: { "tools" => { "listChanged" => true }, "logging" => {} })
+      transport = mock
+      transport.stubs(:delivers_notifications?).returns(false)
+      server.transport = transport
+
+      result = server.handle({ jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params })[:result]
+
+      assert_equal({ "tools" => {}, "logging" => {} }, result[:capabilities])
+    end
+
     test "#handle server/discover responds before initialize and regardless of capabilities" do
       # Per SEP-2575, discovery is sessionless: no prior `initialize`, no capability gate.
       server = Server.new(name: "discover_test", capabilities: {})
