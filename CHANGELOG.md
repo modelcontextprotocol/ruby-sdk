@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-16
+
+This release adds OAuth 2.1 resource server support to `StreamableHTTPTransport`: bearer tokens are verified
+by a JWT or an RFC 7662 introspection verifier (or one of your own), requests without a valid token get RFC 6750
+challenges, and a Rack middleware serves the RFC 9728 Protected Resource Metadata document; token issuance stays
+with an external authorization server.
+The bundled client transports now reject server messages that are not JSON-RPC 2.0, which rejects what earlier
+releases accepted and ships in a minor release under the exceptions described in [VERSIONING.md](VERSIONING.md):
+a server whose responses lack `"jsonrpc": "2.0"` has to send the member, since there is no opt-out.
+
+### Added
+
+- Add OAuth 2.1 resource server support (#545)
+- Add a scope selector for OAuth authorization-code clients (#579)
+
+### Changed
+
+- Reject server messages that are not JSON-RPC 2.0 in the client transports (#590)
+
+### Fixed
+
+- Redact the `Authorization` header from the errors the HTTP transport retains (#591)
+- Close a refused SSE stream outside the registry lock (#592)
+- Let the session reaper finish before the transport closes (#593)
+- Bound the `subscriptions/listen` teardown on transport close (#595)
+- Close a failed `subscriptions/listen` stream only from the path that removed its entry (#596)
+- Accept any 2xx acknowledgement of a notification in the HTTP client (#600)
+
 ## [1.7.0] - 2026-10-05
 
 This release lets a web application finish the OAuth authorization in the request that receives the redirect,
