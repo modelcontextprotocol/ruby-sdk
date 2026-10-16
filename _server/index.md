@@ -25,6 +25,8 @@ It implements the Model Context Protocol specification, handling model context r
 - Supports roots (server-to-client filesystem boundary queries; deprecated as of 2026-07-28)
 - Supports sampling (server-to-client LLM completion requests; deprecated as of 2026-07-28)
 - Supports cursor-based pagination for list operations
+- Supports OAuth 2.1 resource-server protection (bearer verification, RFC 9728 Protected Resource Metadata, RFC 6750 challenges);
+  see [Authorization](/server/authorization/)
 - Supports cancellation of in-flight requests on both server and client (notifications/cancelled)
 
 ## Supported Methods
