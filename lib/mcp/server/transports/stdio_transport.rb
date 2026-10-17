@@ -168,7 +168,9 @@ module MCP
         # (an `initialize` after a modern lock, a modern envelope after a legacy lock, or a missing envelope after a modern lock)
         # are rejected in-band by `Server#lift_request_envelope`.
         def dispatch_with_era(parsed)
-          response = @session.handle(parsed)
+          # Passing `auth_info:` keeps Ruby 2.7 from taking the request Hash as keyword arguments,
+          # which works but warns that the conversion is deprecated.
+          response = @session.handle(parsed, auth_info: nil)
           lock_modern_era_on_success(parsed, response)
           response
         end
