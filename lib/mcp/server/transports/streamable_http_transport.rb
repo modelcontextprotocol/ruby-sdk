@@ -1881,10 +1881,10 @@ module MCP
           nil
         end
 
+        # Empty list members (`application/json,,text/event-stream`), which RFC 9110 section 5.6.1.2 has
+        # a recipient parse and ignore, are skipped.
         def parse_accept_header(header)
-          header.split(",").map do |part|
-            part.split(";").first.strip.downcase
-          end
+          header.split(",").map { |part| part.split(";").first.to_s.strip.downcase }.reject(&:empty?)
         end
 
         def validate_content_type(request)
