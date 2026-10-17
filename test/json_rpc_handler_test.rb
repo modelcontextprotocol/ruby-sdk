@@ -130,7 +130,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
     end
 
@@ -160,7 +160,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
     end
 
@@ -170,7 +170,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
     end
 
@@ -180,7 +180,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
     end
 
@@ -190,7 +190,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
     end
 
@@ -200,7 +200,33 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
+      }
+    end
+
+    # MCP narrows JSON-RPC here: "Requests MUST include a string or integer ID" and "the ID MUST NOT be null".
+    it "returns an error and does not call the method when id is null" do
+      called = false
+      register("add") { called = true }
+
+      handle jsonrpc: "2.0", id: nil, method: "add", params: { a: 1, b: 2 }
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "Request ID must not be null",
+      }
+      assert_nil @response[:id]
+      refute called
+    end
+
+    it "names the accepted id types without the pattern when none is given" do
+      @response = JsonRpcHandler.handle({ jsonrpc: "2.0", id: 3.14, method: "add" }, id_validation_pattern: nil) { |_name, _id| nil }
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "Request ID must be a string or an integer",
       }
     end
 
@@ -323,7 +349,7 @@ describe JsonRpcHandler do
       assert_rpc_error expected_error: {
         code: -32600,
         message: "Invalid Request",
-        data: "Request ID must match validation pattern, or be an integer or null",
+        data: "Request ID must be a string matching the validation pattern, or an integer",
       }
       assert_nil @response[:id]
     end
@@ -735,7 +761,7 @@ describe JsonRpcHandler do
         assert_rpc_error expected_error: {
           code: -32600,
           message: "Invalid Request",
-          data: "Request ID must match validation pattern, or be an integer or null",
+          data: "Request ID must be a string matching the validation pattern, or an integer",
         }
       end
 
@@ -748,7 +774,7 @@ describe JsonRpcHandler do
         assert_rpc_error expected_error: {
           code: -32600,
           message: "Invalid Request",
-          data: "Request ID must match validation pattern, or be an integer or null",
+          data: "Request ID must be a string matching the validation pattern, or an integer",
         }
       end
 
@@ -776,7 +802,7 @@ describe JsonRpcHandler do
         assert_rpc_error expected_error: {
           code: -32600,
           message: "Invalid Request",
-          data: "Request ID must match validation pattern, or be an integer or null",
+          data: "Request ID must be a string matching the validation pattern, or an integer",
         }
       end
 

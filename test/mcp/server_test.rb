@@ -1915,6 +1915,42 @@ module MCP
       assert_instrumentation_data({ method: "unsupported_method" })
     end
 
+    test "#handle refuses a request whose id is null without running it" do
+      calls = 0
+      @server.define_tool(name: "count") do
+        calls += 1
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      response = @server.handle({ jsonrpc: "2.0", id: nil, method: "tools/call", params: { name: "count", arguments: {} } })
+
+      assert_equal({ jsonrpc: "2.0", id: nil, error: { code: -32600, message: "Invalid Request", data: "Request ID must not be null" } }, response)
+      assert_equal 0, calls
+    end
+
+    test "#handle does not run a protocol request method sent without an id" do
+      # Framed as a notification, the message could never be answered; the TypeScript and Python servers drop it too.
+      calls = 0
+      @server.define_tool(name: "count") do
+        calls += 1
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      assert_nil @server.handle({ jsonrpc: "2.0", method: "tools/call", params: { name: "count", arguments: {} } })
+      assert_nil @server.handle({ jsonrpc: "2.0", method: "tools/list" })
+      assert_equal 0, calls
+    end
+
+    test "#handle still runs a custom method sent without an id" do
+      # `define_custom_method` serves notifications as well as requests, so only the protocol's own request methods need an id.
+      seen = []
+      @server.define_custom_method(method_name: "notify") { |params| seen << params[:event] }
+
+      assert_nil @server.handle({ jsonrpc: "2.0", method: "notify", params: { event: "custom" } })
+
+      assert_equal ["custom"], seen
+    end
+
     test "#handle handles custom methods" do
       @server.define_custom_method(method_name: "add") do |params|
         params[:a] + params[:b]

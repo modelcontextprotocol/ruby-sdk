@@ -157,6 +157,82 @@ module MCP
           assert_equal JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND, body["error"]["code"]
         end
 
+        test "a request whose id is null is answered with Invalid Request instead of being run unanswered" do
+          calls = 0
+          @server.define_tool(name: "count") do
+            calls += 1
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          session_id = initialize_test_session
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: nil, method: "tools/call", params: { name: "count", arguments: {} } }.to_json,
+          )
+          response = @transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          io = StringIO.new
+          response[2].call(io)
+          body = JSON.parse(io.string.match(/^data: (.+)$/)[1])
+          assert_nil body["id"]
+          assert_equal(-32600, body["error"]["code"])
+          assert_equal 0, calls
+        end
+
+        test "modern POST answers a request whose id is null with 400 and -32600" do
+          calls = 0
+          @server.define_tool(name: "count") do
+            calls += 1
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          body = JSON.parse(modern_body("tools/call", { name: "count", arguments: {} }))
+          body["id"] = nil
+
+          response = @transport.handle_request(modern_rack_request(body.to_json, headers: { "HTTP_MCP_NAME" => "count" }))
+
+          assert_equal 400, response[0]
+          assert_equal(-32600, JSON.parse(response[2][0]).dig("error", "code"))
+          assert_equal 0, calls
+        end
+
+        test "a ping sent without an id is acknowledged with no response" do
+          session_id = initialize_test_session
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "ping" }.to_json,
+          )
+          response = @transport.handle_request(request)
+
+          assert_equal 202, response[0]
+          assert_equal [], response[2]
+        end
+
+        test "a tools/call sent without an id is acknowledged without being run" do
+          calls = 0
+          @server.define_tool(name: "count") do
+            calls += 1
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          session_id = initialize_test_session
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "tools/call", params: { name: "count", arguments: {} } }.to_json,
+          )
+          response = @transport.handle_request(request)
+
+          assert_equal 202, response[0]
+          assert_equal 0, calls
+        end
+
         test "handles POST request with invalid JSON" do
           request = create_rack_request(
             "POST",

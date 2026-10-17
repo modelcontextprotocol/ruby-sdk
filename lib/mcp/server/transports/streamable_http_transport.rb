@@ -2035,8 +2035,10 @@ module MCP
           [status, { "content-type" => "application/json" }, [body.to_json]]
         end
 
+        # A notification carries no id member at all; a message with `"id": null` is a malformed request,
+        # which the server answers with Invalid Request instead of running it unanswered.
         def notification?(body)
-          !body[:id] && !!body[:method]
+          !body.key?(:id) && !!body[:method]
         end
 
         # Dispatches a client-originated notification (e.g. `notifications/cancelled`,
@@ -2127,10 +2129,10 @@ module MCP
           response = server_session.handle_json(body_string, auth_info: auth_info)
 
           # `initialize_request?` matches on the method alone, so an `initialize` sent without
-          # an id (framed as a notification) reaches here. `Server#init` marks the session initialized,
-          # but JSON-RPC emits no response for an id-less request, so `response` is nil.
-          # Returning `[200, ..., [nil]]` would place nil in the Rack body (which the web server cannot serialize),
-          # and the session would be retained since it is marked initialized. Discard the orphaned session
+          # an id (framed as a notification) reaches here. `Server#init` does not run for it, as for
+          # any request method without an id, so `response` is nil and the session created above
+          # is never initialized. Returning `[200, ..., [nil]]` would place nil in the Rack body (which
+          # the web server cannot serialize), and the session would linger uninitialized. Discard it
           # and ack with 202, mirroring the nil-response handling in a regular request.
           if response.nil?
             cleanup_session(session_id) if session_id
