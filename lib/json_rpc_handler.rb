@@ -97,10 +97,9 @@ module JsonRpcHandler
     end
 
     # Per JSON-RPC 2.0 (Response object, `id`), the error response must carry
-    # the same id as the request when the id could be detected; null is only
-    # for requests whose id could not be determined. `error_response` nils out
-    # ids that fail validation, and the `:unknown_id` sentinel keeps a response
-    # (with a null id) being emitted when the request carried no id at all.
+    # the same id as the request when the id could be detected. `error_response`
+    # leaves the id out for ids that fail validation, and the `:unknown_id` sentinel
+    # keeps a response (without an id) being emitted when the request carried no id at all.
     return error_response(id: id.nil? ? :unknown_id : id, id_validation_pattern: id_validation_pattern, error: {
       code: ErrorCode::INVALID_REQUEST,
       message: "Invalid Request",
@@ -197,11 +196,15 @@ module JsonRpcHandler
     } unless id.nil?
   end
 
+  # An error response for a request whose id could not be read carries no `id` member: JSON-RPC 2.0 puts
+  # a null there, but the MCP schema allows only a string or an integer, and the Streamable HTTP transport
+  # specification describes such a body as an error response that has no id.
   def error_response(id:, id_validation_pattern:, error:)
-    {
-      jsonrpc: Version::V2_0,
-      id: valid_id?(id, id_validation_pattern) ? id : nil,
-      error: error.compact,
-    } unless id.nil?
+    return if id.nil?
+
+    response = { jsonrpc: Version::V2_0 }
+    response[:id] = id if valid_id?(id, id_validation_pattern)
+    response[:error] = error.compact
+    response
   end
 end
