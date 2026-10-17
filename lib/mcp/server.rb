@@ -645,10 +645,18 @@ module MCP
       begin
         Methods.ensure_capability!(method, capabilities)
       rescue Methods::MissingRequiredCapabilityError => e
-        # Re-raise through RequestHandlerError, the one channel whose message is
-        # deliberately surfaced to clients: `JsonRpcHandler`'s blind `rescue StandardError`
-        # no longer echoes exception messages into the error `data` member (CWE-209).
-        raise RequestHandlerError.new(e.message, request, error_type: :internal_error, original_error: e)
+        # A method of a capability the server does not declare is one the server does not implement, so it is answered as Method not found,
+        # which the TypeScript and Python servers return for a handler they never registered, and which the Streamable HTTP transport maps to
+        # 404 on the modern lifecycle. Re-raised through RequestHandlerError, the one channel whose message is deliberately surfaced to clients:
+        # `JsonRpcHandler`'s blind `rescue StandardError` no longer echoes exception messages into the error `data` member (CWE-209).
+        raise RequestHandlerError.new(
+          "Method not found",
+          request,
+          error_type: :method_not_found,
+          error_code: JsonRpcHandler::ErrorCode::METHOD_NOT_FOUND,
+          error_data: e.message,
+          original_error: e,
+        )
       end
 
       # `initialize` MUST NOT be cancelled (MCP spec 2025-11-25, cancellation item 2),

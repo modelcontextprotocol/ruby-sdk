@@ -1880,23 +1880,32 @@ module MCP
 
       assert_equal "2.0", response[:jsonrpc]
       assert_equal 1, response[:id]
-      assert_equal(-32603, response[:error][:code])
+      assert_equal(-32601, response[:error][:code])
+      assert_equal "Method not found", response[:error][:message]
       assert_includes response[:error][:data], "Server does not support logging"
     end
 
-    test "#handle method with missing required top-level capability returns an error" do
+    test "#handle method with missing required top-level capability returns Method not found" do
+      # A method of an undeclared capability is one the server does not implement, as the TypeScript and Python
+      # servers answer for a handler they never registered; -32603 would read as a crash.
       @server.capabilities = {}
 
       response = @server.handle({ jsonrpc: "2.0", method: "prompts/list", id: 1 })
+      assert_equal(-32601, response[:error][:code])
+      assert_equal "Method not found", response[:error][:message]
       assert_equal "Server does not support prompts (required for prompts/list)", response[:error][:data]
 
       response = @server.handle({ jsonrpc: "2.0", method: "resources/list", id: 1 })
+      assert_equal(-32601, response[:error][:code])
+      assert_equal "Method not found", response[:error][:message]
       assert_equal "Server does not support resources (required for resources/list)", response[:error][:data]
     end
 
-    test "#handle method with missing required nested capability returns an error" do
+    test "#handle method with missing required nested capability returns Method not found" do
       @server.capabilities = { resources: {} }
       response = @server.handle({ jsonrpc: "2.0", method: "resources/subscribe", id: 1 })
+      assert_equal(-32601, response[:error][:code])
+      assert_equal "Method not found", response[:error][:message]
       assert_equal "Server does not support resources.subscribe (required for resources/subscribe)",
         response[:error][:data]
     end
