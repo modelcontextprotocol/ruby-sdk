@@ -176,7 +176,9 @@ module JsonRpcHandler
 
   def valid_id?(id, pattern = nil)
     return true if id.nil? || id.is_a?(Integer)
-    return false unless id.is_a?(String)
+    # A string that is not valid in its encoding cannot be written into the response,
+    # and matching a pattern against it raises, so it is refused before the method runs.
+    return false unless id.is_a?(String) && id.valid_encoding?
 
     pattern ? id.match?(pattern) : true
   end

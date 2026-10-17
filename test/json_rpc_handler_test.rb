@@ -134,6 +134,21 @@ describe JsonRpcHandler do
       }
     end
 
+    it "returns an error and does not call the method when the request id is not valid UTF-8" do
+      called = false
+      register("add") { called = true }
+
+      handle jsonrpc: "2.0", id: [0xFF].pack("C").force_encoding(Encoding::UTF_8), method: "add", params: { a: 1, b: 2 }
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "Request ID must match validation pattern, or be an integer or null",
+      }
+      assert_nil @response[:id]
+      refute called
+    end
+
     it "accepts string id with alphanumerics, dashes, and underscores" do
       register("add") { |params| params[:a] + params[:b] }
       id = "request-123_ABC"
