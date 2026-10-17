@@ -1914,6 +1914,133 @@ module MCP
         assert_equal("2025-11-25", client.protocol_version)
       end
 
+      def test_initialize_returns_promptly_and_captures_session_id_when_sse_stream_stays_open
+        require "socket"
+
+        hold_seconds = 5
+        seen_session_ids = []
+        WebMock.disable!
+        server = TCPServer.new("127.0.0.1", 0)
+        connection_threads = []
+        server_thread = Thread.new do
+          2.times do |index|
+            socket = server.accept
+            connection_threads << Thread.new(socket, index) do |conn, conn_index|
+              request_headers = {}
+              conn.gets
+              while (line = conn.gets) && line != "\r\n"
+                name, value = line.split(": ", 2)
+                request_headers[name.downcase] = value&.strip
+              end
+              content_length = request_headers["content-length"].to_i
+              conn.read(content_length) if content_length.positive?
+              seen_session_ids << request_headers["mcp-session-id"]
+              if conn_index.zero?
+                event = 'data: {"jsonrpc":"2.0","id":"1","result":{"protocolVersion":"2025-11-25"}}' + "\n\n"
+                conn.write(
+                  "HTTP/1.1 200 OK\r\n" \
+                    "Content-Type: text/event-stream\r\n" \
+                    "Mcp-Session-Id: session-held-open\r\n" \
+                    "Connection: close\r\n\r\n",
+                )
+                conn.write(event)
+                conn.flush
+                sleep(hold_seconds)
+              else
+                body = { jsonrpc: "2.0", result: { tools: [] } }.to_json
+                conn.write(
+                  "HTTP/1.1 200 OK\r\n" \
+                    "Content-Type: application/json\r\n" \
+                    "Content-Length: #{body.bytesize}\r\n" \
+                    "Connection: close\r\n\r\n#{body}",
+                )
+              end
+              conn.close
+            end
+          end
+        rescue IOError, SystemCallError
+          nil
+        end
+        begin
+          held_client = HTTP.new(url: "http://127.0.0.1:#{server.addr[1]}/")
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          held_client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+          assert_operator(elapsed, :<, hold_seconds / 2.0, "initialize waited for the held-open SSE stream to close")
+          assert_equal("session-held-open", held_client.session_id)
+          assert_equal("2025-11-25", held_client.protocol_version)
+          held_client.send_request(request: { jsonrpc: "2.0", id: "2", method: "tools/list" })
+          server_thread.join(5)
+          assert_equal("session-held-open", seen_session_ids[1])
+        ensure
+          connection_threads.each(&:kill)
+          connection_threads.each { |thread| thread.join(1) }
+          server_thread.kill
+          server.close unless server.closed?
+        end
+      ensure
+        WebMock.enable!
+      end
+
+      def test_initialize_retries_through_oauth_when_sse_answer_is_401
+        require "socket"
+
+        WebMock.disable!
+        server = TCPServer.new("127.0.0.1", 0)
+        connection_threads = []
+        server_thread = Thread.new do
+          2.times do |index|
+            socket = server.accept
+            connection_threads << Thread.new(socket, index) do |conn, conn_index|
+              conn.gets
+              headers = {}
+              while (line = conn.gets) && line != "\r\n"
+                name, value = line.split(": ", 2)
+                headers[name.downcase] = value&.strip
+              end
+              length = headers["content-length"].to_i
+              conn.read(length) if length.positive?
+              if conn_index.zero?
+                event = 'data: {"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"unauthorized"}}' + "\n\n"
+                conn.write(
+                  "HTTP/1.1 401 Unauthorized\r\n" \
+                    "Content-Type: text/event-stream\r\n" \
+                    "Connection: close\r\n\r\n#{event}",
+                )
+              else
+                event = 'data: {"jsonrpc":"2.0","id":"1","result":{"protocolVersion":"2025-11-25"}}' + "\n\n"
+                conn.write(
+                  "HTTP/1.1 200 OK\r\n" \
+                    "Content-Type: text/event-stream\r\n" \
+                    "Mcp-Session-Id: session-after-retry\r\n" \
+                    "Connection: close\r\n\r\n#{event}",
+                )
+              end
+              conn.close
+            end
+          end
+        rescue IOError, SystemCallError
+          nil
+        end
+        begin
+          oauth_client = HTTP.new(url: "http://127.0.0.1:#{server.addr[1]}/", oauth: Struct.new(:access_token).new)
+          oauth_calls = 0
+          oauth_client.define_singleton_method(:run_oauth_flow!) { |unauthorized_error:| oauth_calls += 1 }
+          oauth_client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+          server_thread.join(5)
+          assert_equal(1, oauth_calls, "the 401 must reach the OAuth retry instead of being returned as a response")
+          assert_equal("session-after-retry", oauth_client.session_id)
+          assert_equal("2025-11-25", oauth_client.protocol_version)
+        ensure
+          connection_threads.each(&:kill)
+          connection_threads.each { |thread| thread.join(1) }
+          server_thread.kill
+          server.close unless server.closed?
+        end
+      ensure
+        WebMock.enable!
+      end
+
       def test_includes_session_and_protocol_version_headers_after_initialize
         stub_request(:post, url)
           .to_return(
