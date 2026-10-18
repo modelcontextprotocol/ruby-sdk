@@ -1942,7 +1942,7 @@ module MCP
 
       response = @server.handle({ jsonrpc: "2.0", id: nil, method: "tools/call", params: { name: "count", arguments: {} } })
 
-      assert_equal({ jsonrpc: "2.0", id: nil, error: { code: -32600, message: "Invalid Request", data: "Request ID must not be null" } }, response)
+      assert_equal({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid Request", data: "Request ID must not be null" } }, response)
       assert_equal 0, calls
     end
 
@@ -1996,7 +1996,7 @@ module MCP
       [3.14, true, false, { a: 1 }, [1]].each do |id|
         response = @server.handle({ jsonrpc: "2.0", id: id, method: "ping" })
 
-        assert_nil response[:id], id.inspect
+        refute response.key?(:id), id.inspect
         assert_equal(-32600, response[:error][:code], id.inspect)
       end
     end
