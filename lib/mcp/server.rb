@@ -271,6 +271,9 @@ module MCP
         Methods::COMPLETION_COMPLETE => ->(_) { DEFAULT_COMPLETION_RESULT },
         Methods::LOGGING_SET_LEVEL => method(:configure_logging_level),
       }
+      # The protocol's own request methods, as opposed to the notifications above and to custom methods
+      # registered later: these need a request id to be run.
+      @protocol_request_methods = @handlers.keys.reject { |name| Methods.notification?(name) }.freeze
       @transport = transport
     end
 
@@ -613,6 +616,12 @@ module MCP
       # returning `nil` here makes `JsonRpcHandler` report "Method not found", matching
       # the TypeScript and Python SDKs rather than emitting a spurious `result: null`.
       return if Methods.notification?(method) && !related_request_id.nil?
+
+      # The mirror case: a request method of the protocol sent without an id is framed as a notification,
+      # whose result the sender can never receive, so it is not run either; the TypeScript and Python servers
+      # drop such a message the same way, as a notification they have no handler for. A custom method keeps
+      # running without an id, since `define_custom_method` serves notifications too.
+      return if related_request_id.nil? && @protocol_request_methods.include?(method)
 
       # `notifications/cancelled` is dispatched directly: it is a notification (no JSON-RPC id)
       # and intentionally bypasses the `@handlers` lookup, capability check, in-flight registry,
