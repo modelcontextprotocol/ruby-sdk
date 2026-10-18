@@ -6047,6 +6047,55 @@ module MCP
           assert_equal(-32601, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
+        test "modern POST maps a method of an undeclared capability to 404 with -32601" do
+          server = Server.new(name: "tools_only", capabilities: { tools: {} })
+          transport = StreamableHTTPTransport.new(server)
+
+          response = transport.handle_request(modern_rack_request(modern_body("prompts/list", {})))
+
+          assert_equal 404, response[0]
+
+          body = JSON.parse(response[2][0])
+
+          assert_equal(-32601, body.dig("error", "code"))
+          assert_equal "Server does not support prompts (required for prompts/list)", body.dig("error", "data")
+          assert_equal 1, body["id"]
+        ensure
+          transport.close
+        end
+
+        test "legacy POST answers a method of an undeclared capability with 200 and -32601" do
+          server = Server.new(name: "tools_only", capabilities: { tools: {} })
+          transport = StreamableHTTPTransport.new(server)
+          init_response = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          ))
+          session_id = init_response[1]["mcp-session-id"]
+
+          response = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "prompts/list", id: 1 }.to_json,
+          ))
+
+          assert_equal 200, response[0]
+
+          io = StringIO.new
+          response[2].call(io)
+          body = JSON.parse(io.string.match(/^data: (.+)$/)[1])
+
+          assert_equal(-32601, body.dig("error", "code"))
+          assert_equal "Method not found", body.dig("error", "message")
+          assert_equal "Server does not support prompts (required for prompts/list)", body.dig("error", "data")
+          assert_equal 1, body["id"]
+        ensure
+          transport.close
+        end
+
         test "modern POST requires the _meta envelope" do
           response = @transport.handle_request(modern_rack_request(
             { jsonrpc: "2.0", method: "tools/list", id: 1 }.to_json,
