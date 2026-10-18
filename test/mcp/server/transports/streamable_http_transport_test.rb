@@ -247,7 +247,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::PARSE_ERROR, body["error"]["code"]
           assert_equal "Parse error: Invalid JSON", body["error"]["message"]
         end
@@ -327,6 +327,22 @@ module MCP
           assert_equal Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, body["result"]["protocolVersion"]
         end
 
+        test "a refusal echoes the integer id 0 of the request" do
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "initialize", id: 0, params: initialize_params }.to_json,
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal 0, body["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
+        end
+
         test "rejects duplicate initialize with existing Mcp-Session-Id and preserves session" do
           init_request = create_rack_request(
             "POST",
@@ -376,7 +392,7 @@ module MCP
           assert_equal 404, response[0]
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Session not found", body["error"]["message"]
         end
@@ -464,7 +480,7 @@ module MCP
           assert_equal 400, response[0]
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_match(/single request object/i, body["error"]["message"])
         end
@@ -629,7 +645,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Missing session ID", body["error"]["message"]
         end
@@ -787,7 +803,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Conflict: Only one SSE stream is allowed per session", body["error"]["message"]
         end
@@ -1694,7 +1710,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Method not allowed", body["error"]["message"]
         end
@@ -1712,7 +1728,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Unsupported Media Type: Content-Type must be application/json", body["error"]["message"]
         end
@@ -1907,7 +1923,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, body["error"]["code"]
           assert_equal "Not Acceptable: Accept header must include text/event-stream", body["error"]["message"]
         end
@@ -3072,7 +3088,7 @@ module MCP
 
           body = JSON.parse(response[2][0])
           assert_equal "2.0", body["jsonrpc"]
-          assert_nil body["id"]
+          refute body.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, body["error"]["code"]
           assert_equal "Internal server error", body["error"]["message"]
         end
@@ -6883,9 +6899,9 @@ module MCP
 
           parsed = JSON.parse(response[2][0])
 
-          # The member is present and null, as JSON-RPC 2.0 requires when the id cannot be determined.
-          assert parsed.key?("id")
-          assert_nil parsed["id"]
+          # No id member: the MCP schema allows only a string or an integer there, so an id that cannot be
+          # read is left out, where JSON-RPC 2.0 would put a null.
+          refute parsed.key?("id")
           assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed.dig("error", "code")
           assert_empty @transport.instance_variable_get(:@listen_subscriptions)
         end
