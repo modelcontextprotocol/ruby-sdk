@@ -1848,6 +1848,23 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "POST request with empty members in the Accept header succeeds" do
+          ["application/json,,text/event-stream", ", application/json, text/event-stream"].each do |accept|
+            request = create_rack_request_without_accept(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_ACCEPT" => accept,
+              },
+              { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
+            )
+
+            response = @transport.handle_request(request)
+            assert_equal 200, response[0], accept.inspect
+          end
+        end
+
         test "POST request with Accept: */* succeeds" do
           request = create_rack_request_without_accept(
             "POST",
@@ -1970,6 +1987,30 @@ module MCP
             {
               "HTTP_MCP_SESSION_ID" => session_id,
               "HTTP_ACCEPT" => "text/event-stream",
+            },
+          )
+
+          response = @transport.handle_request(request)
+          assert_equal 200, response[0]
+          assert_equal "text/event-stream", response[1]["content-type"]
+        end
+
+        test "GET request with an empty member in the Accept header succeeds" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
+          )
+          init_response = @transport.handle_request(init_request)
+          session_id = init_response[1]["mcp-session-id"]
+
+          request = create_rack_request(
+            "GET",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ACCEPT" => ",text/event-stream",
             },
           )
 
