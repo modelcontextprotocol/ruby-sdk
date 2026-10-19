@@ -50,9 +50,25 @@ module MCP
             break if line.nil?
 
             line = line.strip
-            parsed = parse_line(line)
-            response = parsed ? dispatch_with_era(parsed) : @session.handle_json(line)
-            send_response(response) if response
+
+            # Reset for each frame: the loop body shares one scope, so a frame whose parse raises would otherwise
+            # be answered with the previous frame's id.
+            parsed = nil
+
+            begin
+              parsed = parse_line(line)
+              response = parsed ? dispatch_with_era(parsed) : @session.handle_json(line)
+
+              send_response(response) if response
+            rescue StandardError => e
+              # One frame must not end the connection: a reply that cannot be generated (a request string
+              # the JSON parser passed through without being valid UTF-8, echoed by the SDK or a handler) or
+              # any other failure past the server's own error handling answers that frame with Internal error,
+              # unless the frame is a notification, which gets no response.
+              MCP.configuration.exception_reporter.call(e, { error: "Failed to handle stdio frame" })
+
+              send_response(internal_error_response(parsed)) unless parsed.is_a?(Hash) && !parsed.key?(:id)
+            end
           end
         rescue Interrupt
           warn("\nExiting...")
@@ -68,6 +84,16 @@ module MCP
           json_message = message.is_a?(String) ? message : JSON.generate(message)
           $stdout.puts(json_message)
           $stdout.flush
+        end
+
+        # The error answering a frame whose handling failed. It carries the request id when the frame was
+        # a single request whose id can be written back, and no `id` otherwise, as for an id that could not be read.
+        def internal_error_response(parsed)
+          response = { jsonrpc: JsonRpcHandler::Version::V2_0 }
+          id = parsed[:id] if parsed.is_a?(Hash)
+          response[:id] = id if id.is_a?(Integer) || (id.is_a?(String) && id.valid_encoding?)
+          response[:error] = { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" }
+          response
         end
 
         def send_notification(method, params = nil)

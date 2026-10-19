@@ -547,6 +547,88 @@ module MCP
           end
         end
 
+        test "open answers a request whose reply cannot be encoded with Internal error and keeps serving" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(e, _context) { reported << e.class }
+          server = Server.new(name: "test_server")
+          server.define_tool(name: "invalid_text") do
+            Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
+          end
+          @transport = StdioTransport.new(server)
+
+          responses = run_transport_session([
+            initialize_request(id: 1),
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "invalid_text", arguments: {} } },
+            { jsonrpc: "2.0", id: 3, method: "ping" },
+          ])
+
+          assert_equal(
+            { jsonrpc: "2.0", id: 2, error: { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" } },
+            responses[1],
+          )
+          assert_equal({ jsonrpc: "2.0", id: 3, result: {} }, responses[2])
+          assert_equal([JSON::GeneratorError], reported)
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "open answers a frame whose parse fails unexpectedly without the id of the previous frame" do
+          # The parser raises `EncodingError` rather than `JSON::ParserError` for a key that is not valid UTF-8.
+          # The frames are read as bytes, so the key reaches the parser whatever `String#strip` does.
+          bad = "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\",\"params\":{\"k\xFF\":1}}"
+          frames = [
+            JSON.generate(initialize_request(id: 1)),
+            JSON.generate({ jsonrpc: "2.0", method: "notifications/initialized" }),
+            JSON.generate({ jsonrpc: "2.0", id: 3, method: "ping" }),
+            bad,
+            JSON.generate({ jsonrpc: "2.0", method: "notifications/initialized" }),
+            bad,
+            JSON.generate({ jsonrpc: "2.0", id: 4, method: "ping" }),
+          ]
+          input = StringIO.new((frames.join("\n") + "\n").b)
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+
+          # Each bad frame gets one error without an id, whichever code it carries: Internal error here, or the parse
+          # error once the parser's `EncodingError` is answered as one.
+          responses = output.string.each_line.map { |line| JSON.parse(line, symbolize_names: true) }.drop(1)
+          assert_equal([3, nil, nil, 4], responses.map { |response| response[:id] })
+          assert_equal([false, true, true, false], responses.map { |response| response.key?(:error) })
+        end
+
+        test "open answers a batch whose reply cannot be encoded with Internal error without an id" do
+          server = Server.new(name: "test_server")
+          server.define_tool(name: "invalid_text") do
+            Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
+          end
+          @transport = StdioTransport.new(server)
+
+          responses = run_transport_session([
+            initialize_request(id: 1),
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            [{ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "invalid_text", arguments: {} } }],
+            { jsonrpc: "2.0", id: 3, method: "ping" },
+          ])
+
+          assert_equal(
+            { jsonrpc: "2.0", error: { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" } },
+            responses[1],
+          )
+          assert_equal({ jsonrpc: "2.0", id: 3, result: {} }, responses[2])
+        end
+
         test "send_request raises when a response frame exceeds max_line_bytes without a newline" do
           transport = StdioTransport.new(@server, max_line_bytes: 64)
           input = StringIO.new("A" * 200) # No newline: an unbounded frame.
