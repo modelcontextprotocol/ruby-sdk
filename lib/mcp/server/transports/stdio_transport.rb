@@ -49,7 +49,7 @@ module MCP
             end
             break if line.nil?
 
-            line = line.strip
+            line = strip_frame(line)
 
             # Reset for each frame: the loop body shares one scope, so a frame whose parse raises would otherwise
             # be answered with the previous frame's id.
@@ -137,7 +137,7 @@ module MCP
 
           while @open && (line = read_line($stdin))
             begin
-              parsed = JSON.parse(line.strip, symbolize_names: true)
+              parsed = JSON.parse(strip_frame(line), symbolize_names: true)
             rescue JSON::ParserError, EncodingError => e
               MCP.configuration.exception_reporter.call(e, { error: "Failed to parse response" })
               raise
@@ -176,6 +176,14 @@ module MCP
           end
 
           line
+        end
+
+        # Strips a frame as bytes. `$stdin` is read as UTF-8, and `String#strip` raises for a UTF-8 string holding
+        # an invalid byte at either end on every supported Ruby, and anywhere in it from Ruby 3.2 on, so one such
+        # frame would end the read loop instead of being answered. As bytes, it reaches the parser, which refuses
+        # what is not JSON with a parse error.
+        def strip_frame(line)
+          line.b.strip.force_encoding(Encoding::UTF_8)
         end
 
         # Parses a frame once so era classification can inspect its method and `_meta`.
