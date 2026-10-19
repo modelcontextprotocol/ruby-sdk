@@ -1974,7 +1974,8 @@ module MCP
           # `max_nesting` bounds parse depth; a too-deep body raises `JSON::NestingError`,
           # a subclass of `JSON::ParserError`, so it is caught below as a parse error.
           JSON.parse(body_string, symbolize_names: true, max_nesting: MAX_JSON_NESTING)
-        rescue JSON::ParserError, TypeError
+        # `symbolize_names` raises `EncodingError`, not `JSON::ParserError`, for a key that is not valid UTF-8.
+        rescue JSON::ParserError, TypeError, EncodingError
           raise InvalidJsonError
         end
 

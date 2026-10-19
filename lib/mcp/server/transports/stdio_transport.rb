@@ -112,7 +112,7 @@ module MCP
           while @open && (line = read_line($stdin))
             begin
               parsed = JSON.parse(line.strip, symbolize_names: true)
-            rescue JSON::ParserError => e
+            rescue JSON::ParserError, EncodingError => e
               MCP.configuration.exception_reporter.call(e, { error: "Failed to parse response" })
               raise
             end
@@ -158,7 +158,8 @@ module MCP
         def parse_line(line)
           parsed = JSON.parse(line, symbolize_names: true)
           parsed.is_a?(Hash) ? parsed : nil
-        rescue JSON::ParserError
+        rescue JSON::ParserError, EncodingError
+          # `symbolize_names` raises `EncodingError` for a key that is not valid UTF-8; `handle_json` answers the parse error.
           nil
         end
 

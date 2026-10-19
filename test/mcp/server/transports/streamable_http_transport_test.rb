@@ -252,6 +252,24 @@ module MCP
           assert_equal "Parse error: Invalid JSON", body["error"]["message"]
         end
 
+        test "handles POST request whose JSON key is not valid UTF-8 as a parse error" do
+          # `JSON.parse` with `symbolize_names` raises `EncodingError` for such a key, which the rescue
+          # turned into a 500 with an exception report.
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init\",\"method\":\"initialize\",\"k\xFF\":1}".b,
+          )
+
+          response = @transport.handle_request(request)
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal JsonRpcHandler::ErrorCode::PARSE_ERROR, body["error"]["code"]
+          assert_equal "Parse error: Invalid JSON", body["error"]["message"]
+        end
+
         test "POST request with JSON array body returns 400" do
           init_request = create_rack_request(
             "POST",
@@ -6066,6 +6084,17 @@ module MCP
           refute response[1].key?("mcp-session-id")
           body = JSON.parse(response[2][0])
           assert_equal "ok", body.dig("result", "content", 0, "text")
+        end
+
+        test "modern POST answers a JSON key that is not valid UTF-8 with 400 and -32700" do
+          # The era sniff parses a sessionless modern body before any rescue, so the `EncodingError` the parser
+          # raises for such a key escaped the transport.
+          body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"k\xFF\":1}".b
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 400, response[0]
+          assert_equal JsonRpcHandler::ErrorCode::PARSE_ERROR, JSON.parse(response[2][0]).dig("error", "code")
         end
 
         test "modern POST with an unsupported header version returns 400 with -32022 and the supported list" do
