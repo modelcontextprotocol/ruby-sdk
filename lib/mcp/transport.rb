@@ -57,6 +57,14 @@ module MCP
       false
     end
 
+    # Whether the transport delivers notifications to a connected client outside the response to one of its
+    # requests (`notifications/*/list_changed`, `notifications/resources/updated`). `Server#init` strips the
+    # `listChanged`/`subscribe` capability flags when it does not, since the handshake would promise notifications
+    # the transport drops.
+    def delivers_notifications?
+      true
+    end
+
     private
 
     def generate_request_id

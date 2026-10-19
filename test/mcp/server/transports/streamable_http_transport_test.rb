@@ -740,6 +740,84 @@ module MCP
           assert_equal 200, response[0]
         end
 
+        test "initialize on a stateless transport advertises no listChanged or subscribe flags" do
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true, serve_subscriptions_listen: false)
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          initialize_capabilities = JSON.parse(response[2][0]).dig("result", "capabilities")
+          assert_equal({ "tools" => {}, "prompts" => {}, "resources" => {}, "logging" => {} }, initialize_capabilities)
+
+          # The same server describes itself the same way to a modern client.
+          discover = stateless_transport.handle_request(modern_rack_request(modern_body("server/discover", {})))
+          assert_equal initialize_capabilities, JSON.parse(discover[2][0]).dig("result", "capabilities")
+        ensure
+          stateless_transport.close
+        end
+
+        test "initialize on a stateful transport keeps the listChanged flags" do
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
+          )
+
+          response = @transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          assert_equal({ "listChanged" => true }, JSON.parse(response[2][0]).dig("result", "capabilities", "tools"))
+        end
+
+        test "initialize on a stateless transport serving subscriptions/listen leaves the flags to server/discover" do
+          # Listen streams deliver the notifications in stateless mode too, so the modern lifecycle keeps the flags
+          # the handshake lifecycle cannot honor.
+          stateless_transport = StreamableHTTPTransport.new(@server, stateless: true)
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
+          )
+
+          response = stateless_transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          assert_equal({}, JSON.parse(response[2][0]).dig("result", "capabilities", "tools"))
+
+          discover = stateless_transport.handle_request(modern_rack_request(modern_body("server/discover", {})))
+          assert_equal({ "listChanged" => true }, JSON.parse(discover[2][0]).dig("result", "capabilities", "tools"))
+        ensure
+          stateless_transport.close
+        end
+
+        test "initialize on a stateful transport without subscriptions/listen keeps the flags server/discover strips" do
+          transport = StreamableHTTPTransport.new(@server, serve_subscriptions_listen: false)
+          request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "1", params: initialize_params }.to_json,
+          )
+
+          response = transport.handle_request(request)
+
+          assert_equal 200, response[0]
+          assert_equal({ "listChanged" => true }, JSON.parse(response[2][0]).dig("result", "capabilities", "tools"))
+
+          discover = transport.handle_request(modern_rack_request(modern_body("server/discover", {})))
+          assert_equal({}, JSON.parse(discover[2][0]).dig("result", "capabilities", "tools"))
+        ensure
+          transport.close
+        end
+
         test "allows server/discover POST without session ID in stateful mode" do
           # Per SEP-2575, `server/discover` is sessionless capability discovery and is exempt
           # from the session requirement, like `initialize`.

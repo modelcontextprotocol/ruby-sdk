@@ -1148,7 +1148,7 @@ module MCP
 
       {
         protocolVersion: negotiated_version,
-        capabilities: capabilities,
+        capabilities: handshake_capabilities,
         serverInfo: info,
         instructions: response_instructions,
       }.compact
@@ -1225,6 +1225,19 @@ module MCP
     def discover_capabilities
       return capabilities if @transport.respond_to?(:serves_subscriptions_listen?) && @transport.serves_subscriptions_listen?
 
+      without_notification_flags(capabilities)
+    end
+
+    # Capabilities as advertised by `initialize`. A transport that delivers no notifications to its sessions
+    # (stateless Streamable HTTP) cannot keep the promise the `listChanged` and `subscribe` flags make, so they are
+    # left out, as `server/discover` leaves them out when `subscriptions/listen` is not served.
+    def handshake_capabilities
+      return capabilities unless @transport.respond_to?(:delivers_notifications?) && !@transport.delivers_notifications?
+
+      without_notification_flags(capabilities)
+    end
+
+    def without_notification_flags(capabilities)
       capabilities.each_with_object({}) do |(name, value), stripped|
         stripped[name] = if value.is_a?(Hash)
           value.reject { |flag, _| ["listChanged", "subscribe"].include?(flag.to_s) }

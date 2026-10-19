@@ -406,6 +406,12 @@ module MCP
           @serve_subscriptions_listen
         end
 
+        # Stateless mode has no session streams to deliver notifications on (`send_notification` reports non-delivery),
+        # so `Server#init` advertises no `listChanged`/`subscribe` flags there.
+        def delivers_notifications?
+          !@stateless
+        end
+
         def handle_request(request)
           rebinding_error = validate_dns_rebinding(request)
           return rebinding_error if rebinding_error
