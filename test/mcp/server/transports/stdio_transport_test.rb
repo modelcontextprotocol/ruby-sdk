@@ -250,6 +250,49 @@ module MCP
           end
         end
 
+        test "open serves a frame holding an invalid byte in a value and keeps reading" do
+          frames = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"x\":\"\xFF\"}}\n" \
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n"
+          input = StringIO.new(frames.dup.force_encoding(Encoding::UTF_8))
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            responses = output.string.lines.map { |line| JSON.parse(line, symbolize_names: true) }
+            assert_equal({ jsonrpc: "2.0", id: 1, result: {} }, responses[0])
+            assert_equal({ jsonrpc: "2.0", id: 2, result: {} }, responses[1])
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
+        test "open answers a frame starting with an invalid byte with -32700 and keeps reading" do
+          frames = "\xFF[]\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n"
+          input = StringIO.new(frames.dup.force_encoding(Encoding::UTF_8))
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            responses = output.string.lines.map { |line| JSON.parse(line, symbolize_names: true) }
+            assert_equal(JsonRpcHandler::ErrorCode::PARSE_ERROR, responses[0][:error][:code])
+            assert_equal({ jsonrpc: "2.0", id: 2, result: {} }, responses[1])
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
         test "handles invalid JSON requests" do
           invalid_json = "invalid json"
           output = StringIO.new
@@ -316,6 +359,35 @@ module MCP
             rescue
               nil
             end
+          end
+        end
+
+        test "send_request reads a client reply holding an invalid byte in a value" do
+          reader, writer = IO.pipe
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = reader
+            $stdout = output
+            @transport.instance_variable_set(:@open, true)
+
+            Thread.new do
+              sleep(0.05) # Wait for request to be written to `StringIO`.
+              request = JSON.parse(output.string.lines.first, symbolize_names: true)
+              writer.write("{\"jsonrpc\":\"2.0\",\"id\":\"#{request[:id]}\",\"result\":{\"x\":\"\xFF\"}}\n".b)
+              writer.flush
+            end
+
+            result = @transport.send_request("test/method")
+
+            assert_equal("\xFF".b, result[:x].b)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+            writer.close
+            reader.close
           end
         end
 
