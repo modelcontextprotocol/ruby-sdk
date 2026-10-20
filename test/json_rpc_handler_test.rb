@@ -448,6 +448,26 @@ describe JsonRpcHandler do
       }
     end
 
+    it "returns an error with the code set to -32700 when a key is not valid UTF-8" do
+      # `JSON.parse` with `symbolize_names` raises `EncodingError` rather than `JSON::ParserError` for such a key.
+      handle_json "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"add\",\"k\xFF\":1}".b
+
+      assert_rpc_error expected_error: {
+        code: -32700,
+        message: "Parse error",
+        data: "Invalid JSON",
+      }
+    end
+
+    it "returns an error with the code set to -32603 when the input is not a string" do
+      handle_json nil
+
+      assert_rpc_error expected_error: {
+        code: -32603,
+        message: "Internal error",
+      }
+    end
+
     it "returns an error with code set to -32600 when the request is not an array or a hash" do
       handle true
 

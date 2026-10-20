@@ -175,6 +175,30 @@ module MCP
           end
         end
 
+        test "open answers a frame whose JSON key is not valid UTF-8 with -32700 and keeps reading" do
+          # `JSON.parse` with `symbolize_names` raises `EncodingError` for such a key, which ended the loop.
+          # The frames are read as bytes here, so the key reaches the parser whatever `String#strip` does.
+          frames = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"k\xFF\":1}\n" \
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n"
+          input = StringIO.new(frames.b)
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = input
+            $stdout = output
+            @transport.open
+
+            responses = output.string.lines.map { |line| JSON.parse(line, symbolize_names: true) }
+            assert_equal(-32700, responses[0][:error][:code])
+            assert_equal({ jsonrpc: "2.0", id: 2, result: {} }, responses[1])
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+          end
+        end
+
         test "rejects duplicate initialize on the same stdio session with -32600" do
           first = {
             jsonrpc: "2.0",
@@ -336,6 +360,37 @@ module MCP
             rescue
               nil
             end
+          end
+        end
+
+        test "send_request reports a client reply whose JSON key is not valid UTF-8 as a parse failure" do
+          reader, writer = IO.pipe
+
+          # Read as bytes, so the key reaches the parser whatever `String#strip` does.
+          reader.binmode
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+
+          begin
+            MCP.configuration.exception_reporter = ->(e, context) { reported << [e.class, context] }
+            $stdin = reader
+            $stdout = output
+            @transport.instance_variable_set(:@open, true)
+
+            writer.write("{\"jsonrpc\":\"2.0\",\"id\":\"x\",\"result\":{\"k\xFF\":1}}\n".b)
+            writer.flush
+
+            assert_raises(EncodingError) { @transport.send_request("test/method") }
+            assert_equal([[EncodingError, { error: "Failed to parse response" }]], reported)
+          ensure
+            MCP.configuration.exception_reporter = original_reporter
+            $stdin = original_stdin
+            $stdout = original_stdout
+            writer.close
+            reader.close
           end
         end
 

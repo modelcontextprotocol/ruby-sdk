@@ -55,14 +55,19 @@ module JsonRpcHandler
 
   def handle_json(request_json, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, &method_finder)
     begin
-      request = JSON.parse(request_json, symbolize_names: true)
+      begin
+        request = JSON.parse(request_json, symbolize_names: true)
+      rescue JSON::ParserError, EncodingError
+        # `symbolize_names` raises `EncodingError` for a key that is not valid UTF-8, a parse error as well.
+        # Rescued around the parse only, so an error raised while handling keeps its own classification.
+        return error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
+          code: ErrorCode::PARSE_ERROR,
+          message: "Parse error",
+          data: "Invalid JSON",
+        }).to_json
+      end
+
       response = handle(request, id_validation_pattern: id_validation_pattern, &method_finder)
-    rescue JSON::ParserError
-      response = error_response(id: :unknown_id, id_validation_pattern: id_validation_pattern, error: {
-        code: ErrorCode::PARSE_ERROR,
-        message: "Parse error",
-        data: "Invalid JSON",
-      })
     rescue StandardError
       # Last-resort guard so an unexpected handling error returns a JSON-RPC error
       # instead of escaping to the transport loop.
