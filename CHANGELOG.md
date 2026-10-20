@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-21
+
+This release brings the server's JSON-RPC framing and capability advertisement, and the HTTP client's handling
+of an `initialize` answered over SSE, in line with the MCP specification. The Changed entries alter answers on
+the wire, as fixes of incorrect conformance under the exceptions described in [VERSIONING.md](VERSIONING.md).
+Only senders of null ids and client code that read the error event of a 4xx or 5xx SSE answer, which the client
+now raises as `RequestHandlerError`, have to change. A stdio server also survives a frame it cannot strip, parse
+or answer.
+
+### Changed
+
+- Refuse a request whose id is null and do not run a request method sent without an id (#612)
+- Leave the id out of an error response when the request id cannot be read (#615)
+- Return from `initialize` as soon as its SSE response arrives and raise on an error-status SSE answer in the HTTP client (#617)
+- Leave `listChanged` and `subscribe` out of a stateless server's `initialize` result (#620)
+
+### Fixed
+
+- Answer a method of an undeclared capability with Method not found (#611)
+- Accept any string as a request id (#613)
+- Ignore empty members of the `Accept` header (#616)
+- Keep Ruby 2.7 from warning about keywords in `StdioTransport` (#621)
+- Keep the stdio server running when a reply cannot be encoded (#623)
+- Treat a JSON key that is not valid UTF-8 as a parse error (#624)
+- Strip stdio frames as bytes (#625)
+
 ## [1.8.0] - 2026-10-16
 
 This release adds OAuth 2.1 resource server support to `StreamableHTTPTransport`: bearer tokens are verified
