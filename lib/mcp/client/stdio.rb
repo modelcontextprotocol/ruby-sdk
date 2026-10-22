@@ -484,8 +484,10 @@ module MCP
         parsed["method"] == MCP::Methods::PING && json_rpc_id?(parsed["id"]) && JsonRpcHandler.valid_version?(parsed["jsonrpc"])
       end
 
+      # An id the pong could not write back is skipped too: a String that is not valid UTF-8, or a number
+      # such as `1e400`, which the parser reads as an infinite Float that JSON cannot represent.
       def json_rpc_id?(id)
-        id.is_a?(String) || id.is_a?(Numeric)
+        (id.is_a?(String) && id.valid_encoding?) || id.is_a?(Integer) || (id.is_a?(Float) && id.finite?)
       end
 
       def ensure_running!
