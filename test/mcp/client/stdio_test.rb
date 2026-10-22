@@ -324,6 +324,38 @@ module MCP
         stdout_write.close
       end
 
+      def test_a_ping_whose_id_is_not_valid_utf_8_is_not_answered
+        # Checked on the parsed frame, since how such a String arrives depends on the json gem and the Ruby version
+        # (a raw byte, or a lone surrogate escape on json 2.x); the pong for it would fail in `JSON.generate`.
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+        ping = { "jsonrpc" => "2.0", "id" => "p\xFF".dup.force_encoding(Encoding::UTF_8), "method" => "ping" }
+
+        refute(transport.send(:answerable_ping?, ping))
+        assert(transport.send(:answerable_ping?, ping.merge("id" => "p")))
+      end
+
+      def test_a_ping_whose_id_parses_to_an_infinite_float_is_not_answered_and_the_request_completes
+        written = []
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          request = JSON.parse(requests.gets)
+          # `1e400` is valid JSON that the parser reads as `Float::INFINITY`, which `JSON.generate` refuses.
+          frames.puts('{"jsonrpc":"2.0","id":1e400,"method":"ping"}')
+          write_frame(frames, { jsonrpc: "2.0", id: "srv-ping-2", method: "ping" })
+          # The single pong must answer the second ping; the response follows only after it arrives.
+          written << JSON.parse(requests.gets)
+          write_frame(frames, { jsonrpc: "2.0", id: request["id"], result: { tools: [] } })
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "test-id", method: "tools/list" })
+
+          assert_equal("test-id", response["id"])
+        end
+        assert_equal([{ "jsonrpc" => "2.0", "id" => "srv-ping-2", "result" => {} }], written)
+      end
+
       def test_send_request_skips_notifications
         stdin_read, stdin_write = IO.pipe
         stdout_read, stdout_write = IO.pipe
