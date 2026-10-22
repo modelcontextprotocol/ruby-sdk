@@ -488,6 +488,38 @@ describe JsonRpcHandler do
       }
     end
 
+    it "returns an error with the code set to -32603 and the request id when the result cannot be generated" do
+      register("echo") { |_params| { text: "\xFF".dup.force_encoding(Encoding::UTF_8) } }
+
+      handle_json({ jsonrpc: "2.0", id: 1, method: "echo" }.to_json)
+
+      assert_equal(1, @response[:id])
+      assert_rpc_error expected_error: {
+        code: -32603,
+        message: "Internal error",
+      }
+    end
+
+    it "replaces only the batch item whose result cannot be generated and reports the error" do
+      register("echo") { |_params| { text: "\xFF".dup.force_encoding(Encoding::UTF_8) } }
+      register("ping") { |_params| {} }
+      errors = []
+
+      response_json = JsonRpcHandler.handle_json(
+        [{ jsonrpc: "2.0", id: 1, method: "echo" }, { jsonrpc: "2.0", id: 2, method: "ping" }].to_json,
+        on_generate_error: ->(error) { errors << error.class },
+      ) { |method_name, _request_id| @registry[method_name] }
+
+      assert_equal(
+        [
+          { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "Internal error" } },
+          { jsonrpc: "2.0", id: 2, result: {} },
+        ],
+        JSON.parse(response_json, symbolize_names: true),
+      )
+      assert_equal([JSON::GeneratorError], errors)
+    end
+
     it "returns nil when the method does not exist and the id is nil" do
       handle jsonrpc: "2.0", method: "add", params: { a: 1, b: 2 }
 

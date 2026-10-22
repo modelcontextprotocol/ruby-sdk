@@ -931,16 +931,26 @@ module MCP
           # `nil` covers notifications and cancellation-suppressed responses; ack with 202 like the legacy notification path.
           return handle_accepted if response.nil?
 
+          # A response that cannot be generated answers its request with Internal error, as `JsonRpcHandler.handle_json`
+          # does on the legacy paths, instead of failing the whole exchange with a 500.
+          response_json = begin
+            response.to_json
+          rescue JSON::GeneratorError => e
+            MCP.configuration.exception_reporter.call(e, { error: "Failed to generate response" })
+            response = JsonRpcHandler.encodable_response(response)
+            response.to_json
+          end
+
           # Notifications a handler emitted during the request ride the request's own response stream as SSE frames ahead of
           # the final response (SEP-2575); a request that emitted none keeps the single JSON exchange and its HTTP status ladder.
           # Delivery is buffered: frames flush after the handler returns, preserving order but not real-time interleaving
           # (the TypeScript and Python SDKs stream live), and the sink grows with the handler's notification count.
           # Live streaming can follow without changing the wire shape.
           if notifications.empty?
-            [modern_http_status(response), { "content-type" => "application/json" }, [response.to_json]]
+            [modern_http_status(response), { "content-type" => "application/json" }, [response_json]]
           else
-            frames = notifications + [response]
-            sse_body = frames.map { |frame| "event: message\ndata: #{frame.to_json}\n\n" }.join
+            frames = notifications.map(&:to_json) + [response_json]
+            sse_body = frames.map { |frame| "event: message\ndata: #{frame}\n\n" }.join
             [200, SSE_HEADERS.dup, [sse_body]]
           end
         rescue StandardError => e
