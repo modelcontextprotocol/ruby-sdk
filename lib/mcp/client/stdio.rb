@@ -434,7 +434,7 @@ module MCP
           line = read_line(method, params)
           raise_connection_error!(method, params) if line.nil?
 
-          parsed = JSON.parse(line.strip)
+          parsed = JSON.parse(strip_frame(line))
 
           # A frame carrying `method` is a request or notification, never the awaited response,
           # whatever its id says: JSON-RPC id spaces are per sender, so a server-chosen ping id
@@ -532,6 +532,14 @@ module MCP
           { method: method, params: params },
           error_type: :internal_error,
         )
+      end
+
+      # Strips a frame as bytes. The server's stdout is read as UTF-8, and `String#strip` raises for a UTF-8 string
+      # holding an invalid byte at either end on every supported Ruby, and anywhere in it from Ruby 3.2 on, which would
+      # surface as that exception instead of the client's own error. As bytes, the frame reaches the parser, which
+      # refuses what is not JSON with the client's parse failure.
+      def strip_frame(line)
+        line.b.strip.force_encoding(Encoding::UTF_8)
       end
 
       def raise_connection_error!(method, params)

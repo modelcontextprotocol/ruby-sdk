@@ -709,6 +709,41 @@ module MCP
         stdout_write.close
       end
 
+      def test_send_request_raises_its_parse_error_on_a_frame_starting_with_an_invalid_byte
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          request = JSON.parse(requests.gets)
+          frames.write("\xFF".b + JSON.generate({ jsonrpc: "2.0", id: request["id"], result: {} }) + "\n")
+          frames.flush
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect
+          error = assert_raises(RequestHandlerError) do
+            transport.send_request(request: { jsonrpc: "2.0", id: "test-id", method: "tools/list" })
+          end
+
+          assert_equal("Failed to parse server response", error.message)
+          assert_instance_of(JSON::ParserError, error.original_error)
+        end
+      end
+
+      def test_send_request_returns_a_response_holding_an_invalid_byte_in_a_value
+        server = lambda do |requests, frames|
+          answer_handshake(requests, frames)
+          request = JSON.parse(requests.gets)
+          frames.write("{\"jsonrpc\":\"2.0\",\"id\":#{JSON.generate(request["id"])},\"result\":{\"x\":\"a\xFFb\"}}\n".b)
+          frames.flush
+        end
+
+        with_scripted_server(server) do |transport|
+          transport.connect
+          response = transport.send_request(request: { jsonrpc: "2.0", id: "test-id", method: "tools/list" })
+
+          assert_equal("a\xFFb".b, response.dig("result", "x").b)
+        end
+      end
+
       def test_send_request_raises_error_on_a_response_that_is_not_json_rpc_2_0
         answers = [
           { result: { tools: [] } },
