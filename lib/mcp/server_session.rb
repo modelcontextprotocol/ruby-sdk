@@ -275,14 +275,14 @@ module MCP
     def notify_elicitation_complete(elicitation_id:)
       send_to_transport(Methods::NOTIFICATIONS_ELICITATION_COMPLETE, { elicitationId: elicitation_id })
     rescue => e
-      @server.report_exception(e, notification: "elicitation_complete")
+      @server.configuration.exception_reporter.call(e, { notification: "elicitation_complete" })
     end
 
     # Sends a resource updated notification to this session only.
     def notify_resources_updated(uri:)
       send_to_transport(Methods::NOTIFICATIONS_RESOURCES_UPDATED, { "uri" => uri })
     rescue => e
-      @server.report_exception(e, notification: "resources_updated")
+      @server.configuration.exception_reporter.call(e, { notification: "resources_updated" })
     end
 
     # Sends a progress notification to this session only.
@@ -296,7 +296,7 @@ module MCP
 
       send_to_transport(Methods::NOTIFICATIONS_PROGRESS, params, related_request_id: related_request_id)
     rescue => e
-      @server.report_exception(e, notification: "progress")
+      @server.configuration.exception_reporter.call(e, { notification: "progress" })
     end
 
     # Sends a log message notification to this session only.
@@ -320,7 +320,7 @@ module MCP
 
       send_to_transport(Methods::NOTIFICATIONS_MESSAGE, params, related_request_id: related_request_id)
     rescue => e
-      @server.report_exception(e, { notification: "log_message" })
+      @server.configuration.exception_reporter.call(e, { notification: "log_message" })
     end
 
     private
