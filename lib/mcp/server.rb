@@ -303,7 +303,8 @@ module MCP
     #   for the current request, as in `handle`.
     # @return [String, nil] The JSON-RPC response as JSON, or `nil` for notifications.
     def handle_json(request, session: nil, auth_info: nil)
-      JsonRpcHandler.handle_json(request, id_validation_pattern: nil) do |method, request_id|
+      on_generate_error = ->(error) { report_exception(error, { error: "Failed to generate response" }) }
+      JsonRpcHandler.handle_json(request, id_validation_pattern: nil, on_generate_error: on_generate_error) do |method, request_id|
         handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
       end
     end

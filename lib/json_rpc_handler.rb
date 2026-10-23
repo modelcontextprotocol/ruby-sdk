@@ -53,7 +53,9 @@ module JsonRpcHandler
     end
   end
 
-  def handle_json(request_json, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, &method_finder)
+  # `on_generate_error`, when given, is called with the `JSON::GeneratorError` of a response that cannot be generated,
+  # before that response is replaced with Internal error.
+  def handle_json(request_json, id_validation_pattern: DEFAULT_ALLOWED_ID_CHARACTERS, on_generate_error: nil, &method_finder)
     begin
       begin
         request = JSON.parse(request_json, symbolize_names: true)
@@ -77,7 +79,35 @@ module JsonRpcHandler
       })
     end
 
-    response&.to_json
+    begin
+      response&.to_json
+    rescue JSON::GeneratorError => e
+      on_generate_error&.call(e)
+      encodable_response(response, id_validation_pattern: id_validation_pattern).to_json
+    end
+  end
+
+  # `response` with each part JSON cannot generate replaced with Internal error. A batch is replaced item by item,
+  # so the other items keep their results.
+  def encodable_response(response, id_validation_pattern: nil)
+    return response.map { |item| encodable_response(item, id_validation_pattern: id_validation_pattern) } if response.is_a?(Array)
+
+    response.to_json
+    response
+  rescue JSON::GeneratorError
+    internal_error_for(response, id_validation_pattern: id_validation_pattern)
+  end
+
+  # The error answering a request whose response cannot be generated: a result or an error holding a string that
+  # is not valid UTF-8, typically one the request carried and the SDK or a handler repeated, such as a tool name
+  # in its Tool not found error. It carries the request id when the response has one, which was validated before
+  # the method ran.
+  def internal_error_for(response, id_validation_pattern: nil)
+    id = response[:id] if response.is_a?(Hash)
+    error_response(id: id.nil? ? :unknown_id : id, id_validation_pattern: id_validation_pattern, error: {
+      code: ErrorCode::INTERNAL_ERROR,
+      message: "Internal error",
+    })
   end
 
   def process_request(request, id_validation_pattern:, &method_finder)

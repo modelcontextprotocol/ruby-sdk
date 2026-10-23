@@ -735,7 +735,7 @@ module MCP
           assert_equal([false, true, true, false], responses.map { |response| response.key?(:error) })
         end
 
-        test "open answers a batch whose reply cannot be encoded with Internal error without an id" do
+        test "open answers a batch whose reply cannot be encoded with Internal error and the item's id" do
           server = Server.new(name: "test_server")
           server.define_tool(name: "invalid_text") do
             Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
@@ -750,7 +750,7 @@ module MCP
           ])
 
           assert_equal(
-            { jsonrpc: "2.0", error: { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" } },
+            { jsonrpc: "2.0", id: 2, error: { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" } },
             responses[1],
           )
           assert_equal({ jsonrpc: "2.0", id: 3, result: {} }, responses[2])

@@ -2792,6 +2792,68 @@ module MCP
           assert_equal "456", body["id"]
         end
 
+        test "a reply that cannot be generated is answered with Internal error on the legacy SSE path" do
+          reported = []
+          configuration = MCP::Configuration.new
+          configuration.exception_reporter = ->(e, context) { reported << [e.class, context] }
+          @server = Server.new(name: "test_server", configuration: configuration)
+          @server.define_tool(name: "invalid_text") do
+            Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
+          end
+          @transport.close
+          @transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil)
+          session_id = initialize_test_session
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "invalid_text", arguments: {} } }.to_json,
+          ))
+          io = StringIO.new
+          response[2].call(io)
+
+          assert_equal 200, response[0]
+          assert_equal(
+            { "jsonrpc" => "2.0", "id" => 2, "error" => { "code" => -32603, "message" => "Internal error" } },
+            JSON.parse(io.string[/^data: (.+)$/, 1]),
+          )
+          assert_equal([[JSON::GeneratorError, { error: "Failed to generate response" }]], reported)
+        end
+
+        test "a reply that cannot be generated is answered with Internal error in JSON response mode" do
+          reported = []
+          configuration = MCP::Configuration.new
+          configuration.exception_reporter = ->(e, context) { reported << [e.class, context] }
+          server = Server.new(name: "test", configuration: configuration)
+          server.define_tool(name: "invalid_text") do
+            Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
+          end
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          session_id = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          ))[1]["mcp-session-id"]
+
+          response = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "invalid_text", arguments: {} } }.to_json,
+          ))
+
+          assert_equal 200, response[0]
+          assert_equal(
+            { "jsonrpc" => "2.0", "id" => 2, "error" => { "code" => -32603, "message" => "Internal error" } },
+            JSON.parse(response[2][0]),
+          )
+          assert_equal([[JSON::GeneratorError, { error: "Failed to generate response" }]], reported)
+        ensure
+          transport.close
+        end
+
         test "JSON response mode returns application/json for POST requests" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server, enable_json_response: true)
@@ -6278,6 +6340,27 @@ module MCP
 
           assert_equal 405, @transport.handle_request(get_request)[0]
           assert_equal 405, @transport.handle_request(delete_request)[0]
+        end
+
+        test "modern POST answers a reply that cannot be generated with Internal error" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(e, context) { reported << [e.class, context] }
+          @server.define_tool(name: "invalid_text") do
+            Tool::Response.new([{ type: "text", text: "\xFF".dup.force_encoding(Encoding::UTF_8) }])
+          end
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("tools/call", { name: "invalid_text", arguments: {} }),
+          ))
+
+          assert_equal 200, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal 1, body["id"]
+          assert_equal({ "code" => -32603, "message" => "Internal error" }, body["error"])
+          assert_equal([[JSON::GeneratorError, { error: "Failed to generate response" }]], reported)
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
         end
 
         test "modern POST maps an unknown method to 404 with -32601" do
