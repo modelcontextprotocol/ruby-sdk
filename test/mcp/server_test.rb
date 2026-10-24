@@ -4062,6 +4062,91 @@ module MCP
       refute handler_called
     end
 
+    test "#subscribable_resource_uris reports a resources_subscribe_handler error and leaves its URI out" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, server_context) { reported << [e.message, server_context] }
+      server = Server.new(name: "test_server", configuration: configuration)
+      server.resources_subscribe_handler do |params|
+        raise "denied" if params[:uri] == "file:///private.txt"
+      end
+
+      uris = server.subscribable_resource_uris(["file:///public.txt", "file:///private.txt"])
+
+      assert_equal(["file:///public.txt"], uris)
+      assert_equal([["denied", { request: { uri: "file:///private.txt" } }]], reported)
+    end
+
+    test "#subscribable_resource_uris calls the resources_subscribe_handler once per distinct URI and accepts any return value" do
+      server = Server.new(name: "test_server")
+      requested = []
+      server.resources_subscribe_handler do |params|
+        requested << params
+        false
+      end
+
+      uris = server.subscribable_resource_uris(["file:///a.txt", "file:///a.txt"], meta: { trace: "t1" })
+
+      assert_equal(["file:///a.txt"], uris)
+      assert_equal([{ uri: "file:///a.txt", _meta: { trace: "t1" } }], requested)
+    end
+
+    test "#subscribable_resource_uris reports the original error of a RequestHandlerError" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e }
+      server = Server.new(name: "test_server", configuration: configuration)
+      original = ArgumentError.new("lookup failed")
+      server.resources_subscribe_handler do |params|
+        raise Server::RequestHandlerError.new("Forbidden", params, error_type: :invalid_params, original_error: original)
+      end
+
+      assert_empty(server.subscribable_resource_uris(["file:///a.txt"]))
+      assert_equal([original], reported)
+    end
+
+    test "#subscribable_resource_uris reports a RequestHandlerError without an original error itself" do
+      reported = []
+      configuration = MCP::Configuration.new
+      configuration.exception_reporter = ->(e, _server_context) { reported << e }
+      server = Server.new(name: "test_server", configuration: configuration)
+      error = Server::RequestHandlerError.new("Forbidden", {}, error_type: :invalid_params)
+      server.resources_subscribe_handler { |_params| raise error }
+
+      assert_empty(server.subscribable_resource_uris(["file:///a.txt"]))
+      assert_equal([error], reported)
+    end
+
+    test "#subscribable_resource_uris keeps an accepted URI after a denied one and accepts a nil return value" do
+      server = Server.new(name: "test_server")
+      server.resources_subscribe_handler do |params|
+        raise "denied" if params[:uri] == "file:///denied.txt"
+
+        nil
+      end
+
+      assert_equal(["file:///accepted.txt"], server.subscribable_resource_uris(["file:///denied.txt", "file:///accepted.txt"]))
+    end
+
+    test "#subscribable_resource_uris passes the envelope to the resources_subscribe_handler" do
+      server = Server.new(name: "test_server")
+      seen = nil
+      server.resources_subscribe_handler do |_params, server_context:|
+        seen = server_context.envelope
+      end
+      envelope = RequestEnvelope.new(protocol_version: "2026-07-28", client_info: { name: "c" }, client_capabilities: {}, log_level: nil)
+
+      server.subscribable_resource_uris(["file:///a.txt"], envelope: envelope)
+
+      assert_same(envelope, seen)
+    end
+
+    test "#subscribable_resource_uris keeps every URI with the default resources_subscribe_handler" do
+      server = Server.new(name: "test_server")
+
+      assert_equal(["file:///a.txt", "file:///b.txt"], server.subscribable_resource_uris(["file:///a.txt", "file:///b.txt"]))
+    end
+
     test "tools/call with no args" do
       server = Server.new(tools: [@tool_with_no_args])
 

@@ -7121,6 +7121,84 @@ module MCP
           transport.close
         end
 
+        test "subscriptions/listen honors only the resource URIs the resources_subscribe_handler accepts" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          requested = []
+          server.resources_subscribe_handler do |params|
+            requested << params[:uri]
+            raise RequestHandlerError.new("Forbidden", params, error_type: :invalid_params) if params[:uri] == "file:///private.txt"
+          end
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { resourceSubscriptions: ["file:///public.txt", "file:///private.txt", "file:///public.txt"] },
+            transport: transport,
+          )
+
+          assert_equal ["file:///public.txt", "file:///private.txt"], requested
+          assert_equal ["file:///public.txt"], sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+
+          transport.send_notification("notifications/resources/updated", { uri: "file:///private.txt" }, **{})
+          transport.send_notification("notifications/resources/updated", { uri: "file:///public.txt" }, **{})
+
+          assert_equal ["file:///public.txt"], sse_events(io).drop(1).map { |event| event.dig("params", "uri") }
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen passes its _meta to the resources_subscribe_handler" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { subscribe: true } })
+          seen = []
+          server.resources_subscribe_handler do |params, server_context:|
+            seen << [params.dig(:_meta, :"io.modelcontextprotocol/clientInfo", :name), server_context[:_meta].equal?(params[:_meta])]
+          end
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(id: "listen-1", notifications: { resourceSubscriptions: ["file:///a.txt"] }, transport: transport)
+
+          assert_equal [["modern_client", true]], seen
+          assert_equal ["file:///a.txt"], sse_events(io).first.dig("params", "notifications", "resourceSubscriptions")
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen does not call the resources_subscribe_handler without the subscribe capability" do
+          server = Server.new(name: "listen_test", capabilities: { resources: { listChanged: true } })
+          server.resources_subscribe_handler { |_params| flunk "the handler must not be called" }
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { resourcesListChanged: true, resourceSubscriptions: ["file:///a.txt"] },
+            transport: transport,
+          )
+
+          assert_equal({ "resourcesListChanged" => true }, sse_events(io).first.dig("params", "notifications"))
+        ensure
+          transport.close
+        end
+
+        test "subscriptions/listen omits resourceSubscriptions when the resources_subscribe_handler accepts none" do
+          server = Server.new(
+            name: "listen_test",
+            capabilities: { resources: { listChanged: true, subscribe: true } },
+          )
+          server.resources_subscribe_handler { |_params| raise "denied" }
+          transport = StreamableHTTPTransport.new(server)
+
+          io = open_listen_stream(
+            id: "listen-1",
+            notifications: { resourcesListChanged: true, resourceSubscriptions: ["file:///private.txt"] },
+            transport: transport,
+          )
+
+          assert_equal({ "resourcesListChanged" => true }, sse_events(io).first.dig("params", "notifications"))
+          assert_empty transport.instance_variable_get(:@listen_subscriptions).values.first[:resource_uris]
+        ensure
+          transport.close
+        end
+
         test "notifications are delivered only after the listen acknowledgement" do
           # Inject an entry in the registered-but-not-yet-acknowledged state: the window between
           # the registry insert and the acknowledgement write, which happens outside the lock.

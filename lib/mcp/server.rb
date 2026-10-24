@@ -501,6 +501,36 @@ module MCP
       @handlers[Methods::RESOURCES_UNSUBSCRIBE] = block
     end
 
+    # Returns the distinct members of `uris` that the `resources_subscribe_handler` accepts, calling it once per URI
+    # with `{ uri: }`, plus `_meta` when given. `subscriptions/listen` takes the place of `resources/subscribe`
+    # in the 2026-07-28 lifecycle, so the handler keeps deciding which resources a client may follow there too.
+    # A URI the handler raises for is reported and left out, as the spec lets the acknowledgement honor a subset of
+    # what was requested; any return value accepts the URI and is otherwise discarded. The `server_context` has no session,
+    # related request id, or cancellation. Public only so that `StreamableHTTPTransport` can call it.
+    #
+    # @api private
+    # @param uris [Array<String>] The `resourceSubscriptions` of a `subscriptions/listen` request.
+    # @param meta [Hash, nil] The `_meta` of that request.
+    # @param envelope [MCP::RequestEnvelope, nil] The envelope of that request.
+    # @param auth_info [MCP::Server::OAuth::AccessToken, nil] The token that authenticated that request.
+    # @return [Array<String>]
+    def subscribable_resource_uris(uris, meta: nil, envelope: nil, auth_info: nil)
+      handler = @handlers[Methods::RESOURCES_SUBSCRIBE]
+
+      uris.uniq.select do |uri|
+        params = { uri: uri }
+        params[:_meta] = meta if meta
+        dispatch_optional_context_handler(handler, params, envelope: envelope, auth_info: auth_info)
+        true
+      rescue RequestHandlerError => e
+        report_exception(e.original_error || e, { request: params })
+        false
+      rescue => e
+        report_exception(e, { request: params })
+        false
+      end
+    end
+
     def build_sampling_params(
       capabilities,
       messages:,

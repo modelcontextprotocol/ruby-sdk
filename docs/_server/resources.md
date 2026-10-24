@@ -283,6 +283,9 @@ Three methods are provided:
 - `Server#resources_unsubscribe_handler` - registers a handler for `resources/unsubscribe` requests
 - `ServerContext#notify_resources_updated` - sends a `notifications/resources/updated` notification to the subscribing client
 
+The subscribe handler is also consulted for the resource URIs of a 2026-07-28 `subscriptions/listen` stream;
+see [Subscriptions](/server/subscriptions/).
+
 ```ruby
 subscribed_uris = Set.new
 
