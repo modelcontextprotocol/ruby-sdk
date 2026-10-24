@@ -6561,6 +6561,48 @@ module MCP
           assert_equal overflow, delivery_results.count { |result| result == false }
         end
 
+        test "modern POST drops a handler notification that cannot be generated and keeps the response" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(e, context) { reported << [e.class, context[:error]] }
+          delivery_results = []
+          @server.define_tool(name: "logging_tool") do |server_context:|
+            delivery_results << server_context.notify_log_message(data: "\xFF".dup.force_encoding(Encoding::UTF_8), level: "info")
+            delivery_results << server_context.notify_log_message(data: "hi", level: "info")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          body = {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 1,
+            params: {
+              name: "logging_tool",
+              arguments: {},
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "2.0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/logLevel": "info",
+              },
+            },
+          }.to_json
+
+          response = @transport.handle_request(modern_rack_request(body))
+
+          assert_equal 200, response[0]
+          frames = response[2][0].split("\n\n").reject(&:empty?).map do |chunk|
+            JSON.parse(chunk.sub(/\Aevent: message\ndata: /, ""))
+          end
+          assert_equal 2, frames.size
+          assert_equal "hi", frames.first.dig("params", "data")
+          assert_equal [{ "type" => "text", "text" => "done" }], frames.last.dig("result", "content")
+          assert_equal [false, true], delivery_results
+          assert_equal [[JSON::GeneratorError, "Failed to generate notification"]], reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
         test "modern POST without handler notifications keeps the single JSON exchange" do
           response = @transport.handle_request(modern_rack_request(modern_body("tools/list", {})))
 

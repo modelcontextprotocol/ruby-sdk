@@ -521,12 +521,19 @@ module MCP
           # a per-request sink for its ephemeral session and flushes it as SSE frames ahead of the final response.
           # Checked before the stateless guard, since modern requests are served in stateless deployments too.
           # The sink is bounded; past `MAX_MODERN_REQUEST_NOTIFICATIONS` the notification is dropped as
-          # non-delivery (`false`), never handed to the legacy paths below.
+          # non-delivery (`false`), never handed to the legacy paths below. It holds each notification as JSON,
+          # generated here so that one that cannot be generated is dropped on its own instead of failing
+          # the whole response when the sink is flushed.
           sink = @mutex.synchronize { session_id && @modern_request_sinks[session_id] }
           if sink
             return false if sink.size >= MAX_MODERN_REQUEST_NOTIFICATIONS
 
-            sink << notification
+            begin
+              sink << notification.to_json
+            rescue JSON::GeneratorError => e
+              MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to generate notification" })
+              return false
+            end
             return true
           end
 
@@ -949,7 +956,7 @@ module MCP
           if notifications.empty?
             [modern_http_status(response), { "content-type" => "application/json" }, [response_json]]
           else
-            frames = notifications.map(&:to_json) + [response_json]
+            frames = notifications + [response_json]
             sse_body = frames.map { |frame| "event: message\ndata: #{frame}\n\n" }.join
             [200, SSE_HEADERS.dup, [sse_body]]
           end
