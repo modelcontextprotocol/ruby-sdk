@@ -257,6 +257,35 @@ module MCP
       assert_equal 4, call_count
     end
 
+    test "ServerSession notification methods report transport errors through the server's exception reporter" do
+      transport = Class.new(MockTransport) do
+        def send_notification(method, params = nil)
+          raise StandardError, "Transport error"
+        end
+      end.new(@server)
+      session = ServerSession.new(server: @server, transport: transport)
+      session.configure_logging(MCP::LoggingMessageNotification.new(level: "error"))
+      reported = []
+      @server.configuration.exception_reporter = ->(exception, context) { reported << [exception.message, context] }
+
+      assert_nothing_raised do
+        session.notify_elicitation_complete(elicitation_id: "elicitation-1")
+        session.notify_resources_updated(uri: "file:///a.txt")
+        session.notify_progress(progress_token: "token-1", progress: 1)
+        session.notify_log_message(data: "message", level: "error")
+      end
+
+      assert_equal(
+        [
+          ["Transport error", { notification: "elicitation_complete" }],
+          ["Transport error", { notification: "resources_updated" }],
+          ["Transport error", { notification: "progress" }],
+          ["Transport error", { notification: "log_message" }],
+        ],
+        reported,
+      )
+    end
+
     test "multiple notification methods can be called in sequence" do
       @server.notify_tools_list_changed
       @server.notify_prompts_list_changed
