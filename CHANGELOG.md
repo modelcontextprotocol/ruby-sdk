@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-10-27
+
+This release finishes the encoding fixes of 1.8.1 on the client and the HTTP transport, which no longer fail
+a request or a stream on a frame or a reply they cannot encode. The Changed entry alters what
+a `subscriptions/listen` stream honors under the exceptions described in [VERSIONING.md](VERSIONING.md):
+a `resources_subscribe_handler` that raises for a URI now narrows the acknowledgement, and the handler runs
+for listen streams without a matching `resources_unsubscribe_handler` call.
+
+### Changed
+
+- Consult the `resources_subscribe_handler` for the resource URIs of a `subscriptions/listen` stream (#632)
+
+### Fixed
+
+- Strip stdio client frames as bytes (#627)
+- Skip a stdio ping whose id cannot be encoded (#628)
+- Answer an HTTP request whose reply cannot be generated with Internal error (#629)
+- Drop a buffered notification that cannot be generated (#630)
+- Report failed session notifications through the server configuration (#631)
+
 ## [1.8.1] - 2026-10-21
 
 This release brings the server's JSON-RPC framing and capability advertisement, and the HTTP client's handling
