@@ -1051,7 +1051,7 @@ module MCP
 
           begin
             if RequestEnvelope.modern?(params)
-              RequestEnvelope.parse!(params, request: params)
+              envelope = RequestEnvelope.parse!(params, request: params)
             else
               return invalid_request_response("Invalid Request: modern requests require the SEP-2575 `_meta` envelope")
             end
@@ -1091,7 +1091,7 @@ module MCP
             return too_many_listen_subscriptions_response(request_id)
           end
 
-          honored = honored_filter(filter)
+          honored = honored_filter(filter, meta: params[:_meta], envelope: envelope, auth_info: auth_info)
 
           # The acknowledgement echoes the honored filter, whose resource URIs are client-supplied strings,
           # so it is encoded before the stream is committed to: a URI that cannot be written as JSON is
@@ -1338,8 +1338,9 @@ module MCP
 
         # Per SEP-2575, the server MUST NOT send notification types the client has not requested,
         # and the acknowledgement only includes types the server actually supports
-        # (derived from its declared capabilities).
-        def honored_filter(filter)
+        # (derived from its declared capabilities). Resource URIs are further narrowed to those
+        # the server's `resources_subscribe_handler` accepts; the field is omitted when none remain.
+        def honored_filter(filter, meta: nil, envelope: nil, auth_info: nil)
           capabilities = @server.capabilities
           honored = {}
           honored[:toolsListChanged] = true if filter[:toolsListChanged] && capability_flag?(capabilities, :tools, :listChanged)
@@ -1348,7 +1349,8 @@ module MCP
 
           subscriptions = filter[:resourceSubscriptions]
           if capability_flag?(capabilities, :resources, :subscribe) && subscriptions.is_a?(Array) && !subscriptions.empty?
-            honored[:resourceSubscriptions] = subscriptions.uniq
+            uris = @server.subscribable_resource_uris(subscriptions, meta: meta, envelope: envelope, auth_info: auth_info)
+            honored[:resourceSubscriptions] = uris unless uris.empty?
           end
 
           honored

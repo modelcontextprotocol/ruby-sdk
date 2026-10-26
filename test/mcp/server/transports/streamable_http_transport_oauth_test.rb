@@ -735,6 +735,28 @@ module MCP
           refute wait_until(timeout: 0.1) { stream.closed? }, "the stream was closed although its token is valid"
         end
 
+        test "the resources_subscribe_handler sees the token of a subscriptions/listen request" do
+          @server.capabilities = { resources: { subscribe: true } }
+          @server.resources_subscribe_handler do |params, server_context:|
+            owner = params[:uri].delete_prefix("file:///").delete_suffix(".txt")
+            raise RequestHandlerError.new("Forbidden", params, error_type: :invalid_params) unless server_context.auth_info.subject == owner
+          end
+          the_transport = transport
+
+          response = the_transport.handle_request(modern_rack_request(
+            modern_body("subscriptions/listen", { notifications: { resourceSubscriptions: ["file:///alice.txt", "file:///bob.txt"] } }),
+            headers: { "HTTP_AUTHORIZATION" => "Bearer alice-token" },
+          ))
+
+          assert_equal 200, response[0]
+
+          stream = TestStream.new
+          response[2].call(stream)
+          acknowledgement = JSON.parse(stream.buffer[/^data: (.+)$/, 1])
+
+          assert_equal ["file:///alice.txt"], acknowledgement.dig("params", "notifications", "resourceSubscriptions")
+        end
+
         test "a subscriptions/listen stream is closed at the keepalive once its token expires" do
           expired = Time.now.to_i - 1
           @verifier = StubVerifier.new(
