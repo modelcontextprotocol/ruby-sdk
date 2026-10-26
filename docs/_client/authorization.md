@@ -268,8 +268,9 @@ so the storage should expire entries older than `pending_authorization_max_age`,
 
 ### Token Endpoint Errors
 
-When a token exchange or refresh fails, `MCP::Client::OAuth::Flow::AuthorizationError` includes the HTTP status and
-the authorization server's `error` and `error_description` from [RFC 6749 Section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
+When the token endpoint answers a token exchange or refresh with a non-2xx response within the body cap,
+`MCP::Client::OAuth::Flow::AuthorizationError` includes the HTTP status and the authorization server's `error`
+and `error_description` from [RFC 6749 Section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
 For example:
 
 ```text
@@ -277,9 +278,12 @@ Token endpoint returned status 400. invalid_request: Client must not use multipl
 ```
 
 The exception exposes `http_status`, `error`, and `error_description` readers for structured diagnostics. Missing or non-string
-diagnostic fields are `nil`; non-JSON responses retain the status-only message. Other authorization failures have `nil` readers.
-An `invalid_grant` response still raises `Flow::InvalidGrantError`, a subclass of `Flow::AuthorizationError`, so refresh-token
-recovery behavior is unchanged.
+diagnostic fields are `nil`, as are blank ones; non-JSON responses retain the status-only message.
+When the authorization server returns an error to the authorization callback ([RFC 6749 Section 4.1.2.1](https://www.rfc-editor.org/rfc/rfc6749#section-4.1.2.1)),
+`error` and `error_description` are set the same way, with `http_status` left `nil`; other authorization failures have `nil` readers.
+A token endpoint response whose raw `error` is exactly `invalid_grant` still raises `Flow::InvalidGrantError`, a subclass of
+`Flow::AuthorizationError`, so refresh-token recovery behavior is unchanged. The class follows the raw value
+while the `error` reader holds the sanitized one, so `error == "invalid_grant"` alone does not imply that class.
 
 Diagnostic fields are limited to 128 characters for `error` and 512 for `error_description`, including a trailing `...` when
 truncated. Characters outside the RFC's printable ASCII set are replaced with spaces, and surrounding whitespace is removed.
