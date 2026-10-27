@@ -18,6 +18,35 @@ the server acknowledges the honored subset with `notifications/subscriptions/ack
 and every delivered notification carries the correlating `io.modelcontextprotocol/subscriptionId` in `_meta`.
 The honored subset follows the capabilities the server declares (`listChanged` and `subscribe` flags).
 
+`subscriptions/listen` takes the place of `resources/subscribe` in this lifecycle, so the URIs in `resourceSubscriptions`
+are passed to `Server#resources_subscribe_handler` one at a time, each as `{ uri: }`,
+with the listen request's `_meta` added when it carries one, and, when the handler declares it, a `server_context` holding the request's `auth_info`.
+A URI the handler raises for is left out of the acknowledgement, and the stream receives no `notifications/resources/updated` for it.
+Only whether the handler raised counts: its return value, including `false`, `nil`, or a `{ _meta: ... }` Hash, is discarded and accepts the URI.
+Unlike a `resources/subscribe` request, the `server_context` has no session, related request id, or cancellation,
+so session-scoped helpers such as `notify_resources_updated` do nothing there.
+
+The handler is consulted once, when the stream opens, and its decision is not re-evaluated while the stream stays open,
+so a later change in its answer takes effect only on a new stream.
+An authenticated stream ends under the stream expiry rules in [Authorization](/server/authorization/),
+and any stream ends when either side closes the connection or the transport closes.
+
+Each URI the handler raises for is reported to the exception reporter, one report per denied URI as for a denied `resources/subscribe` request,
+so a listen request naming many denied URIs produces as many reports.
+
+Whatever the handler records, such as a watcher or a counter, gets no paired cleanup.
+`resources_unsubscribe_handler` is not called when the stream ends, since the subscription lasts as long as the stream,
+and the handler may have run for a request that then opens no stream,
+such as one refused when two listen requests race for the last slot under `max_listen_subscriptions:`.
+
+```ruby
+server.resources_subscribe_handler do |params, server_context:|
+  unless readable?(server_context.auth_info, params[:uri])
+    raise MCP::Server::RequestHandlerError.new("Forbidden", params, error_type: :invalid_params)
+  end
+end
+```
+
 The client opens the stream with a `subscriptions/listen` request:
 
 ```json
