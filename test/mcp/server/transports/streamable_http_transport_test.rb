@@ -4781,6 +4781,36 @@ module MCP
           transport.close
         end
 
+        test "close called from inside a reap tears the transport down and lets the reaper finish" do
+          transport = StreamableHTTPTransport.new(@server, session_idle_timeout: 0.01)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+          listen_io = open_listen_stream(id: "listen-1", notifications: { toolsListChanged: true }, transport: transport)
+
+          # A host closing the transport from a stream's close hook puts `close` on the reaper thread.
+          closing_stream = Object.new
+          closing_stream.define_singleton_method(:close) { transport.close }
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = closing_stream
+          reaper_thread = transport.instance_variable_get(:@reaper_thread)
+
+          sleep(0.02) # Wait for the session to expire.
+
+          assert wake_reaper_until(transport) { !reaper_thread.alive? }, "the reaper did not end"
+          reaper_thread.join # Re-raises an exception the reaper died with.
+
+          assert_empty transport.instance_variable_get(:@listen_subscriptions), "the listen teardown did not run"
+          assert_predicate listen_io, :closed?
+          assert_empty transport.instance_variable_get(:@sessions)
+          assert_nil transport.instance_variable_get(:@reaper_thread)
+        ensure
+          transport.close
+        end
+
         test "reaper thread is not started when session_idle_timeout is nil" do
           transport = StreamableHTTPTransport.new(@server, session_idle_timeout: nil)
           assert_nil(transport.instance_variable_get(:@reaper_thread))
