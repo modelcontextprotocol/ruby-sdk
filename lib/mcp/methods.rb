@@ -22,6 +22,11 @@ module MCP
     RESOURCES_SUBSCRIBE = "resources/subscribe"
     RESOURCES_UNSUBSCRIBE = "resources/unsubscribe"
 
+    # Skills extension (SEP-2640): registered only when a server configures skills,
+    # so an unconfigured server answers `-32601` rather than a capability error.
+    SKILLS_LIST = "skills/list"
+    SKILLS_GET = "skills/get"
+
     TOOLS_CALL = "tools/call"
     TOOLS_LIST = "tools/list"
 

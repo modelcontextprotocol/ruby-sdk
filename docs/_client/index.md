@@ -24,6 +24,7 @@ This class supports:
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
 - Resource template listing via the `resources/templates/list` method (`MCP::Client#resource_templates`)
 - Resource reading via the `resources/read` method (`MCP::Client#read_resource`)
+- Skills (SEP-2640) via the `skills/list` and `skills/get` methods and digest-verified reads (`MCP::Client#list_skills`, `#get_skill`, `#read_skill_resource`), see [Skills](/extensions/skills/)
 - Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
 - Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
 - Completion requests via the `completion/complete` method (`MCP::Client#complete`); see [Completion](/server/completion/)

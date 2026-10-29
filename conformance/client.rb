@@ -297,9 +297,21 @@ begin
       abort("No tool exposed by conformance server for #{scenario}") unless tool
       client.call_tool(tool: tool, arguments: {})
     end
+  when "sep-2640-client-no-prefetch"
+    # SEP-2640: assembling a registry reads only the listing; the check is that no skill file is fetched.
+    client.list_skills
+  when "sep-2640-client-verify-digest", "sep-2640-client-verify-size", "sep-2640-client-verify-frontmatter"
+    # SEP-2640: the server tampers with `SKILL.md` on the wire. The verified read raises and latches the skill,
+    # so the supporting file below is never requested, which is how the harness detects the rejection.
+    client.list_skills
+    client.read_skill_resource(uri: "skill://pdf-processing/SKILL.md")
+    client.read_skill_resource(uri: "skill://pdf-processing/references/FORMS.md")
   else
     abort("Unknown or unsupported scenario: #{scenario}")
   end
+rescue MCP::Client::SkillVerificationError => e
+  warn("#{scenario}: client rejected the skill content as expected (#{e.reason})")
+  exit
 rescue MCP::Client::OAuth::Flow::AuthorizationError, MCP::Client::RequestHandlerError, Faraday::Error => e
   warn("#{scenario}: client ended in the expected terminal failure (#{e.class}: #{e.message})")
   exit

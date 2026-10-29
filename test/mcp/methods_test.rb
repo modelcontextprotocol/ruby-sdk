@@ -66,6 +66,16 @@ module MCP
 
     ensure_capability_raises_error_for Methods::COMPLETION_COMPLETE, required_capability_name: "completions"
 
+    # Skills (SEP-2640): the server registers these handlers only when skills are configured, so an unconfigured
+    # server answers `-32601` and the capability gate has nothing to add.
+    ensure_capability_does_not_raise_for Methods::SKILLS_LIST
+    ensure_capability_does_not_raise_for Methods::SKILLS_GET
+
+    test "names the SEP-2640 methods" do
+      assert_equal "skills/list", Methods::SKILLS_LIST
+      assert_equal "skills/get", Methods::SKILLS_GET
+    end
+
     # Client methods and notifications
     ensure_capability_does_not_raise_for Methods::NOTIFICATIONS_INITIALIZED
 

@@ -947,6 +947,7 @@ module Conformance
         ],
         resources: resources,
         resource_templates: resource_templates,
+        skills: skills,
         # A per-boot random key is enough for conformance: every MRTR round trip completes
         # within one server process, and sealing keeps the fixture's `requestState` values
         # tamper-evident without any tool-level verification code.
@@ -995,6 +996,12 @@ module Conformance
       ]
     end
 
+    # SEP-2640: the skill directories under conformance/skills, so the `sep-2640-skills-*` server scenarios have
+    # a catalog to enumerate; the files are served through `MCP::Skill.read_file` in the read handler below.
+    def skills
+      MCP::Skill.from_directory(File.expand_path("skills", __dir__))
+    end
+
     def configure_handlers(server)
       server.logging_message_notification = MCP::LoggingMessageNotification.new(level: "debug")
       server.server_context = server
@@ -1007,6 +1014,10 @@ module Conformance
     def configure_resources_read_handler(server)
       server.resources_read_handler do |params|
         uri = params[:uri].to_s
+
+        # A custom reader replaces the default one, skill files included (SEP-2640).
+        skill_file = MCP::Skill.read_file(server.skills, uri)
+        next skill_file if skill_file
 
         case uri
         when "test://static-text"
