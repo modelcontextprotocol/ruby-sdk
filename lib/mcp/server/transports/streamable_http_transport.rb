@@ -476,6 +476,9 @@ module MCP
         # with a `StandardError` does not stop the teardown below: `join` re-raises the exception a thread died with,
         # which is not this method's to raise. A reaper still alive after the wait is killed as before, leaving
         # the streams of that reap it had not closed yet as they were.
+        # A `close` running on the reaper thread itself, reached from a stream's `close` or from the exception reporter
+        # during a reap, neither joins nor kills it: the join would fail on its own thread and the kill would end
+        # this teardown with the reap that called it. The reaper leaves its loop on `@closing` once that reap returns.
         def close
           reaper = @mutex.synchronize do
             @closing = true
@@ -483,13 +486,15 @@ module MCP
             @reaper_thread
           end
 
-          begin
-            reaper&.join(REAPER_JOIN_TIMEOUT)
-          rescue StandardError
-            # The reaper is gone either way; the exception that ended it is not this method's to report.
-          end
+          if reaper && !reaper.equal?(Thread.current)
+            begin
+              reaper.join(REAPER_JOIN_TIMEOUT)
+            rescue StandardError
+              # The reaper is gone either way; the exception that ended it is not this method's to report.
+            end
 
-          reaper.kill if reaper&.alive?
+            reaper.kill if reaper.alive?
+          end
           @reaper_thread = nil
 
           teardown_listen_subscriptions
