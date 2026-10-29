@@ -22,16 +22,24 @@ are allowed to fail without affecting the exit code.
 
 ### Environment variables
 
-| Variable       | Description                           | Default |
-|----------------|---------------------------------------|---------|
-| `PORT`         | Server port (server conformance only) | `9292`  |
-| `SCENARIO`     | Run a single scenario by name         | (all)   |
-| `SPEC_VERSION` | Filter scenarios by spec version      | (all)   |
-| `VERBOSE`      | Show raw JSON output when set         | (off)   |
+| Variable       | Description                                                                  | Default |
+|----------------|------------------------------------------------------------------------------|---------|
+| `PORT`         | Server port (server conformance only)                                        | `9292`  |
+| `SCENARIO`     | Run a single scenario by name                                                | (all)   |
+| `SPEC_VERSION` | Filter scenarios by spec version                                             | (all)   |
+| `REQUIREMENTS` | Run a spec revision's frozen requirement set at that revision's wire version | (off)   |
+| `VERBOSE`      | Show raw JSON output when set                                                | (off)   |
+
+`REQUIREMENTS` runs exactly the scenarios a spec revision required when it shipped, which is
+what SEP-1730 tier scoring measures. It cannot be combined with `SCENARIO` or `SPEC_VERSION`:
+a requirement set already fixes which scenarios run.
 
 ```bash
 # Run a single server scenario
 bundle exec rake conformance:test SCENARIO=ping
+
+# Run the frozen 2026-07-28 requirement set
+bundle exec rake conformance:test REQUIREMENTS=2026-07-28
 
 # Use a different port with verbose output
 bundle exec rake conformance:test PORT=3000 VERBOSE=1

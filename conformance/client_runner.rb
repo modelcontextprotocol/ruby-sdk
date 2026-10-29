@@ -5,9 +5,10 @@ require "English"
 
 module Conformance
   class ClientRunner
-    def initialize(scenario: nil, spec_version: nil, verbose: false)
+    def initialize(scenario: nil, spec_version: nil, requirements: nil, verbose: false)
       @scenario = scenario
       @spec_version = spec_version
+      @requirements = requirements
       @verbose = verbose
     end
 
@@ -34,7 +35,10 @@ module Conformance
         "--command",
         "bundle exec ruby #{client_script}",
       ]
-      npx_command += if @scenario
+      # A requirement set already fixes which scenarios run, so it replaces the suite selection.
+      npx_command += if @requirements
+        ["--requirements", @requirements]
+      elsif @scenario
         ["--scenario", @scenario]
       else
         ["--suite", "all"]

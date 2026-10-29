@@ -17,9 +17,13 @@ RuboCop::RakeTask.new
 task default: [:rubocop, :test, "conformance:test"]
 
 namespace :conformance do
-  desc "Run MCP conformance tests (PORT, SCENARIO, SPEC_VERSION, VERBOSE)"
+  desc "Run MCP conformance tests (PORT, SCENARIO, SPEC_VERSION, REQUIREMENTS, VERBOSE)"
   task :test do |t|
     next unless npx_available?(t.name)
+
+    if ENV["REQUIREMENTS"] && (ENV["SCENARIO"] || ENV["SPEC_VERSION"])
+      abort("REQUIREMENTS cannot be combined with SCENARIO or SPEC_VERSION: a requirement set already fixes which scenarios run.")
+    end
 
     require_relative "conformance/server_runner"
     require_relative "conformance/client_runner"
@@ -28,6 +32,7 @@ namespace :conformance do
     options[:port] = Integer(ENV["PORT"]) if ENV["PORT"]
     options[:scenario] = ENV["SCENARIO"] if ENV["SCENARIO"]
     options[:spec_version] = ENV["SPEC_VERSION"] if ENV["SPEC_VERSION"]
+    options[:requirements] = ENV["REQUIREMENTS"] if ENV["REQUIREMENTS"]
     options[:verbose] = true if ENV["VERBOSE"]
 
     Conformance::ServerRunner.new(**options).run
