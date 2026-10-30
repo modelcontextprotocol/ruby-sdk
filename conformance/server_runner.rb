@@ -12,10 +12,11 @@ module Conformance
     SERVER_POLL_INTERVAL = 0.5
     SERVER_HEALTH_CHECK_RETRIES = (SERVER_START_TIMEOUT / SERVER_POLL_INTERVAL).to_i
 
-    def initialize(port: Server::DEFAULT_PORT, scenario: nil, spec_version: nil, verbose: false)
+    def initialize(port: Server::DEFAULT_PORT, scenario: nil, spec_version: nil, requirements: nil, verbose: false)
       @port = port
       @scenario = scenario
       @spec_version = spec_version
+      @requirements = requirements
       @verbose = verbose
     end
 
@@ -34,6 +35,7 @@ module Conformance
       npx_command = ["npx", "--yes", "@modelcontextprotocol/conformance@alpha", "server", "--url", "http://localhost:#{@port}/mcp"]
       npx_command += ["--scenario", @scenario] if @scenario
       npx_command += ["--spec-version", @spec_version] if @spec_version
+      npx_command += ["--requirements", @requirements] if @requirements
       npx_command += ["--verbose"] if @verbose
       npx_command += ["--expected-failures", expected_failures_yml]
       npx_command

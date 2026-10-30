@@ -27,3 +27,26 @@ jobs:
         with:
           node-version: '24' # Specify the latest Node.js version.
       - run: bundle exec rake conformance:test
+
+  # Frozen requirement sets for SEP-1730 tier scoring: each spec revision's scenarios run at
+  # that revision's own wire version, unlike the moving active suite above.
+  requirements-conformance:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    name: requirements-conformance (${{ matrix.requirements }})
+    strategy:
+      fail-fast: false
+      matrix:
+        requirements: ['2025-11-25', '2026-07-28']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0' # Specify the latest supported Ruby version.
+          bundler-cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24' # Specify the latest Node.js version.
+      - run: bundle exec rake conformance:test
+        env:
+          REQUIREMENTS: ${{ matrix.requirements }}
