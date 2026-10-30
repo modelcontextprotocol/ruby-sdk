@@ -5750,6 +5750,53 @@ module MCP
           end
         end
 
+        test "handle_request rejects headers carrying invalid UTF-8 bytes instead of raising" do
+          # A Rack server hands headers over as ASCII-8BIT, but a test request or a framework can tag them UTF-8,
+          # and String#downcase, #split, and regexps raise on invalid bytes in a UTF-8 string.
+          invalid = ->(value) { "#{value}\xFF".dup.force_encoding(Encoding::UTF_8) }
+          body = { jsonrpc: "2.0", method: "ping", id: "1" }.to_json
+          expectations = [
+            [{ "HTTP_HOST" => invalid.call("localhost") }, 403, "Forbidden: Invalid Host header"],
+            [{ "HTTP_ORIGIN" => invalid.call("https://app.example.com") }, 403, "Forbidden: Invalid Origin header"],
+            [{ "HTTP_ACCEPT" => invalid.call("application/json") }, 406, nil],
+            [{ "CONTENT_TYPE" => invalid.call("application/json") }, 415, nil],
+          ]
+
+          expectations.each do |headers, expected_status, expected_message|
+            request = create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }.merge(headers), body)
+
+            status, _headers, response_body = @transport.handle_request(request)
+
+            assert_equal expected_status, status, headers.keys.first
+            assert_equal expected_message, JSON.parse(response_body.first)["error"]["message"] if expected_message
+          end
+        end
+
+        test "GET request with an Accept header carrying invalid UTF-8 bytes returns 406 instead of raising" do
+          # The GET path validates `Accept` outside any rescue, so the raise reached the web server before.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "123", params: initialize_params }.to_json,
+          )
+          session_id = @transport.handle_request(init_request)[1]["mcp-session-id"]
+
+          request = create_rack_request(
+            "GET",
+            "/",
+            {
+              "HTTP_MCP_SESSION_ID" => session_id,
+              "HTTP_ACCEPT" => "text/event-stream\xFF".dup.force_encoding(Encoding::UTF_8),
+            },
+          )
+
+          status, _headers, body = @transport.handle_request(request)
+
+          assert_equal 406, status
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, JSON.parse(body.first)["error"]["code"]
+        end
+
         test "handle_request returns 403 for POST when Origin is not in allowed_origins" do
           transport = StreamableHTTPTransport.new(@server, allowed_origins: ["https://app.example.com"])
 
