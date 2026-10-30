@@ -102,7 +102,8 @@ module MCP
         got = server.handle(request("skills/get", { uri: "skill://git/SKILL.md" }))[:result]
         assert_equal annotated.to_h, got[:skill]
         assert_equal({ "com.example/origin" => "catalog" }, got[:skill][:_meta])
-        assert_equal '"_meta":{"com.example/origin":"catalog"}', JSON.generate(got[:skill])[/"_meta":\{[^}]*\}/]
+        # Read back through JSON, so the key the wire carries is checked, not the Symbol the Hash holds.
+        assert_equal({ "com.example/origin" => "catalog" }, JSON.parse(JSON.generate(got[:skill]))["_meta"])
       end
     end
 
