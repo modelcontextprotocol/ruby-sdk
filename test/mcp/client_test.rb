@@ -336,10 +336,14 @@ module MCP
           "tools" => [
             {
               "name" => "tool1",
+              "title" => "First tool",
               "description" => "tool1",
               "inputSchema" => {},
               "outputSchema" => { "type" => "object", "properties" => { "result" => { "type" => "string" } } },
               "annotations" => { "readOnlyHint" => true, "title" => "Tool One" },
+              "icons" => [{ "src" => "https://example.com/tool1.png", "mimeType" => "image/png" }],
+              "execution" => { "taskSupport" => "optional" },
+              "_meta" => { "ui" => { "resourceUri" => "ui://shop/plans", "visibility" => ["model", "app"] } },
             },
             { "name" => "tool2", "description" => "tool2", "inputSchema" => {} },
           ],
@@ -358,9 +362,18 @@ module MCP
       assert_equal("tool1", tools.first.name)
       assert_equal({ "type" => "object", "properties" => { "result" => { "type" => "string" } } }, tools.first.output_schema)
       assert_equal({ "readOnlyHint" => true, "title" => "Tool One" }, tools.first.annotations)
+      # Kept as sent: an MCP Apps host reads the tool's app from `_meta.ui`.
+      assert_equal("First tool", tools.first.title)
+      assert_equal([{ "src" => "https://example.com/tool1.png", "mimeType" => "image/png" }], tools.first.icons)
+      assert_equal({ "taskSupport" => "optional" }, tools.first.execution)
+      assert_equal({ "ui" => { "resourceUri" => "ui://shop/plans", "visibility" => ["model", "app"] } }, tools.first.meta)
       assert_equal("tool2", tools.last.name)
       assert_nil(tools.last.output_schema)
       assert_nil(tools.last.annotations)
+      assert_nil(tools.last.title)
+      assert_nil(tools.last.icons)
+      assert_nil(tools.last.execution)
+      assert_nil(tools.last.meta)
     end
 
     def test_tools_returns_empty_array_when_no_tools

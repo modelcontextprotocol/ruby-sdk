@@ -315,10 +315,14 @@ module MCP
 
         Tool.new(
           name: tool["name"],
+          title: tool["title"],
           description: tool["description"],
           input_schema: tool["inputSchema"],
           output_schema: tool["outputSchema"],
           annotations: tool["annotations"],
+          icons: tool["icons"],
+          execution: tool["execution"],
+          meta: tool["_meta"],
         )
       end
 

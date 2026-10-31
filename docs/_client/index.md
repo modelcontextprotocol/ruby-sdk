@@ -46,3 +46,7 @@ The client provides a wrapper class for tools returned by the server:
 - `MCP::Client::Tool` - Represents a single tool with its metadata
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
+`title`, `annotations`, `icons`, `execution`, and `meta` (the tool's `_meta`) are kept as the server sent them,
+so what an extension puts under `_meta` is readable: an MCP Apps host finds a tool's app under `tool.meta&.dig("ui", "resourceUri")`.
+These values are untrusted input from the server: the SDK passes them through without acting on them,
+and a host that renders `icons` or loads what `_meta` names treats them as it would any server-supplied URL or content.
