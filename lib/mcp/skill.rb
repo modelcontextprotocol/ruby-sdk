@@ -26,7 +26,7 @@ module MCP
   # Instances are frozen value objects. Equality is identity: the client binds verified state to the exact
   # entry object it checked.
   #
-  # https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/stable/skills.mdx
+  # https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/beta/skills.mdx
   class Skill
     EXTENSION_ID = "io.modelcontextprotocol/skills"
     # SEP-2640 limits per skill: servers SHOULD NOT serve a skill beyond them, hosts MUST accept up to them.
