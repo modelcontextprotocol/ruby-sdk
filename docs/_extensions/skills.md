@@ -10,8 +10,8 @@ Skills (SEP-2640) is a Final extension (negotiated via [Capability Extensions](/
 publish Agent Skills: folders holding a `SKILL.md` with YAML frontmatter plus supporting files, served as ordinary MCP resources
 under `skill://` URIs. The extension adds two methods, `skills/list` and `skills/get`, whose entries name a skill's `SKILL.md`,
 repeat its frontmatter, and list its files with SHA-256 digests and sizes, so a host can approve a skill from the listing and
-verify every file it later fetches. See the [Skills specification](https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/stable/skills.mdx),
-the stable text behind SEP-2640.
+verify every file it later fetches. See the [Skills specification](https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/beta/skills.mdx),
+the text behind SEP-2640, published at the Beta stage of the extension lifecycle (SEP-3392).
 
 ## Serving Skills
 
