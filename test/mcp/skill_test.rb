@@ -355,6 +355,9 @@ module MCP
       assert uri.structural?("skill://a/b")
       refute uri.structural?("skill://a//b")
       refute uri.structural?("skill://")
+      refute uri.structural?("skill://a\xFF/b"), "a String that is not validly encoded has no segments"
+      assert uri.structural?("skill://a/b".b)
+      assert_empty uri.candidate_skill_uris("skill://a\xFF/b/c")
       assert uri.manifest_uri?("skill://a/b/SKILL.md")
       refute uri.manifest_uri?("skill://SKILL.md")
       refute uri.manifest_uri?("skill://a/b/skill.md")

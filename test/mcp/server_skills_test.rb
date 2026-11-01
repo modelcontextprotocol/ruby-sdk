@@ -67,7 +67,7 @@ module MCP
       assert_equal({ skills: [] }, server.handle(request("skills/list"))[:result])
       response = server.handle(request("skills/get", { uri: "skill://x/SKILL.md" }))
       assert_equal(-32602, response[:error][:code])
-      assert_equal "Skill not found: skill://x/SKILL.md", response[:error][:message]
+      assert_equal 'Skill not found: "skill://x/SKILL.md"', response[:error][:message]
       assert_equal({ uri: "skill://x/SKILL.md" }, response[:error][:data])
     end
 
@@ -139,12 +139,65 @@ module MCP
     test "skills/get refuses a URI that does not name a SKILL.md before any lookup" do
       server = Server.new(name: "catalog", skills: [pdf_skill])
 
-      ["skill://pdf-processing/references/FORMS.md", "skill://pdf-processing", "http://x/SKILL.md", nil, 42].each do |uri|
+      ["skill://pdf-processing/references/FORMS.md", "skill://pdf-processing", "http://x/SKILL.md"].each do |uri|
         response = server.handle(request("skills/get", { uri: uri }))
-        assert_equal(-32602, response[:error][:code], uri.inspect)
+        assert_equal(-32602, response[:error][:code], uri)
         assert_equal "Invalid params: uri is not a skill SKILL.md URI", response[:error][:message]
         assert_equal({ uri: uri }, response[:error][:data])
       end
+
+      # A value that is not a String is not echoed, since it could hold bytes JSON cannot generate anywhere.
+      [nil, 42, { "k" => "\xFF" }, ["\xFF"]].each do |uri|
+        response = server.handle(request("skills/get", { uri: uri }))
+        assert_equal(-32602, response[:error][:code], uri.inspect)
+        assert_equal "Invalid params: uri is not a skill SKILL.md URI", response[:error][:message]
+        assert_equal response[:error][:message], response[:error][:data], uri.inspect
+      end
+      json = server.handle_json(%({"jsonrpc":"2.0","id":1,"method":"skills/get","params":{"uri":{"k":"\xFF"}}}))
+      assert_equal(-32602, JSON.parse(json, symbolize_names: true)[:error][:code])
+    end
+
+    test "skills/get refuses a URI that is not valid UTF-8 as invalid params, with an answer JSON can generate" do
+      server = Server.new(name: "catalog", skills: [pdf_skill])
+      uri = "skill://pdf-processing\xFF/SKILL.md"
+
+      response = server.handle(request("skills/get", { uri: uri }))
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "Invalid params: uri is not a skill SKILL.md URI", response[:error][:message]
+      assert_equal "skill://pdf-processing\uFFFD/SKILL.md", response[:error][:data][:uri]
+
+      # The parser passes the bytes through inside a string, and the refusal has to be generated around them.
+      json = server.handle_json(%({"jsonrpc":"2.0","id":1,"method":"skills/get","params":{"uri":"#{uri}"}}))
+      response = JSON.parse(json, symbolize_names: true)
+      assert_equal(-32602, response[:error][:code])
+      assert_equal "skill://pdf-processing\uFFFD/SKILL.md", response[:error][:data][:uri]
+    end
+
+    test "the Skill not found message quotes the URI, so the exception reporter gets one printable line" do
+      reported = []
+      configuration = Configuration.new(exception_reporter: ->(exception, _context) { reported << exception })
+      server = Server.new(name: "catalog", skills: [pdf_skill], configuration: configuration)
+      uri = "skill://x\r\nforged: line\e[0m/SKILL.md"
+
+      response = server.handle(request("skills/get", { uri: uri }))
+      assert_equal(-32602, response[:error][:code])
+      assert_equal 'Skill not found: "skill://x\r\nforged: line\e[0m/SKILL.md"', response[:error][:message]
+      assert_equal({ uri: uri }, response[:error][:data])
+      assert_equal [response[:error][:message]], reported.map(&:message)
+    end
+
+    test "a URI given to handle as a binary String is read as UTF-8 for the error data" do
+      server = Server.new(name: "catalog", skills: [pdf_skill])
+
+      # Validly encoded, so a manifest URI that names no skill. json 3.1 refuses to generate a binary String holding
+      # high bytes (json 3.0 generates this one with a deprecation warning, since its bytes are valid UTF-8), so the
+      # error data carries the same bytes read as UTF-8.
+      response = server.handle(request("skills/get", { uri: "skill://x\xC3\xA9/SKILL.md".b }))
+      assert_equal(-32602, response[:error][:code])
+      assert_equal 'Skill not found: "skill://x\xC3\xA9/SKILL.md"', response[:error][:message]
+      assert_equal "skill://x\xC3\xA9/SKILL.md", response[:error][:data][:uri]
+      assert_equal Encoding::UTF_8, response[:error][:data][:uri].encoding
+      assert_equal "skill://x\xC3\xA9/SKILL.md", JSON.parse(JSON.generate(response), symbolize_names: true)[:error][:data][:uri]
     end
 
     test "refuses a registry with duplicate URIs and accepts an enclosing skill that lists a nested skill's files" do
@@ -187,7 +240,7 @@ module MCP
       assert_equal pdf_skill.to_h, server.handle(request("skills/get", { uri: "skill://pdf-processing/SKILL.md" })).dig(:result, :skill)
       response = server.handle(request("skills/get", { uri: "skill://git/SKILL.md" }))
       assert_equal(-32602, response[:error][:code])
-      assert_equal "Skill not found: skill://git/SKILL.md", response[:error][:message]
+      assert_equal 'Skill not found: "skill://git/SKILL.md"', response[:error][:message]
       assert_equal [], server.skills
     end
 
@@ -276,6 +329,7 @@ module MCP
       assert_equal(-32603, server.handle(request("skills/get", { uri: "skill://pdf-processing/SKILL.md" }))[:error][:code])
       results[:get] = git_skill
       assert_equal(-32603, server.handle(request("skills/get", { uri: "skill://pdf-processing/SKILL.md" }))[:error][:code])
+      assert_equal 'skills/get returned "skill://git/SKILL.md" for "skill://pdf-processing/SKILL.md"', reported.last.message
       assert_equal 5, reported.size
       assert reported.all? { |exception| exception.is_a?(StandardError) && !exception.is_a?(Server::RequestHandlerError) }
 

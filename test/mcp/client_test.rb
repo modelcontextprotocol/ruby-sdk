@@ -425,6 +425,68 @@ module MCP
       assert_includes(warning, "invalid_tool")
     end
 
+    def test_tools_exclusion_warning_quotes_the_strings_the_server_chose
+      # The tool name, the property names, and the `x-mcp-header` values in the warning are the server's; control
+      # characters and bidirectional overrides in them could forge or reorder the line, so each piece is dumped.
+      transport = mock
+      transport.stubs(:modern?).returns(true)
+      mock_response = {
+        "result" => {
+          "tools" => [
+            {
+              "name" => "tool\nMCP::Client: forged",
+              "inputSchema" => {
+                "type" => "object",
+                "properties" => { "\u202Eeulav" => { "type" => "string", "x-mcp-header" => "X-Bad Name\e[0m" } },
+              },
+            },
+          ],
+        },
+      }
+      transport.expects(:send_request).returns(mock_response).once
+      client = Client.new(transport: transport)
+
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+      tools = nil
+      _out, warning = capture_io { tools = client.tools }
+      $VERBOSE = original_verbose
+
+      assert_empty(tools)
+      assert_equal(
+        "MCP::Client: excluding tool \"tool\\nMCP::Client: forged\" from tools/list: " \
+          "\"\\u202Eeulav: x-mcp-header `X-Bad Name\\e[0m` is not a valid RFC 9110 token\"\n",
+        warning,
+      )
+    end
+
+    def test_tools_exclusion_warning_dumps_a_tool_name_that_is_not_a_string
+      transport = mock
+      transport.stubs(:modern?).returns(true)
+      mock_response = {
+        "result" => {
+          "tools" => [
+            {
+              "name" => { "x" => "\u202E" },
+              "inputSchema" => { "type" => "object", "properties" => { "v" => { "type" => "string", "x-mcp-header" => "bad name" } } },
+            },
+          ],
+        },
+      }
+      transport.expects(:send_request).returns(mock_response).once
+      client = Client.new(transport: transport)
+
+      original_verbose = $VERBOSE
+      $VERBOSE = false
+      _out, warning = capture_io { client.tools }
+      $VERBOSE = original_verbose
+
+      # `inspect` leaves a printable character such as U+202E inside a nested String as it is, so the whole is dumped.
+      assert_equal(1, warning.lines.size)
+      refute_match(/[^\x00-\x7F]/, warning)
+      assert_includes(warning, "\\u202E")
+    end
+
     def test_tools_keeps_invalid_x_mcp_header_definitions_on_a_legacy_connection
       transport = mock
       transport.stubs(:modern?).returns(false)

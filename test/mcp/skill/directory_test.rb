@@ -89,7 +89,7 @@ module MCP
           assert_equal "n\n", server.handle(read_request("skill://acme/outer/inner/notes.txt")).dig(:result, :contents, 0, :text)
           response = server.handle(read_request("skill://acme/outer/missing.md"))
           assert_equal(-32602, response[:error][:code])
-          assert_equal "Skill file not found: skill://acme/outer/missing.md", response[:error][:message]
+          assert_equal 'Skill file not found: "skill://acme/outer/missing.md"', response[:error][:message]
           assert_equal [], server.handle(read_request("skill://elsewhere/x"))[:result][:contents]
 
           listed = server.handle({ jsonrpc: "2.0", id: 1, method: "resources/list" })[:result][:resources]
@@ -281,8 +281,22 @@ module MCP
           ["skill://pdf-processing/.env", "skill://pdf-processing/../pdf-processing/SKILL.md", "skill://pdf-processing/references/FORMS.md/"].each do |uri|
             response = server.handle(read_request(uri))
             assert_equal(-32602, response[:error][:code], uri)
-            assert_equal "Skill file not found: #{uri}", response[:error][:message]
+            assert_equal "Skill file not found: \"#{uri}\"", response[:error][:message]
           end
+        end
+      end
+
+      test "a URI under a skill root that is not valid UTF-8 is refused with an answer JSON can generate" do
+        with_root do |root|
+          pdf_root(root)
+          server = Server.new(name: "catalog", skills: Skill.from_directory(root))
+          uri = "skill://pdf-processing/\xFF.md"
+
+          json = server.handle_json(%({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"#{uri}"}}))
+          response = JSON.parse(json, symbolize_names: true)
+          assert_equal(-32602, response[:error][:code])
+          assert_equal 'Skill file not found: "skill://pdf-processing/\xFF.md"', response[:error][:message]
+          assert_equal "skill://pdf-processing/\uFFFD.md", response[:error][:data][:uri]
         end
       end
 
