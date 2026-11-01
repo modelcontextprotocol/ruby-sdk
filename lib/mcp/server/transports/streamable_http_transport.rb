@@ -1899,7 +1899,7 @@ module MCP
         end
 
         def validate_accept_header(request, required_types)
-          accept_header = request.env["HTTP_ACCEPT"]
+          accept_header = header_bytes(request, "HTTP_ACCEPT")
           return not_acceptable_response(required_types) unless accept_header
 
           accepted_types = parse_accept_header(accept_header)
@@ -1918,7 +1918,7 @@ module MCP
         end
 
         def validate_content_type(request)
-          content_type = request.env["CONTENT_TYPE"]
+          content_type = header_bytes(request, "CONTENT_TYPE")
           media_type = content_type&.split(";")&.first&.strip&.downcase
           return if media_type == "application/json"
 
@@ -2428,10 +2428,18 @@ module MCP
           validate_host(request) || validate_origin(request)
         end
 
+        # A header value as bytes. Rack servers hand header values over as ASCII-8BIT, where every byte is valid, but a framework
+        # or a test request can tag them UTF-8, and then `downcase`, `split`, and regexps raise on an invalid byte sequence
+        # before any rescue applies. Reading the value as bytes puts both on the same footing: a malformed value fails its comparison
+        # and gets the rejection that comparison produces, instead of failing the request.
+        def header_bytes(request, name)
+          request.env[name]&.b
+        end
+
         # Rejects a rebound `Host` (e.g. `evil.example.com` re-pointed at 127.0.0.1).
         # A request without a `Host` header (e.g. HTTP/1.0) is allowed; the rebinding vector this guards against always carries one.
         def validate_host(request)
-          host = request.env["HTTP_HOST"]
+          host = header_bytes(request, "HTTP_HOST")
           return if host.nil?
 
           # An `allowed_hosts:` entry matches either the bare host name (any port)
@@ -2446,7 +2454,7 @@ module MCP
         # A request without an `Origin` header (typical for non-browser MCP clients) is allowed. A browser cross-origin request is
         # rejected unless the origin is same-origin or explicitly allow-listed via `allowed_origins:`.
         def validate_origin(request)
-          origin = request.env["HTTP_ORIGIN"]
+          origin = header_bytes(request, "HTTP_ORIGIN")
           return if origin.nil?
           return if same_origin?(origin, request)
           return if @allowed_origins.include?(origin.downcase)
@@ -2467,7 +2475,7 @@ module MCP
         # but the `Origin`'s scheme is used to drop a redundant default port (`:80` for http, `:443` for https) from
         # both sides so `http://example.com` matches `Host: example.com:80`. Comparison is case-insensitive.
         def same_origin?(origin, request)
-          host = request.env["HTTP_HOST"]
+          host = header_bytes(request, "HTTP_HOST")
           return false if host.nil?
 
           normalized = origin.downcase
