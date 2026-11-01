@@ -3206,6 +3206,35 @@ module MCP
       assert_equal({ result: "success" }, response[:result][:structuredContent])
     end
 
+    test "tools/call validates structuredContent against an output schema whose root is a $dynamicRef" do
+      tool = Tool.define(
+        name: "dynamic_ref_tool",
+        output_schema: {
+          "$dynamicRef": "#vector",
+          "$defs": { vector: { "$dynamicAnchor": "vector", type: "array", items: { type: "number" } } },
+        },
+      ) do
+        Tool::Response.new([{ type: "text", text: "[1, 2]" }], structured_content: [1, 2])
+      end
+      server = Server.new(
+        tools: [tool],
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+
+      listed = server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })[:result][:tools].first
+      refute listed[:outputSchema].key?(:type)
+
+      response = server.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "dynamic_ref_tool" },
+      })
+
+      assert_nil response[:error]
+      assert_equal [1, 2], response[:result][:structuredContent]
+    end
+
     test "tools/call returns JSON-RPC error for invalid structuredContent when output schema validation is enabled" do
       tool = Tool.define(
         name: "invalid_structured_content_tool",

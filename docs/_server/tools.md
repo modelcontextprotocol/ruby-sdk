@@ -265,7 +265,8 @@ end
 ```
 
 Please note: in this case, you must provide `type: "array"`. The default type for output schemas is `object`,
-applied only when the schema declares no root keyword (`type`, `$ref`, `oneOf`, `anyOf`, `allOf`, `not`, `if`, `const`, `enum`).
+applied only when the schema declares none of these root keywords:
+`type`, `$ref`, `$dynamicRef`, `oneOf`, `anyOf`, `allOf`, `not`, `if`, `const`, `enum`.
 
 Per SEP-2106, an output schema may be any valid JSON Schema 2020-12 document, including a primitive root
 (`{ type: "string" }`) or a root-level composition:
@@ -283,7 +284,7 @@ end
 
 Input schemas keep `type: "object"` at the root but accept the full 2020-12 vocabulary below it
 (`$defs`/`$ref`, `oneOf`/`anyOf`/`allOf`/`not`, `if`/`then`/`else`). Two resource bounds apply to
-all tool schemas: only same-document `$ref`s (starting with `#`) are accepted, and documents are
+all tool schemas: only same-document `$ref` and `$dynamicRef` values (starting with `#`) are accepted, and documents are
 capped at `MCP::Tool::Schema::MAX_SCHEMA_DEPTH` nesting levels and `MCP::Tool::Schema::MAX_SUBSCHEMA_COUNT` subschema objects;
 violations raise `ArgumentError` at construction time.
 
