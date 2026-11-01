@@ -3,20 +3,21 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ruby/setup-ruby has no CRuby below 3.2 for ubuntu-26.04, which ubuntu-latest points to, so those run on ubuntu-24.04.
+    runs-on: ${{ matrix.entry.os }}
     permissions:
       contents: read
     strategy:
       matrix:
         entry:
-          - { ruby: '2.7.0', allowed-failure: false } # Minimum supported Ruby version.
-          - { ruby: '3.0', allowed-failure: false }
-          - { ruby: '3.1', allowed-failure: false }
-          - { ruby: '3.2', allowed-failure: false }
-          - { ruby: '3.3', allowed-failure: false }
-          - { ruby: '3.4', allowed-failure: false }
-          - { ruby: '4.0', allowed-failure: false }
-          - { ruby: 'head', allowed-failure: true }
+          - { ruby: '2.7.0', os: ubuntu-24.04, allowed-failure: false } # Minimum supported Ruby version.
+          - { ruby: '3.0', os: ubuntu-24.04, allowed-failure: false }
+          - { ruby: '3.1', os: ubuntu-24.04, allowed-failure: false }
+          - { ruby: '3.2', os: ubuntu-latest, allowed-failure: false }
+          - { ruby: '3.3', os: ubuntu-latest, allowed-failure: false }
+          - { ruby: '3.4', os: ubuntu-latest, allowed-failure: false }
+          - { ruby: '4.0', os: ubuntu-latest, allowed-failure: false }
+          - { ruby: 'head', os: ubuntu-latest, allowed-failure: true }
     name: Test Ruby ${{ matrix.entry.ruby }}
     steps:
       - uses: actions/checkout@v7
