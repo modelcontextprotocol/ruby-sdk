@@ -75,6 +75,8 @@ see [Server Transports](/server/transports/).
 A minimal client spawns a stdio server as a subprocess, connects, and lists and calls its tools:
 
 ```ruby
+require "mcp"
+
 stdio_transport = MCP::Client::Stdio.new(
   command: "bundle",
   args: ["exec", "ruby", "path/to/server.rb"],
