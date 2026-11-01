@@ -265,7 +265,7 @@ end
 ```
 
 Please note: in this case, you must provide `type: "array"`. The default type for output schemas is `object`,
-applied only when the schema declares no root keyword (`type`, `$ref`, `oneOf`, `anyOf`, `allOf`, `not`, `if`, `const`, `enum`).
+applied only when the schema declares no root keyword (`type`, `$ref`, `$dynamicRef`, `oneOf`, `anyOf`, `allOf`, `not`, `if`, `const`, `enum`).
 
 Per SEP-2106, an output schema may be any valid JSON Schema 2020-12 document, including a primitive root
 (`{ type: "string" }`) or a root-level composition:

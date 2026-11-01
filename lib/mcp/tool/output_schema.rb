@@ -9,7 +9,7 @@ module MCP
 
       # Root-level keywords whose presence means the user already chose a root schema shape,
       # so no `type: "object"` default should be merged in.
-      ROOT_SCHEMA_KEYWORDS = [:type, :"$ref", :oneOf, :anyOf, :allOf, :not, :if, :const, :enum].freeze
+      ROOT_SCHEMA_KEYWORDS = [:type, :"$ref", :"$dynamicRef", :oneOf, :anyOf, :allOf, :not, :if, :const, :enum].freeze
 
       def validate_result(result)
         errors = fully_validate(result)

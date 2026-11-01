@@ -238,6 +238,40 @@ module MCP
         assert_raises(OutputSchema::ValidationError) { schema.validate_result(42) }
       end
 
+      [
+        ["array", [1, 2], ["bad"]],
+        ["string", "result", 42],
+        ["number", 3.5, "bad"],
+        ["boolean", true, "true"],
+        ["null", nil, false],
+      ].each do |type, valid, invalid|
+        [false, true].each do |string_keys|
+          test "preserves a root $dynamicRef to #{type} with string keys #{string_keys}" do
+            target = { "$dynamicAnchor": "result", type: type }
+            target[:items] = { type: "number" } if type == "array"
+            definition = { "$defs": { result: target }, "$dynamicRef": "#result" }
+            definition = JSON.parse(JSON.generate(definition)) if string_keys
+            schema = OutputSchema.new(definition)
+
+            refute schema.to_h.key?(:type)
+            assert_equal "#result", schema.to_h[:"$dynamicRef"]
+            assert_nothing_raised { schema.validate_result(valid) }
+            assert_raises(OutputSchema::ValidationError) { schema.validate_result(invalid) }
+          end
+        end
+      end
+
+      test "preserves an explicit type constraint beside a root $dynamicRef" do
+        schema = OutputSchema.new(
+          "$defs": { result: { "$dynamicAnchor": "result", type: "array" } },
+          "$dynamicRef": "#result",
+          type: "object",
+        )
+        assert_equal "object", schema.to_h[:type]
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result([1, 2]) }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result({}) }
+      end
+
       test "allows primitive root schemas" do
         schema = OutputSchema.new(type: "string")
 

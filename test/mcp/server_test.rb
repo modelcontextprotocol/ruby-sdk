@@ -4321,6 +4321,27 @@ module MCP
       end
     end
 
+    test "#handle tools/call validates output against a root dynamic reference" do
+      server = Server.new(
+        name: "dynamic_output",
+        configuration: Configuration.new(validate_tool_call_results: true),
+      )
+      server.define_tool(
+        name: "vector",
+        output_schema: {
+          "$defs": { vector: { "$dynamicAnchor": "vector", type: "array", items: { type: "number" } } },
+          "$dynamicRef": "#vector",
+        },
+      ) { Tool::Response.new(structured_content: [1, 2]) }
+      response = server.handle({
+        jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "vector", arguments: {} },
+      })
+
+      refute response.key?(:error)
+      assert_equal [1, 2], response.dig(:result, :structuredContent)
+      assert_equal "[1,2]", response.dig(:result, :content, 0, :text)
+    end
+
     test "#handle tools/call mirrors non-object structuredContent when content is omitted or nil" do
       # Per SEP-2106, `structuredContent` may be any JSON value. Older clients may only read `content`,
       # so the server adds a serialized fallback when the tool provided no content blocks.
