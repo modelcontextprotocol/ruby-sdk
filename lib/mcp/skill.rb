@@ -63,10 +63,10 @@ module MCP
         uri.bytesize <= MAX_RESOLVED_BYTES && uri.count("/") <= MAX_RESOLVED_SEGMENTS + 1
       end
 
-      # The path segments of a `skill://` URI, or nil when it is not structurally valid: a String in
-      # an ASCII-compatible encoding with at least one segment, none empty, none `.` or `..`.
+      # The path segments of a `skill://` URI, or nil when it is not structurally valid: a validly encoded String
+      # in an ASCII-compatible encoding with at least one segment, none empty, none `.` or `..`.
       def segments(uri)
-        return unless uri.is_a?(String) && uri.encoding.ascii_compatible? && uri.start_with?(SCHEME)
+        return unless uri.is_a?(String) && uri.encoding.ascii_compatible? && uri.valid_encoding? && uri.start_with?(SCHEME)
 
         parts = uri[SCHEME.length..-1].split("/", -1)
         return if parts.empty? || parts.any? { |part| part.empty? || part == "." || part == ".." }

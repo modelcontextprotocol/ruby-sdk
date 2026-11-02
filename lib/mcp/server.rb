@@ -1547,7 +1547,7 @@ module MCP
           request,
           error_type: :invalid_params,
           error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
-          error_data: { uri: uri },
+          error_data: refused_uri_data(uri),
         )
       end
 
@@ -1555,7 +1555,7 @@ module MCP
         result = invoke_skills_handler(@skills_get_handler, request, server_context)
         unless result.nil?
           raise invalid_skills_result(request, "skills/get returned #{result.class}") unless result.is_a?(Skill)
-          raise invalid_skills_result(request, "skills/get returned #{result.uri} for #{uri}") unless result.uri == uri
+          raise invalid_skills_result(request, "skills/get returned #{result.uri.dump} for #{uri.dump}") unless result.uri == uri
 
           problem = skills_problem([result])
           raise invalid_skills_result(request, problem) if problem
@@ -1567,11 +1567,11 @@ module MCP
 
       if skill.nil?
         raise RequestHandlerError.new(
-          "Skill not found: #{uri}",
+          "Skill not found: #{uri.dump}",
           request,
           error_type: :invalid_params,
           error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
-          error_data: { uri: uri },
+          error_data: refused_uri_data(uri),
         )
       end
 
@@ -1763,11 +1763,11 @@ module MCP
       # is not served, and the Skills extension asks for `-32602` where the base reader keeps its `[]`.
       if resource.nil? && uri.is_a?(String) && @skill_file_roots.any? { |root| Skill::Uri.under?(uri, root) }
         raise RequestHandlerError.new(
-          "Skill file not found: #{uri}",
+          "Skill file not found: #{uri.dump}",
           request,
           error_type: :invalid_params,
           error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
-          error_data: { uri: uri },
+          error_data: refused_uri_data(uri),
         )
       end
 
@@ -2088,6 +2088,16 @@ module MCP
       end
 
       { completion: { values: values, total: total, hasMore: has_more }.compact }
+    end
+
+    # The error data of a Skills refusal: the request URI when it is a String, read as UTF-8 with its invalid bytes
+    # replaced, so that the response can be generated whatever bytes the request held; nothing for another value,
+    # which could hold such bytes anywhere, so the data falls back to the message. The messages quote the URI with
+    # `dump` for the same reason, and so that the exception reporter gets one printable line.
+    def refused_uri_data(uri)
+      return unless uri.is_a?(String)
+
+      { uri: uri.dup.force_encoding(Encoding::UTF_8).scrub }
     end
   end
 end

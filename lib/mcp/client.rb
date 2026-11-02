@@ -697,7 +697,9 @@ module MCP
       scan = McpParamHeaders.scan(tool["inputSchema"])
       return false if scan[:valid]
 
-      warn("MCP::Client: excluding tool #{tool["name"].inspect} from tools/list: #{scan[:reason]}")
+      name = tool["name"]
+      # Both pieces are the server's: `dump` keeps control characters and bidirectional overrides out of the log line.
+      warn("MCP::Client: excluding tool #{(name.is_a?(String) ? name : name.inspect).dump} from tools/list: #{scan[:reason].dump}")
       true
     end
 
