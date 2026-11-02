@@ -238,6 +238,45 @@ module MCP
         assert_raises(OutputSchema::ValidationError) { schema.validate_result(42) }
       end
 
+      test "does not inject a root type into a root-level $dynamicRef schema" do
+        # `Schema` restricts `$ref` and `$dynamicRef` alike, and the root default has to know both: with the object default merged in,
+        # this schema advertised `type: "object"` and rejected the array it describes.
+        schema = OutputSchema.new(
+          "$dynamicRef": "#vector",
+          "$defs": { vector: { "$dynamicAnchor": "vector", type: "array", items: { type: "number" } } },
+        )
+
+        refute schema.to_h.key?(:type)
+        assert_equal "#vector", schema.to_h[:"$dynamicRef"]
+        assert_nothing_raised { schema.validate_result([1, 2]) }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result(["bad"]) }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result({}) }
+        assert_empty MCP::Tool::Schema::REFERENCE_KEYWORDS - OutputSchema::ROOT_SCHEMA_KEYWORDS
+      end
+
+      test "keeps an explicit type beside a root-level $dynamicRef" do
+        schema = OutputSchema.new(
+          type: "array",
+          "$dynamicRef": "#vector",
+          "$defs": { vector: { "$dynamicAnchor": "vector", items: { type: "number" } } },
+        )
+
+        assert_equal "array", schema.to_h[:type]
+        assert_nothing_raised { schema.validate_result([1, 2]) }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result("text") }
+      end
+
+      test "does not inject a root type into a root-level $dynamicRef schema given with String keys" do
+        schema = OutputSchema.new(
+          "$dynamicRef" => "#scalar",
+          "$defs" => { "scalar" => { "$dynamicAnchor" => "scalar", "type" => "string" } },
+        )
+
+        refute schema.to_h.key?(:type)
+        assert_nothing_raised { schema.validate_result("text") }
+        assert_raises(OutputSchema::ValidationError) { schema.validate_result(42) }
+      end
+
       test "allows primitive root schemas" do
         schema = OutputSchema.new(type: "string")
 

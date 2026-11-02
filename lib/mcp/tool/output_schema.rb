@@ -7,9 +7,10 @@ module MCP
     class OutputSchema < Schema
       class ValidationError < StandardError; end
 
-      # Root-level keywords whose presence means the user already chose a root schema shape,
-      # so no `type: "object"` default should be merged in.
-      ROOT_SCHEMA_KEYWORDS = [:type, :"$ref", :oneOf, :anyOf, :allOf, :not, :if, :const, :enum].freeze
+      # Root-level keywords whose presence means the user already chose a root schema shape, so no `type: "object"`
+      # default should be merged in. Both reference keywords count, since a root `$dynamicRef` names the shape as
+      # a root `$ref` does; they come from `Schema` so that this list cannot drift from the same-document check.
+      ROOT_SCHEMA_KEYWORDS = [:type, *REFERENCE_KEYWORDS, :oneOf, :anyOf, :allOf, :not, :if, :const, :enum].freeze
 
       def validate_result(result)
         errors = fully_validate(result)
