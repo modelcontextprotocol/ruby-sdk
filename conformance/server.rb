@@ -6,6 +6,7 @@ require "securerandom"
 require "set"
 require "uri"
 require_relative "../lib/mcp"
+require_relative "../examples/in_memory_event_store"
 
 module Conformance
   # 1x1 red PNG pixel (matches TypeScript SDK and Python SDK)
@@ -319,7 +320,13 @@ module Conformance
       description "A tool that triggers SSE stream closure to test client reconnection behavior"
 
       class << self
-        def call(**_args)
+        # SEP-1699: the response stream is closed mid-call, so the referee has to reconnect with `Last-Event-ID`
+        # to receive the second log message and the result, as the TypeScript and Python fixtures do.
+        def call(server_context:, **_args)
+          server_context.notify_log_message(data: "Before disconnect", level: "info", logger: "test_reconnection")
+          server_context.close_sse_stream
+          sleep(0.2)
+          server_context.notify_log_message(data: "After reconnect", level: "info", logger: "test_reconnection")
           MCP::Tool::Response.new([MCP::Content::Text.new("Reconnection test completed").to_h])
         end
       end
@@ -909,7 +916,12 @@ module Conformance
 
     def start
       server = build_server
-      transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+      transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+        server,
+        # SEP-1699: lets `test_reconnection` close its stream and the referee resume it with `Last-Event-ID`.
+        event_store: InMemoryEventStore.new,
+        retry_interval: 100,
+      )
       configure_handlers(server)
       rack_app = build_rack_app(transport)
 

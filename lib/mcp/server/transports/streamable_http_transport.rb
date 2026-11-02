@@ -218,6 +218,13 @@ module MCP
         #   expiry closes the stream earlier when it comes first; the cap is what bounds a stream whose token reports no
         #   expiry. `nil` removes the cap, leaving such a stream open until either side disconnects. Streams opened without
         #   a token are never capped.
+        # @param event_store [MCP::Server::Transports::EventStore, nil] enables SSE stream resumability (MCP 2025-11-25,
+        #   SEP-1699): every event is stored under the id the store assigns and written with it, each stream opens with
+        #   a priming event, and a GET carrying `Last-Event-ID` replays the events of that stream the client missed and
+        #   resumes it. The SDK ships no store; `examples/in_memory_event_store.rb` in its repository is one for
+        #   a single process. Not supported in stateless mode, which has no sessions to resume.
+        # @param retry_interval [Integer, nil] milliseconds the SSE `retry` field of each priming event asks the client to
+        #   wait before reconnecting; without it the client applies its own delay. Requires `event_store`.
         def initialize(
           server,
           stateless: false,
@@ -241,7 +248,9 @@ module MCP
           resource_metadata: nil,
           resource_metadata_url: nil,
           scope_matcher: nil,
-          max_stream_lifetime: DEFAULT_MAX_STREAM_LIFETIME
+          max_stream_lifetime: DEFAULT_MAX_STREAM_LIFETIME,
+          event_store: nil,
+          retry_interval: nil
         )
           super(server)
           # Maps `session_id` to `{ get_sse_stream: stream_object, server_session: ServerSession, last_active_at: float_from_monotonic_clock, origin: origin_header }`.
@@ -365,6 +374,27 @@ module MCP
 
           @max_stream_lifetime = max_stream_lifetime
 
+          if event_store
+            raise ArgumentError, "event_store is not supported in stateless mode." if @stateless
+
+            unless event_store.respond_to?(:store_event) && event_store.respond_to?(:events_after)
+              raise ArgumentError, "event_store must respond to store_event and events_after (see MCP::Server::Transports::EventStore)"
+            end
+          end
+
+          @event_store = event_store
+
+          if retry_interval
+            # A retry interval without a store would promise a resumable stream the transport cannot resume.
+            raise ArgumentError, "retry_interval requires event_store" unless event_store
+
+            unless retry_interval.is_a?(Integer) && retry_interval.positive?
+              raise ArgumentError, "retry_interval must be a positive Integer of milliseconds or nil"
+            end
+          end
+
+          @retry_interval = retry_interval
+
           # `close` sets the flag and signals the reaper under `@mutex`, so the reaper leaves its wait at once instead of
           # being killed in the middle of a reap.
           @closing = false
@@ -384,6 +414,17 @@ module MCP
         # A write blocks only once the peer's socket buffers are full, which takes a reader already hundreds of kilobytes behind;
         # one that still has not taken the frame after this long is dropped whether it stopped reading or is only that slow.
         DEFAULT_STREAM_WRITE_TIMEOUT = 10
+
+        # The first protocol version whose clients parse an SSE event with empty data, which the priming event of
+        # SEP-1699 resumability is. A session that negotiated an earlier version gets no priming event and is never
+        # asked to resume, since it would have no event id to come back with; its other events still carry ids.
+        RESUMABLE_PROTOCOL_VERSION = "2025-11-25"
+
+        # Replay passes a resume makes before it gives up attaching. Each pass takes the events stored since
+        # the previous one and a further pass follows whenever that batch was not empty, so a sender that stores
+        # at least one event during each write keeps the loop going; after this many passes that each found events,
+        # the connection is closed behind the last batch for the client to reconnect from.
+        REPLAY_PASS_LIMIT = 16
         SESSION_REAP_INTERVAL = 60
         # Seconds `close` waits for a reap in progress to finish closing its streams before it kills the reaper.
         REAPER_JOIN_TIMEOUT = 5
@@ -602,44 +643,41 @@ module MCP
           return false if @enable_json_response && related_request_id
 
           streams_to_close = []
-
-          # Resolve the target stream under the lock, then write outside it: a stalled SSE reader
-          # must not block every other session that needs `@mutex`.
-          stream = @mutex.synchronize do
-            next unless (session = @sessions[session_id])
+          live = @mutex.synchronize do
+            next false unless (session = @sessions[session_id])
 
             if session_expired?(session)
               cleanup_and_collect_stream(session_id, streams_to_close)
-              next
+              next false
             end
 
-            active_stream(session, streams_to_close, related_request_id: related_request_id)
+            true
           end
 
           close_streams(streams_to_close)
-          return false unless stream
+          return false unless live
 
-          write_notification(stream, notification, session_id, related_request_id)
+          store_and_write(session_id, related_request_id, notification.to_json)
         end
 
         def deliver_broadcast_notification(notification)
           streams_to_close = []
 
-          # Snapshot the connected streams under the lock, then write to each outside it.
+          # Snapshot the sessions under the lock, then write to each outside it. A session whose GET stream is
+          # closed at the moment still takes the notification when it has opened that stream before and an event
+          # store keeps it for the reconnect; one that never opened the stream has no cursor to resume from.
           targets = @mutex.synchronize do
             expired_session_ids = []
 
             collected = @sessions.filter_map do |session_id, session|
-              next unless session[:get_sse_stream]
+              next unless session[:get_sse_stream] || (@event_store && session[:get_stream_opened])
 
               if session_expired?(session)
                 expired_session_ids << session_id
                 next
               end
 
-              stream = active_stream(session, streams_to_close)
-
-              [session_id, stream] if stream
+              session_id
             end
 
             expired_session_ids.each do |session_id|
@@ -651,20 +689,10 @@ module MCP
 
           close_streams(streams_to_close)
 
-          targets.count do |session_id, stream|
-            write_notification(stream, notification, session_id, nil)
+          json = notification.to_json
+          targets.count do |session_id|
+            store_and_write(session_id, nil, json)
           end
-        end
-
-        # Writes a notification to an SSE stream without holding `@mutex`. On a write error,
-        # drops the broken stream and returns false; on success returns true.
-        def write_notification(stream, notification, session_id, related_request_id)
-          push_to_stream(stream, notification)
-          true
-        rescue *STREAM_WRITE_ERRORS => e
-          MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to send notification" })
-          drop_broken_stream(session_id, stream, related_request_id)
-          false
         end
 
         # Removes a stream that failed to accept a write. A request-scoped stream is dropped on its own;
@@ -675,6 +703,8 @@ module MCP
         # the lock that removes the session: the failed write may have been picked for a stream that was detached since,
         # because its token expired and the client reopened, and the stream opened in its place must stay. A failed
         # stream the session no longer holds was closed by whichever path detached it, so there is nothing left to do.
+        # With an event store the GET stream is detached instead and the session kept: the client resumes the stream
+        # from its last event id (SEP-1699), and the events it misses meanwhile are stored for it.
         def drop_broken_stream(session_id, stream, related_request_id)
           streams_to_close = []
 
@@ -689,7 +719,11 @@ module MCP
 
               streams_to_close << stream
             elsif session && session[:get_sse_stream].equal?(stream)
-              cleanup_and_collect_stream(session_id, streams_to_close)
+              if @event_store
+                streams_to_close << detach_get_stream(session)
+              else
+                cleanup_and_collect_stream(session_id, streams_to_close)
+              end
             end
           end
 
@@ -744,39 +778,20 @@ module MCP
           request = { jsonrpc: "2.0", id: request_id, method: method }
           request[:params] = params if params
 
-          # Register the pending response and resolve the stream under the lock, but perform
-          # the write outside it so a stalled reader cannot block every other session on `@mutex`.
-          streams_to_close = []
-          stream = @mutex.synchronize do
-            unless (session = @sessions[session_id])
+          # Register the pending response under the lock before the request is written, so a response arriving at once finds its entry;
+          # the write itself runs outside `@mutex`.
+          @mutex.synchronize do
+            unless @sessions.key?(session_id)
               raise "Session not found: #{session_id}."
             end
 
             @pending_responses[request_id] = { queue: pending_response, session_id: session_id }
-
-            active_stream(session, streams_to_close, related_request_id: related_request_id)
           end
 
-          close_streams(streams_to_close)
-
-          sent = false
-          if stream
-            begin
-              push_to_stream(stream, request)
-              sent = true
-            rescue *STREAM_WRITE_ERRORS
-              drop_broken_stream(session_id, stream, related_request_id)
-            end
-          end
-
-          # TODO: Replace with event store + replay when resumability is implemented.
-          # Resumability is a separate MCP specification feature (SSE event IDs, Last-Event-ID replay,
-          # event store management) independent of sampling.
-          # See: https://modelcontextprotocol.io/specification/latest/basic/transports#resumability-and-redelivery
-          #
-          # The TypeScript and Python SDKs buffer messages and replay on reconnect.
-          # Until then, raise to prevent queue.pop from blocking indefinitely.
-          unless sent
+          # With an event store a request whose stream is disconnected is kept for replay, so the wait below can still
+          # be answered once the client resumes the stream (SEP-1699); without one there is nothing the client could
+          # come back to, so the wait is not started.
+          unless store_and_write(session_id, related_request_id, request.to_json)
             raise "No active stream for #{method} request."
           end
 
@@ -857,6 +872,47 @@ module MCP
           end
         end
 
+        # Closes the SSE connection of the request `request_id` without ending the request (SEP-1699), so the client reconnects with
+        # `Last-Event-ID` after the `retry_interval` and the handler's remaining messages, kept by the event store meanwhile,
+        # reach it through the resumed connection. Returns `false` when there is nothing to close: no `event_store:`,
+        # a client that negotiated a version before 2025-11-25 (it received no priming event to come back with),
+        # a connection whose priming event the store failed to take (the client holds no cursor for it either),
+        # an unknown session or request, or a connection already closed. Handlers reach this through `server_context.close_sse_stream`.
+        # @api private
+        def close_sse_stream(session_id, request_id)
+          stream = @mutex.synchronize do
+            session = session_id && @sessions[session_id]
+            next unless session && resumable_session?(session)
+
+            entry = session.dig(:post_stream_entries, request_id)
+            current = session.dig(:post_request_streams, request_id)
+            next unless entry && current && entry[:primed_stream].equal?(current)
+
+            session[:post_request_streams].delete(request_id)
+          end
+          return false unless stream
+
+          close_stream_safely(stream)
+
+          true
+        end
+
+        # Closes the session's standalone GET stream the same way, so the client polls for server-initiated messages.
+        # @api private
+        def close_standalone_sse_stream(session_id)
+          stream = @mutex.synchronize do
+            session = session_id && @sessions[session_id]
+            next unless session && resumable_session?(session)
+            next unless session[:get_sse_stream] && session[:get_primed_stream].equal?(session[:get_sse_stream])
+
+            detach_get_stream(session)
+          end
+          return false unless stream
+
+          close_stream_safely(stream)
+          true
+        end
+
         private
 
         # The wait between reaps is a condition variable wait under `@mutex` rather than a sleep, so `close` can end it
@@ -895,9 +951,24 @@ module MCP
           end
         end
 
-        def send_to_stream(stream, data)
+        # One `write` per frame, so the frames of concurrent writers cannot interleave in the middle of each other.
+        def send_to_stream(stream, data, event_id: nil)
           message = data.is_a?(String) ? data : data.to_json
-          stream.write("data: #{message}\n\n")
+          frame = event_id ? "id: #{event_id}\ndata: #{message}\n\n" : "data: #{message}\n\n"
+
+          stream.write(frame)
+          stream.flush
+        end
+
+        # The priming event of SEP-1699: an id for the client to resume from, the `retry` field when configured, and
+        # empty data. The `data:` line is what makes the event one the client dispatches (and so sees the id of);
+        # an id without it would only be noted.
+        def send_priming_event_to_stream(stream, event_id)
+          fields = ["id: #{event_id}"]
+          fields << "retry: #{@retry_interval}" if @retry_interval
+          fields << "data:"
+
+          stream.write("#{fields.join("\n")}\n\n")
           stream.flush
         end
 
@@ -920,8 +991,8 @@ module MCP
         #
         # The deadline interrupts the write with the exception `Timeout` raises on its own, which no `rescue` of an `IOError` or a `StandardError` inside
         # a stream implementation catches, and becomes `StreamWriteTimeoutError` only here, where it leaves the write.
-        def push_to_stream(stream, data, subscription: nil)
-          within_stream_write_timeout(stream, subscription) { send_to_stream(stream, data) }
+        def push_to_stream(stream, data, event_id: nil, subscription: nil)
+          within_stream_write_timeout(stream, subscription) { send_to_stream(stream, data, event_id: event_id) }
         end
 
         def push_ping_to_stream(stream, subscription: nil)
@@ -1900,6 +1971,14 @@ module MCP
           protocol_version_error = validate_protocol_version_header(request)
           return protocol_version_error if protocol_version_error
 
+          # A reconnect naming the last event the client received resumes that stream (SEP-1699). Without an event store the header is ignored and
+          # a plain stream is opened, since nothing was stored to replay.
+          last_event_id = header_bytes(request, "HTTP_LAST_EVENT_ID")
+
+          if @event_store && last_event_id && !last_event_id.empty?
+            return resume_sse_stream(session_id, last_event_id, request.env[OAuth::ENV_KEY])
+          end
+
           return session_already_connected_response if live_get_stream?(session_id)
 
           setup_sse_stream(session_id, request.env[OAuth::ENV_KEY])
@@ -2302,6 +2381,12 @@ module MCP
                 auth_issuer: auth_info&.issuer,
                 auth_subject: auth_info&.subject,
                 auth_client_id: auth_info&.client_id,
+                # Orders the session's event storage against a `Last-Event-ID` resume; see `store_and_write`.
+                store_mutex: Mutex.new,
+                # The stream id the events of the session's GET stream are stored under, fixed for the session's life
+                # so a client resuming that stream finds everything it missed under one cursor however often
+                # the connection was reopened. The response stream of each request gets its own id in `post_stream_entries`.
+                get_stream_id: @event_store && mint_stream_id(session_id),
               }
               true
             end
@@ -2395,39 +2480,65 @@ module MCP
         # https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
         def handle_request_with_sse_response(body_string, session_id, server_session, related_request_id: nil, auth_info: nil)
           body = proc do |stream|
-            @mutex.synchronize do
+            # The stream id is kept with the request while it is in flight: it marks the request's events in
+            # the event store and routes a `Last-Event-ID` resume back to the request (SEP-1699).
+            # It is minted whether or not a store is configured, so the registration has one shape.
+            stream_id = mint_stream_id(session_id)
+            claimed = @mutex.synchronize do
               session = @sessions[session_id]
-              if session && related_request_id
-                session[:post_request_streams] ||= {}
+              next false unless session && related_request_id
 
-                # Claim the id only while it is free. `handle_regular_request` already refused the colliding request,
-                # so reaching an occupied slot means a race got past that check; leaving the first stream in place keeps
-                # its messages going where they belong.
-                session[:post_request_streams][related_request_id] ||= stream
-              end
+              session[:post_request_streams] ||= {}
+              session[:post_stream_entries] ||= {}
+
+              # Claim the id only while it is free. `handle_regular_request` already refused the colliding request,
+              # so reaching an occupied slot means a race got past that check; leaving the first stream in place keeps
+              # its messages going where they belong.
+              next false if session[:post_request_streams].key?(related_request_id) || session[:post_stream_entries].key?(related_request_id)
+
+              session[:post_request_streams][related_request_id] = stream
+              session[:post_stream_entries][related_request_id] = { stream_id: stream_id, resumed: nil }
+
+              true
             end
+
+            write_priming_event(session_id, related_request_id, stream) if claimed
 
             begin
               response = dispatch_handle_json(body_string, server_session, auth_info: auth_info)
 
-              send_to_stream(stream, response) if response
+              if response
+                # Written through the registration rather than to `stream`: the response of a request whose connection was
+                # closed and resumed meanwhile belongs on the resumed one, and is stored for a client still to reconnect.
+                if claimed
+                  store_and_write(session_id, related_request_id, response, pushed: false)
+                else
+                  send_to_stream(stream, response)
+                end
+              end
             ensure
-              if related_request_id
-                @mutex.synchronize do
-                  session = @sessions[session_id]
-                  # Only retire our own registration: a request that never claimed the id, or one whose claim has
-                  # already been replaced, must not unregister the stream that owns it.
-                  registered = session&.dig(:post_request_streams, related_request_id)
+              resumed = nil
 
-                  session[:post_request_streams].delete(related_request_id) if registered.equal?(stream)
+              if claimed
+                resumed = @mutex.synchronize do
+                  session = @sessions[session_id]
+                  entry = session&.dig(:post_stream_entries, related_request_id)
+                  # Only retire our own registration: one whose claim has already been replaced must not unregister
+                  # the stream that owns it. The live stream is this request's own when it is the one opened here or
+                  # the one a resume put in its place.
+                  next unless entry && entry[:stream_id] == stream_id
+
+                  session[:post_stream_entries].delete(related_request_id)
+                  registered = session[:post_request_streams][related_request_id]
+                  if registered.equal?(stream) || (entry[:resumed] && registered.equal?(entry[:resumed]))
+                    session[:post_request_streams].delete(related_request_id)
+                  end
+                  entry[:resumed]
                 end
               end
 
-              begin
-                stream.close
-              rescue StandardError
-                # Ignore close-related errors from already closed/broken streams.
-              end
+              close_stream_safely(resumed) if resumed
+              close_stream_safely(stream)
             end
           end
 
@@ -2706,7 +2817,10 @@ module MCP
         def create_sse_body(session_id, auth_info = nil)
           proc do |stream|
             stored = store_stream_for_session(session_id, stream, auth_info)
-            start_keepalive_thread(session_id, stream) if stored
+            next unless stored
+
+            write_priming_event(session_id, nil, stream)
+            start_keepalive_thread(session_id, stream)
           end
         end
 
@@ -2719,6 +2833,9 @@ module MCP
 
             session[:get_sse_stream] = stream
             session[:get_sse_stream_expires_at] = stream_token_expiry(auth_info)
+            # From here on the session's GET stream events are stored, since the client now has the cursor to
+            # resume them from.
+            session[:get_stream_opened] = true
             true
           end
 
@@ -2737,7 +2854,8 @@ module MCP
         # stream at a delivery once its token expired and the client may have opened a new one since, which gets
         # a keepalive thread of its own. The loop therefore ends as soon as the session no longer holds this stream,
         # and a loop that did not run to its end (a failed ping, or any other abnormal exit) drops the stream through
-        # `drop_broken_stream`, which tears the session down only while it still holds that stream, as before.
+        # `drop_broken_stream`, which tears the session down only while it still holds that stream, as before,
+        # or detaches the stream alone when an event store lets the client resume it.
         def start_keepalive_thread(session_id, stream)
           Thread.new do
             ended = false
@@ -2819,6 +2937,307 @@ module MCP
           return false unless @session_idle_timeout
 
           Process.clock_gettime(Process::CLOCK_MONOTONIC) - session[:last_active_at] > @session_idle_timeout
+        end
+
+        # Stream ids carry the session id, so a `Last-Event-ID` is matched to the session presenting it with
+        # a string check, however long ago the request that opened the stream finished.
+        def mint_stream_id(session_id)
+          "#{session_id}:#{SecureRandom.uuid}"
+        end
+
+        def owned_stream_id?(session_id, stream_id)
+          stream_id.is_a?(String) && stream_id.start_with?("#{session_id}:")
+        end
+
+        def resumable_session?(session)
+          !@event_store.nil? && resumable_protocol_version?(session[:server_session].protocol_version)
+        end
+
+        # Membership in the supported list keeps an unknown future version out: `initialize` only ever records
+        # a negotiated handshake version, so this is belt and braces, as in the TypeScript SDK.
+        def resumable_protocol_version?(version)
+          version.is_a?(String) &&
+            MCP::Configuration::SUPPORTED_STABLE_PROTOCOL_VERSIONS.include?(version) &&
+            version >= RESUMABLE_PROTOCOL_VERSION
+        end
+
+        # The event store stream the messages for `related_request_id` belong to (the GET stream for `nil`), or `nil`
+        # when nothing is to be stored: no store, a request not in flight, or a GET stream the client has not opened
+        # yet and so has no cursor into.
+        def resolve_stream_id(session, related_request_id)
+          return unless @event_store
+
+          if related_request_id
+            session.dig(:post_stream_entries, related_request_id, :stream_id)
+          elsif session[:get_stream_opened]
+            session[:get_stream_id]
+          end
+        end
+
+        # Runs the block under the session's store lock, which orders the storing of a message and the choice of its
+        # stream against a replay pass and the attachment of a resumed stream (see `store_and_write`); `false` when
+        # the session is gone. The lock is created on first use, so a session built before this transport kept one is
+        # served too. It is held across store calls but never across a stream write, so a stalled reader stalls nobody.
+        def with_session_store_lock(session_id)
+          lock = @mutex.synchronize do
+            session = @sessions[session_id]
+            session && (session[:store_mutex] ||= Mutex.new)
+          end
+          return false unless lock
+
+          lock.synchronize { yield }
+          true
+        end
+
+        # Delivers `json`, a JSON-RPC message, on the session's stream for `related_request_id` (the GET stream for `nil`).
+        # With an event store the message is stored first and written with the id the store assigned, so one written while
+        # the stream is disconnected is replayed when the client resumes. The store and the choice of the stream share one hold of
+        # the session's store lock, which `replay_and_attach` holds across each replay pass and the attachment of the resumed stream:
+        # a message is therefore either in a set that replay writes to the resumed stream or written to that stream by
+        # its own sender afterwards, never missed by both or written to it twice. The write itself runs outside every lock.
+        # Returns `true` when the message reached a live stream or was stored for the reconnect, `false` otherwise.
+        #
+        # A message the transport pushes on its own (a notification, a server-to-client request) is written under `stream_write_timeout:`,
+        # since its sender writes to stream after stream. `pushed: false` is for the response of a request,
+        # written on that request's own thread, which waits for its reader as it did before.
+        def store_and_write(session_id, related_request_id, json, pushed: true)
+          event_id = nil
+          stream = nil
+          streams_to_close = []
+          locked = with_session_store_lock(session_id) do
+            stream_id = @mutex.synchronize do
+              session = @sessions[session_id]
+              session && resolve_stream_id(session, related_request_id)
+            end
+            event_id = stream_id && safe_store_event(stream_id, json)
+
+            stream = @mutex.synchronize do
+              session = @sessions[session_id]
+              session && active_stream(session, streams_to_close, related_request_id: related_request_id)
+            end
+          end
+
+          close_streams(streams_to_close)
+          return false unless locked
+
+          written = false
+          if stream
+            begin
+              if pushed
+                push_to_stream(stream, json, event_id: event_id)
+              else
+                send_to_stream(stream, json, event_id: event_id)
+              end
+
+              written = true
+            rescue *STREAM_WRITE_ERRORS => e
+              MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to send message" })
+
+              drop_broken_stream(session_id, stream, related_request_id)
+            end
+          end
+
+          written || !event_id.nil?
+        end
+
+        # Opens `stream`, the connection the caller has just put in place for `related_request_id`, with the priming event,
+        # stored first so its id is a cursor in the stream like any other. Only for sessions that negotiated
+        # `RESUMABLE_PROTOCOL_VERSION` or later.
+        #
+        # The write has no deadline, since it is made on the thread of the request that opened or resumed the connection,
+        # so it goes to that connection and no other: when a later resume has taken its place in the meantime,
+        # nothing is written, and that resume primes the connection it attached.
+        def write_priming_event(session_id, related_request_id, stream)
+          event_id = nil
+          streams_to_close = []
+          with_session_store_lock(session_id) do
+            stream_id = @mutex.synchronize do
+              session = @sessions[session_id]
+              next unless session && resumable_session?(session)
+              next unless active_stream(session, streams_to_close, related_request_id: related_request_id).equal?(stream)
+
+              resolve_stream_id(session, related_request_id)
+            end
+            event_id = stream_id && safe_store_event(stream_id, nil)
+          end
+          close_streams(streams_to_close)
+          return unless event_id
+
+          send_priming_event_to_stream(stream, event_id)
+          mark_primed(session_id, related_request_id, stream)
+        rescue *STREAM_WRITE_ERRORS => e
+          MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to send message" })
+          drop_broken_stream(session_id, stream, related_request_id)
+        end
+
+        # Records that `stream` received its priming event, which `close_sse_stream` and `close_standalone_sse_stream`
+        # require before they close it on purpose: a connection without one has given the client no cursor to come
+        # back with. Compared by identity, so a connection opened in the stream's place starts unprimed.
+        def mark_primed(session_id, related_request_id, stream)
+          @mutex.synchronize do
+            session = @sessions[session_id]
+            next unless session
+
+            if related_request_id
+              entry = session.dig(:post_stream_entries, related_request_id)
+              entry[:primed_stream] = stream if entry && session.dig(:post_request_streams, related_request_id).equal?(stream)
+            elsif session[:get_sse_stream].equal?(stream)
+              session[:get_primed_stream] = stream
+            end
+          end
+        end
+
+        # A failing store must not take the request or the session down with it: the frame is written without an id
+        # (the client's cursor stays at the previous event, which costs it this one event on resume) and the failure
+        # is reported. An id with a line break would end the SSE frame early, so it is refused the same way.
+        def safe_store_event(stream_id, message)
+          event_id = @event_store.store_event(stream_id, message)
+          return event_id if valid_event_id?(event_id)
+
+          report_event_store_failure(ArgumentError.new("event store returned an invalid event id"), stream_id)
+          nil
+        rescue StandardError => e
+          report_event_store_failure(e, stream_id)
+          nil
+        end
+
+        def safe_events_after(last_event_id)
+          replay = @event_store.events_after(last_event_id)
+          return unless replay.is_a?(Array) && replay.size == 2 && replay[0].is_a?(String) && replay[1].is_a?(Array)
+
+          replay
+        rescue StandardError => e
+          report_event_store_failure(e, nil)
+          nil
+        end
+
+        def valid_event_id?(event_id)
+          event_id.is_a?(String) && !event_id.empty? && !event_id.match?(/[\r\n]/)
+        end
+
+        def report_event_store_failure(error, stream_id)
+          MCP.configuration.exception_reporter.call(error, { stream_id: stream_id, error: "Event store failure" })
+        end
+
+        # Serves a GET carrying `Last-Event-ID` (SEP-1699): the stream the event belongs to is replayed from that event and,
+        # when it is still open on the server side (the session's GET stream, or the response stream of a request still in flight),
+        # the new connection takes the old one's place. The stream must belong to this session: an id of another session,
+        # or one the store no longer knows, is answered 400 without replaying anything, and the two cases are not told apart.
+        def resume_sse_stream(session_id, last_event_id, auth_info)
+          replay = safe_events_after(last_event_id)
+          return unknown_last_event_id_response unless replay && owned_stream_id?(session_id, replay[0])
+
+          body = proc do |stream|
+            replay_and_attach(session_id, last_event_id, stream, auth_info)
+          end
+
+          [200, SSE_HEADERS.dup, body]
+        end
+
+        # The value is not echoed: it is client-supplied and nothing about it needs confirming.
+        def unknown_last_event_id_response
+          json_rpc_error_response(
+            status: 400,
+            code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
+            message: "Bad Request: Unknown Last-Event-ID",
+          )
+        end
+
+        # Writes the events stored on the stream after `last_event_id` to `stream`, then puts `stream` in place of the connection
+        # that stream was last carried by. Each pass takes the events stored since the cursor under the session's store lock
+        # and writes them outside it; the pass that finds none left attaches the stream under the same hold, so a message stored
+        # between the last replayed event and the attachment is impossible: it is either replayed by a further pass or written to
+        # the attached stream by its own sender. A resume whose `REPLAY_PASS_LIMIT` passes all found events is closed behind
+        # the last batch instead of attached, so no connection replays without end and the lock is still never held across a write;
+        # the client reconnects from its new cursor after `retry`, as after any disconnect.
+        def replay_and_attach(session_id, last_event_id, stream, auth_info)
+          cursor = last_event_id
+          attachment = nil
+          passes = 0
+
+          until attachment
+            events = []
+            passes += 1
+            locked = with_session_store_lock(session_id) do
+              replay = safe_events_after(cursor)
+              stream_id = replay && replay[0]
+              if stream_id && owned_stream_id?(session_id, stream_id)
+                events = replay[1]
+                attachment = attach_resumed_stream(session_id, stream_id, stream, auth_info) if events.empty?
+              else
+                attachment = :refused
+              end
+            end
+            attachment = :refused unless locked
+            attachment ||= :behind if passes >= REPLAY_PASS_LIMIT
+
+            events.each do |event_id, message|
+              cursor = event_id
+              next unless message.is_a?(String)
+
+              send_to_stream(stream, message, event_id: valid_event_id?(event_id) ? event_id : nil)
+            end
+          end
+
+          finish_resumed_stream(session_id, stream, attachment)
+        rescue *STREAM_WRITE_ERRORS => e
+          MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to replay events" })
+
+          close_stream_safely(stream)
+        end
+
+        # Puts `stream` in place of the connection `stream_id` was last carried by, the session's GET stream or
+        # the response stream of a request still in flight, and says which; `:retired` for the stream of a request already answered,
+        # `:gone` for a session that no longer exists. A connection still attached there is handed back as `replaced` for closing:
+        # the client presenting the id of its last event is the one that held it. Called under the session's store lock.
+        def attach_resumed_stream(session_id, stream_id, stream, auth_info)
+          @mutex.synchronize do
+            session = @sessions[session_id]
+            next :gone unless session
+
+            if stream_id == session[:get_stream_id]
+              replaced = detach_get_stream(session)
+              session[:get_sse_stream] = stream
+              session[:get_sse_stream_expires_at] = stream_token_expiry(auth_info)
+              session[:get_stream_opened] = true
+              { kind: :get, replaced: replaced }
+            elsif (request_id = request_id_of_stream(session, stream_id))
+              replaced = session[:post_request_streams][request_id]
+              session[:post_request_streams][request_id] = stream
+              session[:post_stream_entries][request_id][:resumed] = stream
+              { kind: :post, request_id: request_id, replaced: replaced }
+            else
+              :retired
+            end
+          end
+        end
+
+        # The stream of a request already answered has nothing more to carry once replayed, so that connection is
+        # closed, as the spec asks after the response, and so is one that found events on each of its `REPLAY_PASS_LIMIT`
+        # passes, which the client reconnects from its new cursor. An attached stream is primed, giving the client a cursor and
+        # the `retry` field again, and a GET stream gets its keepalive.
+        def finish_resumed_stream(session_id, stream, attachment)
+          unless attachment.is_a?(Hash)
+            close_stream_safely(stream)
+            return
+          end
+
+          close_stream_safely(attachment[:replaced]) if attachment[:replaced]
+
+          if attachment[:kind] == :get
+            write_priming_event(session_id, nil, stream)
+            start_keepalive_thread(session_id, stream)
+          else
+            write_priming_event(session_id, attachment[:request_id], stream)
+          end
+        end
+
+        def request_id_of_stream(session, stream_id)
+          entries = session[:post_stream_entries]
+          return unless entries
+
+          request_id, = entries.find { |_request_id, entry| entry[:stream_id] == stream_id }
+          request_id
         end
       end
     end

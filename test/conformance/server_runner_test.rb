@@ -111,6 +111,23 @@ module Conformance
       )
     end
 
+    test "the referee runs with unhandled rejections downgraded to warnings, keeping the NODE_OPTIONS already set" do
+      original = ENV["NODE_OPTIONS"]
+      runner = ServerRunner.new
+
+      ENV.delete("NODE_OPTIONS")
+      assert_equal({ "NODE_OPTIONS" => "--unhandled-rejections=warn" }, runner.send(:referee_env))
+
+      ENV["NODE_OPTIONS"] = "--max-old-space-size=512"
+      assert_equal({ "NODE_OPTIONS" => "--max-old-space-size=512 --unhandled-rejections=warn" }, runner.send(:referee_env))
+    ensure
+      if original
+        ENV["NODE_OPTIONS"] = original
+      else
+        ENV.delete("NODE_OPTIONS")
+      end
+    end
+
     test "build_command runs a frozen requirement set and keeps the baseline" do
       command = ServerRunner.new(requirements: "2026-07-28").send(:build_command)
 
