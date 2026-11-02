@@ -1,4 +1,24 @@
-server: []
+server:
+  # SEP-1699 resumability: the server sends no priming event or `retry` field on a POST SSE stream, and
+  # the referee warns about each of the two; the baseline counts a warning as a failure. The resume on
+  # `Last-Event-ID` is not exercised, since the server does not close the stream mid-call.
+  - server-sse-polling
+  # SEP-2243 custom headers: the server does not bind `Mcp-Param-*` headers to `x-mcp-header` tool parameters
+  # (the client side sends them), so the conformance server exposes no such tool and the referee reports
+  # the scenario's checks as untestable.
+  - http-custom-header-server-validation
+  # SEP-2663 (io.modelcontextprotocol/tasks): the server does not implement the tasks extension.
+  # `tasks-status-notifications` is intentionally absent: the referee runs no check in it, and a baseline entry
+  # for a scenario with no failing check is flagged stale.
+  - tasks-lifecycle
+  - tasks-capability-negotiation
+  - tasks-wire-fields
+  - tasks-request-state-removal
+  - tasks-mrtr-input
+  - tasks-request-headers
+  - tasks-dispatch-and-envelope
+  - tasks-required-task-error
+  - tasks-mrtr-composition
 client:
   # Unimplemented authorization extensions.
   - auth/dpop

@@ -29,7 +29,7 @@ jobs:
       - run: bundle exec rake conformance:test
 
   # Frozen requirement sets for SEP-1730 tier scoring: each spec revision's scenarios run at
-  # that revision's own wire version, unlike the moving active suite above.
+  # that revision's own wire version, unlike the moving full suite above.
   requirements-conformance:
     runs-on: ubuntu-latest
     continue-on-error: true
