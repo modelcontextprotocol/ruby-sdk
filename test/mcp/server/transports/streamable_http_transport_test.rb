@@ -6516,6 +6516,37 @@ module MCP
           end
         end
 
+        test "legacy POST refuses a _meta that is not an object with -32602 before the tool runs" do
+          calls = 0
+          @server.define_tool(name: "meta_reader") do |server_context:|
+            calls += 1
+            server_context.dig(:_meta, :key)
+            Tool::Response.new([])
+          end
+          session_id = initialize_test_session
+
+          ["not-an-object", [], 42].each do |meta|
+            response = @transport.handle_request(create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+              { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "meta_reader", arguments: {}, _meta: meta } }.to_json,
+            ))
+            body = if response[1]["content-type"].to_s.start_with?("text/event-stream")
+              io = StringIO.new
+              response[2].call(io)
+              JSON.parse(io.string[/^data: (.+)$/, 1])
+            else
+              JSON.parse(response[2][0])
+            end
+
+            assert_equal 200, response[0]
+            assert_equal(-32602, body.dig("error", "code"), meta.inspect)
+            assert_equal "Invalid params: _meta must be an object", body.dig("error", "message")
+          end
+          assert_equal 0, calls
+        end
+
         test "modern POST rejects an envelope missing clientCapabilities with 400 and -32602" do
           body = {
             jsonrpc: "2.0",

@@ -4350,18 +4350,44 @@ module MCP
       end
     end
 
-    test "#handle tools/call and prompts/get ignore a _meta that is not an object" do
-      @server.define_tool(name: "echo_tool") { Tool::Response.new([]) }
-
-      ["not-an-object", []].each do |meta|
-        tool = @server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "echo_tool", _meta: meta } })
-        prompt = @server.handle({
-          jsonrpc: "2.0", method: "prompts/get", id: 1, params: { name: "test_prompt", arguments: { test_argument: "x" }, _meta: meta },
-        })
-
-        assert_nil tool[:error]
-        assert_nil prompt[:error]
+    test "#handle refuses a _meta that is not an object with -32602 before any handler runs" do
+      calls = 0
+      server = Server.new(name: "meta_server", server_context: { user: "u" })
+      # Reads `_meta` as the server context page shows (`dig`), which raises TypeError on a String or an Array.
+      server.define_tool(name: "meta_reader") do |server_context:|
+        calls += 1
+        server_context.dig(:_meta, :key)
+        Tool::Response.new([])
       end
+
+      ["not-an-object", [], 42].each do |meta|
+        [
+          [server, { jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "meta_reader", _meta: meta } }],
+          [server, { jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "meta_reader", "_meta" => meta } }],
+          [server, { jsonrpc: "2.0", method: "tools/list", id: 1, params: { _meta: meta } }],
+          [@server, { jsonrpc: "2.0", method: "prompts/get", id: 1, params: { name: "test_prompt", arguments: { test_argument: "x" }, _meta: meta } }],
+        ].each do |target, request|
+          response = target.handle(request)
+          assert_equal(-32602, response[:error][:code], request.inspect)
+          assert_equal "Invalid params: _meta must be an object", response[:error][:message]
+        end
+      end
+      assert_equal 0, calls
+
+      # `null` reads as absent and an object reaches the handler, where the documented `dig` works on both.
+      assert_nil server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "meta_reader", _meta: nil } })[:error]
+      assert_nil server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "meta_reader", _meta: { key: "v" } } })[:error]
+      assert_equal 2, calls
+    end
+
+    test "#handle drops a notification whose _meta is not an object without running its handler" do
+      calls = 0
+      @server.define_custom_method(method_name: "custom/notify") { |_params| calls += 1 }
+
+      assert_nil @server.handle({ jsonrpc: "2.0", method: "custom/notify", params: { _meta: "not-an-object" } })
+      assert_equal 0, calls
+      assert_nil @server.handle({ jsonrpc: "2.0", method: "custom/notify", params: { _meta: { key: "v" } } })
+      assert_equal 1, calls
     end
 
     test "#handle tools/call mirrors non-object structuredContent when content is omitted or nil" do
