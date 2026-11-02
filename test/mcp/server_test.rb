@@ -4350,6 +4350,20 @@ module MCP
       end
     end
 
+    test "#handle tools/call and prompts/get ignore a _meta that is not an object" do
+      @server.define_tool(name: "echo_tool") { Tool::Response.new([]) }
+
+      ["not-an-object", []].each do |meta|
+        tool = @server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "echo_tool", _meta: meta } })
+        prompt = @server.handle({
+          jsonrpc: "2.0", method: "prompts/get", id: 1, params: { name: "test_prompt", arguments: { test_argument: "x" }, _meta: meta },
+        })
+
+        assert_nil tool[:error]
+        assert_nil prompt[:error]
+      end
+    end
+
     test "#handle tools/call mirrors non-object structuredContent when content is omitted or nil" do
       # Per SEP-2106, `structuredContent` may be any JSON value. Older clients may only read `content`,
       # so the server adds a serialized fallback when the tool provided no content blocks.

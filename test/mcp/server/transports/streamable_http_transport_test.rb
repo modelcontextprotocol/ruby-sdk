@@ -6505,6 +6505,17 @@ module MCP
           assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
         end
 
+        test "modern POST rejects a _meta that is not an object with 400 and -32602" do
+          ["not-an-object", []].each do |meta|
+            response = @transport.handle_request(modern_rack_request(
+              { jsonrpc: "2.0", method: "tools/list", id: 1, params: { _meta: meta } }.to_json,
+            ))
+
+            assert_equal 400, response[0]
+            assert_equal(-32602, JSON.parse(response[2][0]).dig("error", "code"))
+          end
+        end
+
         test "modern POST rejects an envelope missing clientCapabilities with 400 and -32602" do
           body = {
             jsonrpc: "2.0",

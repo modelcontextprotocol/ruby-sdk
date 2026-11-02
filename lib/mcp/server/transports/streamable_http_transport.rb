@@ -980,7 +980,7 @@ module MCP
         # converge on enforcement.
         def validate_modern_headers(request, body, header_version)
           params = body[:params]
-          meta_version = params.is_a?(Hash) ? params.dig(:_meta, :"io.modelcontextprotocol/protocolVersion") : nil
+          meta_version = params.is_a?(Hash) && params[:_meta].is_a?(Hash) ? params.dig(:_meta, :"io.modelcontextprotocol/protocolVersion") : nil
           if meta_version && meta_version != header_version
             return header_mismatch_response(
               "MCP-Protocol-Version header value '#{header_version}' does not match body value '#{meta_version}'",

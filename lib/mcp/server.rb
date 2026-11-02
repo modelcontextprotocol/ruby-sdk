@@ -1403,7 +1403,7 @@ module MCP
         end
       end
 
-      progress_token = request.dig(:_meta, :progressToken)
+      progress_token = request.dig(:_meta, :progressToken) if request[:_meta].is_a?(Hash)
 
       response = call_tool_with_args(
         tool,
@@ -1915,7 +1915,7 @@ module MCP
     # (progress, cancellation, nested server-to-client requests).
     def build_server_context(request:, session:, related_request_id:, cancellation:, envelope: nil, auth_info: nil)
       meta_source = request.is_a?(Hash) ? request : {}
-      progress_token = meta_source.dig(:_meta, :progressToken)
+      progress_token = meta_source.dig(:_meta, :progressToken) if meta_source[:_meta].is_a?(Hash)
       progress = Progress.new(notification_target: session, progress_token: progress_token, related_request_id: related_request_id)
       retry_fields = mrtr_retry_fields(meta_source)
       ServerContext.new(
