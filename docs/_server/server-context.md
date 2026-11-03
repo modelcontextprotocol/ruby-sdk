@@ -68,6 +68,9 @@ class MyTool < MCP::Tool
 end
 ```
 
+A `_meta` that is not an object is refused with `-32602` before any handler runs, on both lifecycles,
+and a `null` `_meta` reads as absent, so `server_context[:_meta]`, when present, is always a `Hash`.
+
 **Client Request Example:**
 
 A `tools/call` request carrying `_meta`, as read by the tool above:

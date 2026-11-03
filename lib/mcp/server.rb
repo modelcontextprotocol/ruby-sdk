@@ -799,6 +799,7 @@ module MCP
           server_context: { request: request },
           exception_already_reported: ->(e) { reported_exception.equal?(e) },
         ) do
+          refuse_non_object_meta!(params)
           envelope = lift_request_envelope(params, method: method, session: session)
 
           # The envelope's `logLevel` member replaces `logging/setLevel` in the modern lifecycle:
@@ -929,6 +930,26 @@ module MCP
       return false unless era.nil?
 
       RequestEnvelope.modern?(request.is_a?(Hash) ? request[:params] : nil)
+    end
+
+    # `_meta` is an object on every request (`MetaObject`); a String, Array, or number there carries no envelope,
+    # no progress token, and no trace context, and the TypeScript and Python servers refuse it as invalid params on
+    # both lifecycles. Refused before the envelope is read and before any handler can meet it in `server_context`.
+    # `null` reads as absent, as it does for the Python server.
+    def refuse_non_object_meta!(params)
+      return unless params.is_a?(Hash)
+
+      # Read as `RequestEnvelope` reads it, so the two cannot disagree on a Hash holding both key spellings.
+      meta = params[:_meta]
+      meta = params["_meta"] if meta.nil?
+      return if meta.nil? || meta.is_a?(Hash)
+
+      raise RequestHandlerError.new(
+        "Invalid params: _meta must be an object",
+        params,
+        error_type: :invalid_params,
+        error_code: JsonRpcHandler::ErrorCode::INVALID_PARAMS,
+      )
     end
 
     # Lifts the SEP-2575 per-request `_meta` envelope for modern requests. Only a request whose `_meta` carries
