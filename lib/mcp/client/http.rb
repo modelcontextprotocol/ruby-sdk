@@ -6,7 +6,7 @@ require_relative "../configuration"
 require_relative "../methods"
 require_relative "../protocol_deprecations"
 require_relative "../version"
-require_relative "mcp_param_headers"
+require_relative "../mcp_param_headers"
 require_relative "modern_envelope"
 
 module MCP

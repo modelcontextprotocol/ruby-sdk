@@ -325,6 +325,24 @@ module Conformance
       end
     end
 
+    class TestXMcpHeader < MCP::Tool
+      tool_name "test_x_mcp_header"
+      description "A tool whose region argument is mirrored into the Mcp-Param-Region header (SEP-2243)"
+      input_schema(
+        properties: {
+          region: { type: "string", description: "Mirrored into the Mcp-Param-Region header", "x-mcp-header": "Region" },
+        },
+      )
+
+      class << self
+        # Arms the `http-custom-header-server-validation` server scenario, which the referee skips when no tool declares
+        # an `x-mcp-header` parameter, as the TypeScript and Python fixtures do.
+        def call(region: "<none>", **_args)
+          MCP::Tool::Response.new([MCP::Content::Text.new("region=#{region}").to_h])
+        end
+      end
+    end
+
     class TestMissingCapability < MCP::Tool
       tool_name "test_missing_capability"
       description "A tool that requires the sampling client capability (SEP-2575)"
@@ -924,6 +942,7 @@ module Conformance
           Tools::TestElicitationSep1034Defaults,
           Tools::TestElicitationSep1330Enums,
           Tools::TestReconnection,
+          Tools::TestXMcpHeader,
           Tools::TestMissingCapability,
           Tools::TestInputRequiredResultElicitation,
           Tools::TestInputRequiredResultSampling,
