@@ -24,6 +24,7 @@ This class supports:
 - Resource listing via the `resources/list` method (`MCP::Client#resources`)
 - Resource template listing via the `resources/templates/list` method (`MCP::Client#resource_templates`)
 - Resource reading via the `resources/read` method (`MCP::Client#read_resource`)
+- Skills (SEP-2640) via the `skills/list` and `skills/get` methods and digest-verified reads (`MCP::Client#list_skills`, `#get_skill`, `#read_skill_resource`), see [Skills](/extensions/skills/)
 - Prompt listing via the `prompts/list` method (`MCP::Client#prompts`)
 - Prompt retrieval via the `prompts/get` method (`MCP::Client#get_prompt`)
 - Completion requests via the `completion/complete` method (`MCP::Client#complete`); see [Completion](/server/completion/)
@@ -45,3 +46,7 @@ The client provides a wrapper class for tools returned by the server:
 - `MCP::Client::Tool` - Represents a single tool with its metadata
 
 This class provides easy access to tool properties like name, description, input schema, and output schema.
+`title`, `annotations`, `icons`, `execution`, and `meta` (the tool's `_meta`) are kept as the server sent them,
+so what an extension puts under `_meta` is readable: an MCP Apps host finds a tool's app under `tool.meta&.dig("ui", "resourceUri")`.
+These values are untrusted input from the server: the SDK passes them through without acting on them,
+and a host that renders `icons` or loads what `_meta` names treats them as it would any server-supplied URL or content.

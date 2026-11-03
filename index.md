@@ -75,6 +75,8 @@ see [Server Transports](/server/transports/).
 A minimal client spawns a stdio server as a subprocess, connects, and lists and calls its tools:
 
 ```ruby
+require "mcp"
+
 stdio_transport = MCP::Client::Stdio.new(
   command: "bundle",
   args: ["exec", "ruby", "path/to/server.rb"],
@@ -112,7 +114,7 @@ For comprehensive documentation, see:
 - [Protocol Versions](/protocol-versions/) - supported versions, the era model, and client negotiation
 - [Building Servers](server/) - transports, discovery, tools, prompts, resources, server-to-client requests, multi round-trip requests, notifications, protocol utilities, configuration, and OAuth 2.1 authorization
 - [Building Clients](client/) - transports, lifecycle negotiation, multi round-trip requests, and OAuth 2.1 authorization
-- [Extensions](/extensions/) - capability extensions and MCP Apps
+- [Extensions](/extensions/) - capability extensions, MCP Apps, and Skills
 
 ## API Documentation
 
