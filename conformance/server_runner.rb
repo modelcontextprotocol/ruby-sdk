@@ -33,9 +33,17 @@ module Conformance
       expected_failures_yml = File.expand_path("expected_failures.yml", __dir__)
 
       npx_command = ["npx", "--yes", "@modelcontextprotocol/conformance@alpha", "server", "--url", "http://localhost:#{@port}/mcp"]
-      npx_command += ["--scenario", @scenario] if @scenario
+      # A requirement set already fixes which scenarios run, so it replaces the suite selection.
+      # The referee's default `active` suite leaves out the extension-tagged scenarios (Skills, Tasks), which `all` selects,
+      # as the client leg does; the areas the SDK does not implement are listed in expected_failures.yml.
+      npx_command += if @requirements
+        ["--requirements", @requirements]
+      elsif @scenario
+        ["--scenario", @scenario]
+      else
+        ["--suite", "all"]
+      end
       npx_command += ["--spec-version", @spec_version] if @spec_version
-      npx_command += ["--requirements", @requirements] if @requirements
       npx_command += ["--verbose"] if @verbose
       npx_command += ["--expected-failures", expected_failures_yml]
       npx_command

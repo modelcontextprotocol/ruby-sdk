@@ -15,10 +15,12 @@ Validates the Ruby SDK's conformance to the MCP specification using [`@modelcont
 bundle exec rake conformance:test
 ```
 
-Runs both server and client conformance tests in sequence. Server conformance starts the
-conformance server and tests it. Client conformance spawns test servers for each scenario
-and invokes `conformance/client.rb` against them. Scenarios listed in `expected_failures.yml`
-are allowed to fail without affecting the exit code.
+Runs both server and client conformance tests in sequence. Server conformance starts the conformance server and tests it.
+Client conformance spawns test servers for each scenario and invokes `conformance/client.rb` against them.
+By default both legs select every scenario the referee ships (`--suite all`), the extension-tagged ones included,
+so the Skills server and client implementations are checked; `SCENARIO` and `REQUIREMENTS` below replace that selection.
+Scenarios listed in `expected_failures.yml`, which cover the areas the SDK does not implement,
+are allowed to fail without affecting the exit code; the referee flags an entry as stale once its scenario passes.
 
 ### Environment variables
 
@@ -55,7 +57,7 @@ bundle exec rake conformance:server PORT=3000
 bundle exec rake conformance:server
 
 # Terminal 2: run all scenarios
-npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp
+npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp --suite all
 
 # Terminal 2: run a single scenario
 npx @modelcontextprotocol/conformance@alpha server --url http://localhost:9292/mcp --scenario ping
