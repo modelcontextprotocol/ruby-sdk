@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-03
+
+This release adds the Skills extension (SEP-2640): a server publishes Agent Skills from a directory or a handler,
+and the client lists, reads and verifies them against the manifest digests. It also keeps a tool's `_meta` and
+other members on the client, stops the output schema default from overriding a root `$dynamicRef`, and answers
+request headers and `_meta` values the server could not read with a client error instead of failing. The Changed
+entry alters an answer on the wire under the exceptions described in [VERSIONING.md](VERSIONING.md).
+
+### Added
+
+- Add the Skills extension (SEP-2640) (#635)
+
+### Changed
+
+- Refuse a `_meta` that is not an object as invalid params (#651)
+
+### Fixed
+
+- Skip the reaper join when close runs on the reaper thread (#637)
+- Parse request headers as bytes so invalid UTF-8 cannot raise (#639)
+- Keep a tool's `_meta`, `title`, `icons`, and `execution` on the client (#641)
+- Refuse a skill URI that is not valid UTF-8 and escape the echoed strings (#646)
+- Recognize a root `$dynamicRef` when defaulting an output schema to an object (#649)
+- Handle a `_meta` that is not an object without raising (#650)
+
 ## [1.8.2] - 2026-10-27
 
 This release finishes the encoding fixes of 1.8.1 on the client and the HTTP transport, which no longer fail
