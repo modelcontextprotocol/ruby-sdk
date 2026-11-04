@@ -1,9 +1,21 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "open3"
 
 module MCP
   class ServerContextTest < ActiveSupport::TestCase
+    # The docs name the class as what a handler receives, so an application may refer to it before anything has
+    # loaded `MCP::Server`, whose file used to be the only one requiring it. Checked in a fresh process, since this
+    # one has loaded everything already, and without this one's `RUBYOPT`, so nothing preloads the file for it.
+    test "ServerContext resolves after the gem alone is required" do
+      lib = File.expand_path("../../lib", __dir__)
+      script = 'require "mcp"; MCP::ServerContext'
+      _stdout, stderr, status = Open3.capture3({ "RUBYOPT" => nil }, RbConfig.ruby, "-I", lib, "-e", script)
+
+      assert_predicate status, :success?, stderr
+    end
+
     test "ServerContext delegates method calls to the underlying context" do
       context = { user: "test_user" }
       progress = Progress.new(notification_target: mock, progress_token: nil)
