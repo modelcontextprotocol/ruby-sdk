@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "timeout"
 
 module MCP
   class ServerTest < ActiveSupport::TestCase
@@ -2366,6 +2367,88 @@ module MCP
       messages << reported.pop until reported.empty?
 
       assert_equal(10.times.map { |i| "thread #{i}" }.sort, messages.sort)
+    end
+
+    [false, true].each do |fail_slow_tool|
+      test "#handle concurrent tools keep instrumentation per request when failure is #{fail_slow_tool}" do
+        entered = Queue.new
+        release = Queue.new
+        completed = Queue.new
+        around = Queue.new
+        configuration = MCP::Configuration.new
+        configuration.instrumentation_callback = ->(data) { completed << data }
+        configuration.around_request = ->(data, &request_handler) do
+          request_handler.call
+        ensure
+          around << data
+        end
+        slow_tool = Tool.define(name: "slow_tool") do |value:|
+          entered << true
+          release.pop
+          raise "slow failure" if fail_slow_tool
+
+          Tool::Response.new([{ type: "text", text: value }])
+        end
+        fast_tool = Tool.define(name: "fast_tool") do |value:|
+          Tool::Response.new([{ type: "text", text: value }])
+        end
+        server = Server.new(name: "test_server", tools: [slow_tool, fast_tool], configuration: configuration)
+        sessions = ["slow_client", "fast_client"].map do |name|
+          session = ServerSession.new(server: server, transport: mock)
+          server.handle({
+            jsonrpc: "2.0",
+            method: "initialize",
+            params: initialize_params(clientInfo: { name: name, version: "1.0" }),
+            id: name,
+          }, session: session)
+          completed.pop
+          around.pop
+          session
+        end
+        call = ->(id, name, value, session) do
+          server.handle({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: name, arguments: { value: value } },
+            id: id,
+          }, session: session)
+        end
+
+        slow_thread = Thread.new { call.call(1, "slow_tool", "slow", sessions.first) }
+        Timeout.timeout(5) { entered.pop }
+        fast_response = call.call(2, "fast_tool", "fast", sessions.last)
+        release << true
+        assert(slow_thread.join(5), "slow request did not finish")
+        slow_response = slow_thread.value
+
+        assert_equal("fast", fast_response.dig(:result, :content, 0, :text))
+        if fail_slow_tool
+          assert_equal(-32603, slow_response.dig(:error, :code))
+        else
+          assert_equal("slow", slow_response.dig(:result, :content, 0, :text))
+        end
+        records = 2.times.map { completed.pop(true) }
+        assert_equal(["fast_tool", "slow_tool"], records.map { |data| data[:tool_name] })
+        assert_equal([{ value: "fast" }, { value: "slow" }], records.map { |data| data[:tool_arguments] })
+        assert_equal("fast_client", records.first.dig(:client, :name))
+        refute(records.first.key?(:error))
+        if fail_slow_tool
+          assert_equal(:internal_error, records.last[:error])
+          refute(records.last.key?(:client))
+        else
+          assert_equal("slow_client", records.last.dig(:client, :name))
+          refute(records.last.key?(:error))
+        end
+        records.each do |data|
+          assert_equal("tools/call", data[:method])
+          assert_kind_of(Numeric, data[:duration])
+          assert_same(around.pop(true), data)
+        end
+      ensure
+        release << true
+        slow_thread&.kill
+        slow_thread&.join
+      end
     end
 
     test "#define_custom_method raises an error if the method is already defined" do
