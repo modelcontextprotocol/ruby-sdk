@@ -8,9 +8,10 @@ require_relative "token_verifier"
 
 # This file is autoloaded only when `JWTVerifier` is referenced, so the `jwt` dependency does not affect users of other verifiers.
 begin
+  gem "jwt", ">= 3.3.0"
   require "jwt"
 rescue LoadError
-  raise LoadError, "The 'jwt' gem is required to use MCP::Server::OAuth::JWTVerifier. Add it to your Gemfile: gem 'jwt'"
+  raise LoadError, "The 'jwt' gem (>= 3.3.0) is required to use MCP::Server::OAuth::JWTVerifier. Add it to your Gemfile: gem 'jwt', '>= 3.3.0'"
 end
 
 module MCP

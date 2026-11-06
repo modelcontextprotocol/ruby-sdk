@@ -37,12 +37,12 @@ $ gem install mcp
 
 You may need to add additional dependencies depending on which features you wish to access.
 
-Verifying JWT access tokens on the server with `MCP::Server::OAuth::JWTVerifier` requires the `jwt` gem (and `jwt-eddsa` as well for EdDSA-signed tokens),
+Verifying JWT access tokens on the server with `MCP::Server::OAuth::JWTVerifier` requires version 3.3.0 or later of the `jwt` gem (and `jwt-eddsa` as well for EdDSA-signed tokens),
 which the verifier loads only when it is instantiated; `MCP::Server::OAuth::IntrospectionVerifier` needs nothing beyond the standard library.
 See [Authorization](/server/authorization/).
 
 ```ruby
-gem "jwt"
+gem "jwt", ">= 3.3.0"
 ```
 
 The HTTP client transport requires the `faraday` gem:
