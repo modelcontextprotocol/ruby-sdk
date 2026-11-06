@@ -6327,6 +6327,44 @@ module MCP
           assert_equal "2027-01-01", body.dig("error", "data", "requested")
         end
 
+        test "modern POST rejects standard headers that are not valid UTF-8" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          @server.expects(:handle).never
+
+          cases = [
+            ["HTTP_MCP_PROTOCOL_VERSION", "2026-07-28\xFF", -32022, "Unsupported protocol version"],
+            ["HTTP_MCP_METHOD", "tools/call\xFF", -32020, "Header mismatch: Mcp-Method header value is not valid UTF-8"],
+            ["HTTP_MCP_NAME", "some_tool\xFF", -32020, "Header mismatch: Mcp-Name header value is not valid UTF-8"],
+            ["HTTP_MCP_NAME", "=?base64?/w==?=", -32020, "Header mismatch: Mcp-Name header value is not valid UTF-8"],
+          ]
+          cases.each do |header_name, value, code, message|
+            [Encoding::BINARY, Encoding::UTF_8].each do |encoding|
+              header_value = value.dup.force_encoding(encoding).freeze
+              response = @transport.handle_request(modern_rack_request(
+                modern_body("tools/call", { name: "some_tool", arguments: {} }),
+                headers: { header_name => header_value },
+              ))
+
+              expected_error = { "code" => code, "message" => message }
+              if code == -32022
+                expected_error["data"] = { "supported" => Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS }
+              end
+
+              assert_equal 400, response[0], "#{header_name} (#{encoding})"
+              assert_equal({ "content-type" => "application/json" }, response[1])
+              assert_equal(
+                { "jsonrpc" => "2.0", "id" => 1, "error" => expected_error },
+                JSON.parse(response[2][0]),
+              )
+              assert_empty reported
+            end
+          end
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
         test "modern POST with a header/body version mismatch returns 400 with -32020" do
           # Header names the supported modern version; the body envelope claims another.
           response = @transport.handle_request(modern_rack_request(

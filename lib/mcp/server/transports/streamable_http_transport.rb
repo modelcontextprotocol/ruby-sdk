@@ -905,8 +905,8 @@ module MCP
               message: "Unsupported protocol version",
               data: {
                 supported: MCP::Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
-                requested: header_version,
-              },
+                requested: utf8_header_value(header_version),
+              }.compact,
               id: body[:id],
             )
           end
@@ -1000,6 +1000,13 @@ module MCP
               body[:id],
             )
           end
+          method_header = utf8_header_value(method_header)
+          unless method_header
+            return header_mismatch_response(
+              "Mcp-Method header value is not valid UTF-8",
+              body[:id],
+            )
+          end
           if method_header != body[:method]
             return header_mismatch_response(
               "Mcp-Method header value '#{method_header}' does not match body value '#{body[:method]}'",
@@ -1019,6 +1026,12 @@ module MCP
               end
 
               decoded_name = decode_header_value(name_header)
+              unless decoded_name
+                return header_mismatch_response(
+                  "Mcp-Name header value is not valid UTF-8",
+                  body[:id],
+                )
+              end
               if decoded_name != body_name
                 return header_mismatch_response(
                   "Mcp-Name header value '#{decoded_name}' does not match body value '#{body_name}'",
@@ -1580,14 +1593,23 @@ module MCP
           )
         end
 
+        def utf8_header_value(value)
+          decoded = value.dup.force_encoding(Encoding::UTF_8)
+          decoded if decoded.valid_encoding?
+        end
+
         # Mirrors `MCP::Client::HTTP#encode_header_value`: a value wrapped as `=?base64?<base64>?=` decodes to
         # its original UTF-8 string; anything else is taken verbatim. Duplicated here because the client transport
         # requires faraday, which servers do not depend on.
         def decode_header_value(value)
+          value = utf8_header_value(value)
+          return unless value
+
           match = value.match(/\A=\?base64\?(.*)\?=\z/m)
           return value unless match
 
-          match[1].unpack1("m0").force_encoding(Encoding::UTF_8)
+          decoded = match[1].unpack1("m0").force_encoding(Encoding::UTF_8)
+          decoded if decoded.valid_encoding?
         rescue ArgumentError
           value
         end
