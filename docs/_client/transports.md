@@ -184,6 +184,9 @@ since servers deliver requests that are not tied to a client request on that str
 a JSON-RPC `-32601` (method not found) error. To handle methods other than `elicitation/create`, register directly on the transport with
 `http_transport.on_server_request("method/name") { |params| ... }`.
 
+If a handler raises an unexpected exception, the HTTP transport answers with JSON-RPC error `-32603`, `Internal error`.
+The exception class and message are written to local stderr, not sent to the server.
+
 On a [modern](/client/lifecycle/) connection servers cannot send requests at all; the same
 registered handlers instead drive the requests embedded in `input_required` results,
 as documented on [Multi Round-Trip Requests](/client/mrtr/).

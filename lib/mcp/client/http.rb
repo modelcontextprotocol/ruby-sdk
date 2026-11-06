@@ -1196,12 +1196,13 @@ module MCP
               error: { code: e.code, message: e.message },
             }
           rescue StandardError => e
+            warn("MCP::Client::HTTP: error handling #{message["method"]} request: #{e.class}: #{e.message.dump}")
             {
               jsonrpc: JsonRpcHandler::Version::V2_0,
               id: message["id"],
               error: {
                 code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
-                message: "Internal error handling #{message["method"]} request: #{e.message}",
+                message: "Internal error",
               },
             }
           end

@@ -1660,6 +1660,9 @@ module MCP
       end
 
       def test_send_request_answers_raising_handler_with_internal_error
+        original_verbose = $VERBOSE
+        $VERBOSE = false
+
         request = {
           jsonrpc: "2.0",
           id: "test_id",
@@ -1671,7 +1674,7 @@ module MCP
           jsonrpc: "2.0",
           id: 9,
           method: "elicitation/create",
-          params: {},
+          params: { message: "boom\r\n\e[31m" },
         }
         tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
         sse_body = "event: message\ndata: #{server_request.to_json}\n\n" \
@@ -1688,7 +1691,7 @@ module MCP
         expected_error_response = {
           jsonrpc: "2.0",
           id: 9,
-          error: { code: -32603, message: "Internal error handling elicitation/create request: boom" },
+          error: { code: -32603, message: "Internal error" },
         }
         error_stub = stub_request(:post, url).with(
           body: expected_error_response.to_json,
@@ -1696,12 +1699,16 @@ module MCP
           status: 202, body: "",
         )
 
-        client.on_server_request("elicitation/create") { raise "boom" }
+        client.on_server_request("elicitation/create") { |params| raise params["message"] }
 
-        response = client.send_request(request: request)
+        assert_output("", "MCP::Client::HTTP: error handling elicitation/create request: RuntimeError: \"boom\\r\\n\\e[31m\"\n") do
+          response = client.send_request(request: request)
 
-        assert_equal({ "content" => [] }, response["result"])
-        assert_requested(error_stub)
+          assert_equal({ "content" => [] }, response["result"])
+          assert_requested(error_stub)
+        end
+      ensure
+        $VERBOSE = original_verbose
       end
 
       def test_send_request_answers_server_request_error_with_its_code
