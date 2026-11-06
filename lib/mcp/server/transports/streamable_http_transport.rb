@@ -923,6 +923,13 @@ module MCP
           mismatch_error = validate_modern_headers(request, body, header_version)
           return mismatch_error if mismatch_error
 
+          # SEP-2243 custom headers: the `Mcp-Param-*` headers of a `tools/call` are checked against the body here,
+          # before dispatch, so a disagreement is refused without the tool ever running.
+          if body[:method] == Methods::TOOLS_CALL
+            param_error = validate_mcp_param_headers(request, body)
+            return param_error if param_error
+          end
+
           # `subscriptions/listen` is a long-lived notification stream served at the transport layer;
           # it never dispatches through `Server#handle`. A transport constructed with
           # `serve_subscriptions_listen: false` skips the interception, so the method falls through
@@ -1029,6 +1036,39 @@ module MCP
           end
 
           nil
+        end
+
+        # Enforces the SEP-2243 server behavior for custom headers (`-32020`, HTTP 400) on a modern `tools/call`: each
+        # `x-mcp-header` parameter of the called tool must have its `Mcp-Param-{Name}` header present exactly when the body
+        # carries a value for it, agreeing with that value once a `=?base64?...?=` sentinel is decoded, and a malformed
+        # sentinel is refused outright. The comparison runs before the tool does, on the schema the server itself serves
+        # in `tools/list`, so the body a handler acts on is the one an intermediary routed on. A tool the server does not
+        # know, or one whose declarations are invalid (a conforming client drops such a tool and sends no headers for it),
+        # is left to the dispatcher, and headers for parameters no declaration names are ignored, as the spec asks of any
+        # server that does not recognize them. The refusal names the header and the argument, not their values.
+        #
+        # Rack folds header names into `HTTP_` keys with `-` as `_`, so `Mcp-Param-Region-A` and `Mcp-Param-Region_A` land
+        # on one key; a token that differs only in that way is the schema author's choice, and the value still has to
+        # agree with the body.
+        def validate_mcp_param_headers(request, body)
+          params = body[:params]
+          return unless params.is_a?(Hash)
+
+          tool = @server.tools[params[:name]]
+          return unless tool
+
+          scan = McpParamHeaders.scan(tool.input_schema.to_h)
+          return unless scan[:valid] && !scan[:declarations].empty?
+
+          arguments = params[:arguments] || {}
+          return unless arguments.is_a?(Hash)
+
+          message = McpParamHeaders.mismatch(scan[:declarations], arguments) do |header_name|
+            header_bytes(request, "HTTP_#{header_name.upcase.tr("-", "_")}")
+          end
+          return unless message
+
+          header_mismatch_response(message, body[:id])
         end
 
         # Serves `subscriptions/listen` (SEP-2575): opens a long-lived SSE stream whose first message is

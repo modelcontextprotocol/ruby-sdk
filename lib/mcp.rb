@@ -17,6 +17,7 @@ module MCP
   autoload :Elicitation, "mcp/elicitation"
   autoload :ErrorCodes, "mcp/error_codes"
   autoload :Icon, "mcp/icon"
+  autoload :McpParamHeaders, "mcp/mcp_param_headers"
   autoload :Prompt, "mcp/prompt"
   autoload :RequestEnvelope, "mcp/request_envelope"
   autoload :Resource, "mcp/resource"

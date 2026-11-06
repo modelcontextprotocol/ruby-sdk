@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "client/elicitation"
-require_relative "client/mcp_param_headers"
 require_relative "client/modern_envelope"
 require_relative "client/oauth"
 require_relative "client/stdio"
@@ -19,6 +18,11 @@ module MCP
     # stops a server that repeats or cycles cursors; one that returns a fresh `nextCursor` on
     # every response would otherwise be followed indefinitely, growing the retained pages with it.
     MAX_PAGES = 1_000
+
+    # The custom-header codec lived under this name until the server transport came to share it;
+    # the name stays for code that referenced it.
+    # @api private
+    McpParamHeaders = MCP::McpParamHeaders
 
     class ServerError < StandardError
       attr_reader :code, :data
