@@ -18,7 +18,7 @@ module MCP
 
       def send_request(method, params = nil, session_id: nil, related_request_id: nil, parent_cancellation: nil, server_session: nil, timeout: nil)
         @requests << { method: method, timeout: timeout }
-        {}
+        method == Methods::ELICITATION_CREATE ? { action: "accept", content: {} } : {}
       end
 
       def send_response(response); end
