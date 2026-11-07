@@ -7,6 +7,8 @@ module MCP
   class Client
     module OAuth
       class ClientCredentialsProviderTest < Minitest::Test
+        include DeprecationWarningTestHelper
+
         # Every parameter the flow sets on a token request, spelled out rather than read from
         # `Flow::RESERVED_TOKEN_REQUEST_PARAMS`, so a key dropped from that constant fails here.
         RESERVED_TOKEN_REQUEST_PARAMS = [
@@ -31,6 +33,37 @@ module MCP
           assert_equal("cc-client", info["client_id"])
           assert_equal("cc-secret", info["client_secret"])
           assert_equal("client_secret_basic", info["token_endpoint_auth_method"])
+          refute(info.key?("issuer"))
+        end
+
+        def test_initialize_warns_at_the_call_site_when_issuer_is_omitted
+          [{}, { issuer: nil }].each do |args|
+            constructor_line = __LINE__ + 2
+            assert_deprecation_warning("#{__FILE__}:#{constructor_line}: warning: Omitting `issuer:` is deprecated. Without it, the credentials go to whichever authorization server the MCP server names. Pass the authorization server's issuer URL as `issuer:` so they are only sent there.\n") do
+              ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", **args)
+            end
+          end
+        end
+
+        def test_initialize_does_not_warn_when_issuer_is_set
+          assert_no_deprecation_warning do
+            args = { issuer: "https://auth.example.com" }
+            ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", **args)
+          end
+        end
+
+        def test_initialize_stores_the_issuer_with_the_credentials
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: "https://auth.example.com")
+
+          assert_equal("https://auth.example.com", provider.client_information["issuer"])
+        end
+
+        def test_initialize_rejects_an_issuer_that_is_not_a_non_empty_string
+          ["", " ", :issuer, false, 123].each do |issuer|
+            assert_raises(ClientCredentialsProvider::InvalidCredentialsError) do
+              ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: issuer)
+            end
+          end
         end
 
         def test_authorization_flow_is_client_credentials

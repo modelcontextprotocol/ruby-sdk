@@ -380,7 +380,10 @@ module MCP
         def ensure_client_credentials_issuer!(client_info, as_metadata:)
           stored_issuer = client_info_required_value(client_info, "issuer")
           return if stored_issuer.nil?
-          return if stored_issuer == as_metadata["issuer"]
+
+          current_issuer = as_metadata["issuer"]
+          return if stored_issuer == current_issuer
+          return if stored_issuer == "#{current_issuer}/" || "#{stored_issuer}/" == current_issuer
 
           raise AuthorizationError,
             "Stored client credentials are bound to a different authorization server " \
@@ -399,6 +402,7 @@ module MCP
           unless client_info.is_a?(Hash) && client_info_required_value(client_info, "client_id")
             raise AuthorizationError, "Cannot run the jwt-bearer grant: the provider has no stored `client_id`."
           end
+          ensure_client_credentials_issuer!(client_info, as_metadata: as_metadata)
 
           # Asked before the assertion is minted, for the same reason registration waits on the authorization-code grant:
           # obtaining an ID-JAG sends the identity provider an audience of this authorization server, which must not happen once
@@ -1106,6 +1110,11 @@ module MCP
         end
 
         def ensure_refreshable_client_information!(client_info, as_metadata:)
+          case provider_authorization_flow
+          when :client_credentials, :jwt_bearer
+            return ensure_client_credentials_issuer!(client_info, as_metadata: as_metadata)
+          end
+
           stored_issuer = client_info_required_value(client_info, "issuer")
           return if stored_issuer.nil?
           return if stored_issuer == as_metadata["issuer"]

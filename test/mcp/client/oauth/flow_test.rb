@@ -651,6 +651,147 @@ module MCP
           assert_not_requested(:post, "#{@auth_base}/token")
         end
 
+        def test_run_client_credentials_without_issuer_keeps_credentials_without_a_binding
+          provider = client_credentials_provider
+          issuer_at_token_request = nil
+          stub_request(:post, "#{@auth_base}/token").to_return do
+            issuer_at_token_request = provider.client_information["issuer"]
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(access_token: "cc-token", token_type: "Bearer"),
+            }
+          end
+
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_nil(issuer_at_token_request)
+          assert_nil(provider.client_information["issuer"])
+        end
+
+        def test_run_client_credentials_without_issuer_keeps_using_the_discovered_authorization_server
+          provider = client_credentials_provider
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          stub_authorization_server_switch_to("https://other-auth.example.com")
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_nil(provider.client_information["issuer"])
+          assert_requested(:post, "https://other-auth.example.com/token")
+        end
+
+        def test_run_client_credentials_with_issuer_refuses_another_issuer_on_the_first_request
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: "https://login.example.com")
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_run_client_credentials_with_issuer_runs_the_grant_at_that_issuer
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: @auth_base)
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+        end
+
+        def test_run_machine_to_machine_grants_accept_one_trailing_slash_difference_in_the_configured_issuer
+          [
+            [@auth_base, @auth_base],
+            ["#{@auth_base}/", @auth_base],
+            [@auth_base, "#{@auth_base}/"],
+            ["#{@auth_base}/", "#{@auth_base}/"],
+          ].each do |configured_issuer, discovered_issuer|
+            stub_authorization_server_switch_to(discovered_issuer)
+
+            [ClientCredentialsProvider, CrossAppAccessProvider].each do |provider_class|
+              args = { client_id: "test-client", client_secret: "test-secret", issuer: configured_issuer }
+              args[:assertion_provider] = ->(**) { "id-jag-assertion" } if provider_class == CrossAppAccessProvider
+              provider = provider_class.new(**args)
+
+              result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+              assert_equal(:authorized, result)
+            end
+          end
+        end
+
+        def test_run_machine_to_machine_grants_refuse_other_differences_in_the_configured_issuer
+          [
+            "#{@auth_base}/tenant",
+            "https://other-auth.example.com",
+            "#{@auth_base}//",
+            "HTTPS://auth.example.com",
+            "https://AUTH.example.com",
+            "https://auth.example.com:443",
+          ].each do |issuer|
+            [ClientCredentialsProvider, CrossAppAccessProvider].each do |provider_class|
+              args = { client_id: "test-client", client_secret: "test-secret", issuer: issuer }
+              args[:assertion_provider] = ->(**) { "id-jag-assertion" } if provider_class == CrossAppAccessProvider
+              provider = provider_class.new(**args)
+
+              error = assert_raises(Flow::AuthorizationError) do
+                Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+              end
+
+              assert_match(/bound to a different authorization server/, error.message)
+              assert_not_requested(:post, "#{@auth_base}/token")
+            end
+          end
+        end
+
+        def test_refresh_machine_to_machine_grants_accept_one_trailing_slash_difference_in_the_configured_issuer
+          [ClientCredentialsProvider, CrossAppAccessProvider].each do |provider_class|
+            args = { client_id: "test-client", client_secret: "test-secret", issuer: "#{@auth_base}/" }
+            args[:assertion_provider] = ->(**) { "id-jag-assertion" } if provider_class == CrossAppAccessProvider
+            provider = provider_class.new(**args)
+            provider.save_tokens("refresh_token" => "refresh-token", "issuer" => @auth_base)
+
+            result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+            assert_equal(:refreshed, result)
+          end
+        end
+
+        def test_run_client_credentials_does_not_bind_to_an_issuer_the_validator_refuses
+          provider = ClientCredentialsProvider.new(
+            client_id: "cc-client",
+            client_secret: "cc-secret",
+            authorization_request_validator: ->(_request) { false },
+          )
+
+          assert_raises(Flow::AuthorizationRefusedError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_nil(provider.client_information["issuer"])
+        end
+
+        # Points the Protected Resource Metadata at another authorization server with its own metadata and token endpoint.
+        def stub_authorization_server_switch_to(issuer)
+          endpoint_base = issuer.delete_suffix("/")
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [issuer]),
+          )
+          stub_request(:get, "#{endpoint_base}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(issuer: issuer, token_endpoint: "#{endpoint_base}/token"),
+          )
+          stub_request(:post, "#{endpoint_base}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "other-token", token_type: "Bearer"),
+          )
+        end
+
         def test_run_client_credentials_requests_scope_from_prm_scopes_supported
           stub_request(:get, @prm_url).to_return(
             status: 200,
@@ -1246,6 +1387,45 @@ module MCP
 
           # Refused before the identity provider was asked for an assertion carrying this authorization server as its audience.
           refute(minted, "the ID-JAG assertion must not be minted for a refused authorization server")
+        end
+
+        def test_run_jwt_bearer_refuses_a_different_stored_issuer_before_asking_for_an_assertion
+          minted = false
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(audience:, resource:) {
+              minted = true
+              "id-jag-assertion"
+            },
+          )
+          provider.save_client_information(provider.client_information.merge("issuer" => "https://login.example.com"))
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{@auth_base}/token")
+          refute(minted, "the ID-JAG assertion must not be minted for another authorization server")
+        end
+
+        def test_run_jwt_bearer_without_issuer_keeps_using_the_discovered_authorization_server
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag-assertion" },
+          )
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_nil(provider.client_information["issuer"])
+
+          stub_authorization_server_switch_to("https://other-auth.example.com")
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_nil(provider.client_information["issuer"])
+          assert_requested(:post, "https://other-auth.example.com/token")
         end
 
         def test_run_registers_native_application_type_for_loopback_redirect_uri

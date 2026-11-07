@@ -303,6 +303,7 @@ provider = MCP::Client::OAuth::ClientCredentialsProvider.new(
   client_id: "my-service",
   client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
   # token_endpoint_auth_method: "client_secret_basic" (default), "client_secret_post", or "private_key_jwt"
+  issuer: "https://auth.example.com",
   # scope: "mcp:read mcp:write" (optional; used when the server does not advertise scopes)
   # token_request_params: { "audience" => "https://api.example.com" } (optional; parameters the authorization server requires)
 )
@@ -320,6 +321,10 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
+- `issuer`: Optional. The issuer identifier of the authorization server the credentials belong to. A different authorization server raises
+  `Flow::AuthorizationError`. A single trailing slash difference is accepted, as in the TypeScript SDK. Omitting `issuer:` is deprecated
+  and emits a warning at construction. Without it, credentials go to whichever authorization server the MCP server names, as before.
+  To use credentials for another authorization server, construct a provider with that server's `issuer:` and credentials.
 - `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
   Use `token_request_params` for a parameter the authorization server requires on the `client_credentials` grant, such as Auth0's `audience`.
 
@@ -338,6 +343,7 @@ an enterprise secret store or a test double without changing the transport wirin
 provider = MCP::Client::OAuth::CrossAppAccessProvider.new(
   client_id: "my-mcp-client",
   client_secret: ENV.fetch("MCP_CLIENT_SECRET"),
+  issuer: "https://auth.example.com",
   assertion_provider: ->(audience:, resource:) {
     MCP::Client::OAuth::IDJAGTokenExchange.request(
       token_endpoint: "https://idp.example.com/token",
@@ -359,6 +365,8 @@ Keyword arguments:
 - `assertion_provider`: Required. Callable invoked as `call(audience:, resource:)` and returning the ID-JAG assertion.
   `audience` is the MCP authorization server's validated issuer identifier; `resource` is the canonical MCP server URL (RFC 8707).
   Passing both through to `IDJAGTokenExchange.request` covers the common case.
+- `issuer`: Optional, same meaning and binding as on `ClientCredentialsProvider`. A mismatch is refused before `assertion_provider` is called,
+  so the identity provider is never asked for an ID-JAG addressed to that authorization server.
 - `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
 
 ### Customizing the OAuth HTTP Client
