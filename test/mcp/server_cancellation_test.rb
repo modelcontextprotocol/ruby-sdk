@@ -415,7 +415,7 @@ module MCP
       (class << @mock_transport; self; end).define_method(:send_request) do |method, _params = nil, **kwargs|
         recorded[:method] = method
         recorded[:kwargs] = kwargs
-        {}
+        { action: "accept", content: {} }
       end
 
       @session.create_form_elicitation(

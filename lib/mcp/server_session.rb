@@ -359,7 +359,29 @@ module MCP
         timeout: timeout,
       }.compact
 
-      forward_to_transport(@transport.method(:send_request), method, params, kwargs)
+      result = forward_to_transport(@transport.method(:send_request), method, params, kwargs)
+      validate_elicitation_result!(result, params || {}) if method == Methods::ELICITATION_CREATE
+      result
+    end
+
+    # Validate before returning to a handler or replaying a legacy input_required result.
+    def validate_elicitation_result!(result, params)
+      raise Server::ValidationError, "Response validation failed: invalid `result`" unless result.is_a?(Hash)
+
+      action = result[:action] || result["action"]
+      raise Server::ValidationError, "Response validation failed: invalid `action`" unless ["accept", "decline", "cancel"].include?(action)
+      return unless action == "accept"
+      return if (params[:mode] || params["mode"]) == "url"
+
+      requested_schema = params[:requestedSchema] || params["requestedSchema"]
+      return unless requested_schema
+
+      content = result.fetch(:content) { result["content"] }
+      return if content.nil?
+
+      Tool::OutputSchema.new(requested_schema).validate_result(content)
+    rescue Tool::OutputSchema::ValidationError => e
+      raise Server::ValidationError, "Response validation failed: #{e.message}"
     end
 
     # Calls `transport_method(method, params, **supported)` where `supported` contains only the keys
