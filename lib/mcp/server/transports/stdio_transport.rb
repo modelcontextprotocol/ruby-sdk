@@ -96,6 +96,18 @@ module MCP
           response
         end
 
+        # Sessions a server-wide log broadcast is offered to, each applying its own level or the server default.
+        # Public only so that `Server#notify_log_message` can call it. Custom transports may implement this hook;
+        # returning `nil` keeps the server-wide filter.
+        #
+        # @api private
+        # @return [Array<ServerSession>, nil]
+        def logging_sessions
+          return unless @session
+
+          @session.era == :legacy ? [@session] : []
+        end
+
         def send_notification(method, params = nil)
           notification = {
             jsonrpc: "2.0",

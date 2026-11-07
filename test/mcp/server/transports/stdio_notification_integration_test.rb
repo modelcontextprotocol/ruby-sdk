@@ -6,6 +6,8 @@ module MCP
   class Server
     module Transports
       class StdioNotificationIntegrationTest < ActiveSupport::TestCase
+        include InitializeParamsTestHelper
+
         class MockIO
           attr_reader :output
 
@@ -258,6 +260,69 @@ module MCP
           third_notification = JSON.parse(@mock_stdout.output.last)
           assert_equal Methods::NOTIFICATIONS_MESSAGE, third_notification["method"]
           assert_equal({ "data" => { "error" => "Connection Failed" }, "level" => "error" }, third_notification["params"])
+        end
+
+        test "server log messages honor the stdio client's level instead of the application default" do
+          default_logging = LoggingMessageNotification.new(level: "critical")
+          @server.logging_message_notification = default_logging
+          server = @server
+          @server.define_tool(name: "log_messages") do
+            server.notify_log_message(data: "debug log", level: "debug")
+            server.notify_log_message(data: "broadcast log", level: "info")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          requests = [
+            { jsonrpc: "2.0", id: 1, method: "initialize", params: initialize_params(protocolVersion: "2025-11-25") },
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            { jsonrpc: "2.0", id: 2, method: "logging/setLevel", params: { level: "info" } },
+            { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "log_messages", arguments: {} } },
+          ]
+          frames = requests.map { |request| "#{request.to_json}\n" }
+          @mock_stdin.stubs(:gets).returns(*frames, nil)
+
+          @transport.open
+
+          messages = @mock_stdout.output.map { |message| JSON.parse(message) }
+          assert_equal({}, messages.find { |message| message["id"] == 2 }["result"])
+          assert_equal "ok", messages.find { |message| message["id"] == 3 }["result"]["content"].first["text"]
+          logs = messages.select { |message| message["method"] == Methods::NOTIFICATIONS_MESSAGE }
+          assert_equal 1, logs.size
+          assert_equal "broadcast log", logs.first["params"]["data"]
+          assert_same default_logging, @server.logging_message_notification
+        end
+
+        test "modern stdio logs stay request-scoped even with an application default" do
+          @server.logging_message_notification = LoggingMessageNotification.new(level: "debug")
+          server = @server
+          @server.define_tool(name: "log_messages") do |server_context:|
+            server.notify_log_message(data: "broadcast log", level: "info")
+            server_context.notify_log_message(data: "request log", level: "error")
+            Tool::Response.new([{ type: "text", text: "ok" }])
+          end
+          meta = {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": { name: "modern_client", version: "1.0" },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          }
+          requests = [
+            { jsonrpc: "2.0", id: 1, method: "server/discover" },
+            { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "log_messages", arguments: {}, _meta: meta } },
+            {
+              jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+                name: "log_messages", arguments: {}, _meta: meta.merge("io.modelcontextprotocol/logLevel": "error"),
+              },
+            },
+          ]
+          frames = requests.map { |request| "#{request.to_json}\n" }
+          @mock_stdin.stubs(:gets).returns(*frames, nil)
+
+          @transport.open
+
+          messages = @mock_stdout.output.map { |message| JSON.parse(message) }
+          assert_equal "ok", messages.find { |message| message["id"] == 2 }["result"]["content"].first["text"]
+          assert_equal "ok", messages.find { |message| message["id"] == 3 }["result"]["content"].first["text"]
+          logs = messages.select { |message| message["method"] == Methods::NOTIFICATIONS_MESSAGE }
+          assert_equal ["request log"], logs.map { |message| message["params"]["data"] }
         end
       end
     end

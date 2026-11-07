@@ -447,6 +447,13 @@ module MCP
     #   Use stderr or OpenTelemetry instead.
     def notify_log_message(data:, level:, logger: nil)
       return unless @transport
+
+      if @transport.respond_to?(:logging_sessions) && (sessions = @transport.logging_sessions)
+        sessions.each do |session|
+          session.notify_log_message(data: data, level: level, logger: logger)
+        end
+        return
+      end
       return unless logging_message_notification&.should_notify?(level)
 
       params = { "data" => data, "level" => level }
@@ -1384,8 +1391,11 @@ module MCP
         raise RequestHandlerError.new("Invalid log level #{request[:level]}", request, error_type: :invalid_params)
       end
 
-      session&.configure_logging(logging_message_notification)
-      @logging_message_notification = logging_message_notification
+      if session
+        session.configure_logging(logging_message_notification)
+      else
+        @logging_message_notification = logging_message_notification
+      end
 
       {}
     end

@@ -9,6 +9,7 @@ module MCP
 
     class MockTransport < Transport
       attr_reader :notifications
+      attr_accessor :logging_sessions
 
       def initialize(server)
         super
@@ -302,22 +303,93 @@ module MCP
       assert_equal Methods::NOTIFICATIONS_MESSAGE, notifications[3][:method]
     end
 
+    test "logging/setLevel does not enable logs in other existing or future sessions" do
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+      other_session = ServerSession.new(server: @server, transport: @mock_transport)
+      @server.define_tool(name: "log_debug") do |server_context:|
+        server_context.notify_log_message(data: "debug detail", level: "debug")
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+
+      response = session.handle(
+        { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "debug" } },
+      )
+      assert_equal({}, response[:result])
+      future_session = ServerSession.new(server: @server, transport: @mock_transport)
+
+      [other_session, future_session].each do |unconfigured_session|
+        response = unconfigured_session.handle(
+          { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "log_debug", arguments: {} } },
+        )
+        assert_equal "ok", response[:result][:content].first[:text]
+      end
+
+      assert_empty @mock_transport.notifications
+      assert_nil @server.logging_message_notification
+
+      response = session.handle(
+        { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "log_debug", arguments: {} } },
+      )
+      assert_equal "ok", response[:result][:content].first[:text]
+      assert_equal 1, @mock_transport.notifications.size
+      assert_equal "debug detail", @mock_transport.notifications.first[:params]["data"]
+    end
+
+    test "logging/setLevel does not change an application-configured server-wide default" do
+      default_logging = LoggingMessageNotification.new(level: "error")
+      @server.logging_message_notification = default_logging
+      session = ServerSession.new(server: @server, transport: @mock_transport)
+      other_session = ServerSession.new(server: @server, transport: @mock_transport)
+
+      response = session.handle(
+        { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "debug" } },
+      )
+      assert_equal({}, response[:result])
+      future_session = ServerSession.new(server: @server, transport: @mock_transport)
+
+      [other_session, future_session].each do |unconfigured_session|
+        unconfigured_session.notify_log_message(data: "info detail", level: "info")
+        unconfigured_session.notify_log_message(data: "error detail", level: "error")
+      end
+      @server.notify_log_message(data: "broadcast info", level: "info")
+      @server.notify_log_message(data: "broadcast error", level: "error")
+      session.notify_log_message(data: "session debug", level: "debug")
+
+      assert_equal ["error detail", "error detail", "broadcast error", "session debug"],
+        @mock_transport.notifications.map { |notification| notification[:params]["data"] }
+      assert_same default_logging, @server.logging_message_notification
+    end
+
     test "server.notify_log_message works after logging/setLevel via session" do
       session = ServerSession.new(server: @server, transport: @mock_transport)
+      @mock_transport.logging_sessions = [session]
 
       # Client sends logging/setLevel through session.
-      @server.handle(
+      response = @server.handle(
         { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "info" } },
         session: session,
       )
+      assert_equal({}, response[:result])
 
-      # Server-level broadcast should still work because logging level
-      # is stored on both the session and the server.
       @server.notify_log_message(data: "broadcast log", level: "info")
 
       log_notifications = @mock_transport.notifications.select { |n| n[:method] == Methods::NOTIFICATIONS_MESSAGE }
       assert_equal 1, log_notifications.size
       assert_equal "broadcast log", log_notifications.first[:params]["data"]
+    end
+
+    test "logging/setLevel without a session configures server-wide broadcasts" do
+      response = @server.handle(
+        { jsonrpc: "2.0", id: 1, method: "logging/setLevel", params: { level: "info" } },
+      )
+      assert_equal({}, response[:result])
+
+      @server.notify_log_message(data: "debug log", level: "debug")
+      @server.notify_log_message(data: "broadcast log", level: "info")
+
+      assert_equal 1, @mock_transport.notifications.size
+      assert_equal Methods::NOTIFICATIONS_MESSAGE, @mock_transport.notifications.first[:method]
+      assert_equal "broadcast log", @mock_transport.notifications.first[:params]["data"]
     end
   end
 end
