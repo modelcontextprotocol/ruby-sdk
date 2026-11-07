@@ -227,7 +227,7 @@ module JsonRpcHandler
   end
 
   def valid_method_name?(method)
-    method.is_a?(String) && !method.start_with?("rpc.")
+    method.is_a?(String) && method.valid_encoding? && !method.start_with?("rpc.")
   end
 
   def valid_params?(params)

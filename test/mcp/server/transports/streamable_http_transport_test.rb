@@ -398,6 +398,63 @@ module MCP
           assert_equal 200, ping_response[0]
         end
 
+        test "a duplicate initialize whose id is not valid UTF-8 is refused with no id" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
+          )
+          session_id = @transport.handle_request(init_request)[1]["mcp-session-id"]
+          duplicate = { jsonrpc: "2.0", method: "initialize", id: "second", params: initialize_params }.to_json
+            .b.sub('"second"', "\"a\xFF\"".b)
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            duplicate,
+          ))
+
+          assert_equal 400, response[0]
+          parsed = JSON.parse(response[2][0])
+          refute parsed.key?("id")
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"]
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "a request whose method name is not valid UTF-8 is refused with -32600 on the legacy path" do
+          # Dispatched as sent, the name reached the Method not found error, whose `data` could not be written
+          # as JSON, so the request was answered `-32603` Internal error instead of refused.
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "first", params: initialize_params }.to_json,
+          )
+          session_id = @transport.handle_request(init_request)[1]["mcp-session-id"]
+          body = { jsonrpc: "2.0", method: "PLACEHOLDER", id: "m1" }.to_json.b.sub("PLACEHOLDER", "no\xFFpe".b)
+
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            body,
+          ))
+
+          assert_equal 200, response[0]
+          io = StringIO.new
+          response[2].call(io)
+          parsed = JSON.parse(io.string.match(/^data: (.+)$/)[1])
+          assert_equal "m1", parsed["id"]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed["error"]["code"]
+        end
+
         test "rejects initialize with stale Mcp-Session-Id with 404" do
           request = create_rack_request(
             "POST",
@@ -6345,6 +6402,49 @@ module MCP
 
           assert_equal 400, response[0]
           assert_equal(-32020, JSON.parse(response[2][0]).dig("error", "code"))
+        end
+
+        test "modern POST refusals carry no id when the request id is not valid UTF-8" do
+          # The refusal is built before the id is validated; one whose bytes could not be encoded made `to_json`
+          # raise and the rescue answer 500 with an exception report.
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          unsupported = modern_body("ping", {}, version: "2027-01-01").b.sub('"id":1', "\"id\":\"a\xFF\"".b)
+          mismatched = modern_body("ping", {}).b.sub('"id":1', "\"id\":\"a\xFF\"".b)
+
+          by_version = @transport.handle_request(modern_rack_request(unsupported, version: "2027-01-01"))
+          by_header = @transport.handle_request(modern_rack_request(mismatched, headers: { "HTTP_MCP_METHOD" => "tools/call" }))
+
+          [[by_version, -32022], [by_header, -32020]].each do |response, code|
+            assert_equal 400, response[0]
+            parsed = JSON.parse(response[2][0])
+            assert_equal code, parsed.dig("error", "code")
+            refute parsed.key?("id")
+          end
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "modern POST refusals keep an integer or string id and drop any other" do
+          kept = ['""', "123456789012345678901234567890"]
+          dropped = ["true", "1.5", "{}"]
+
+          (kept + dropped).each do |id|
+            body = modern_body("ping", {}, version: "2027-01-01").sub('"id":1', "\"id\":#{id}")
+
+            response = @transport.handle_request(modern_rack_request(body, version: "2027-01-01"))
+
+            assert_equal 400, response[0], id
+            parsed = JSON.parse(response[2][0])
+            assert_equal(-32022, parsed.dig("error", "code"), id)
+            if kept.include?(id)
+              assert_equal JSON.parse(id), parsed["id"], id
+            else
+              refute parsed.key?("id"), id
+            end
+          end
         end
 
         test "modern POST without the Mcp-Method header returns 400 with -32020" do
