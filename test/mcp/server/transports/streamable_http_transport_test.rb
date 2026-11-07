@@ -6327,6 +6327,90 @@ module MCP
           assert_equal "2027-01-01", body.dig("error", "data", "requested")
         end
 
+        test "modern POST answers 400 with -32022 when the requested version is not valid UTF-8" do
+          # The echoed `requested` member is scrubbed, where `to_json` on the raw value raised and the rescue answered 500 with an exception report.
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          version = "2026-07-28\xFF".dup.force_encoding(Encoding::UTF_8)
+
+          response = @transport.handle_request(modern_rack_request(modern_body("ping", {}), version: version))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32022, body.dig("error", "code"))
+          assert_equal "2026-07-28\uFFFD", body.dig("error", "data", "requested")
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "modern POST answers 400 with -32020 when a mirror header that mismatches is not valid UTF-8" do
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          invalid_method = "tools/call\xFF".dup.force_encoding(Encoding::UTF_8)
+          invalid_name = "=?base64?#{["file:///\xFF".b].pack("m0")}?="
+
+          by_method = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}),
+            headers: { "HTTP_MCP_METHOD" => invalid_method },
+          ))
+          by_name = @transport.handle_request(modern_rack_request(
+            modern_body("resources/read", { uri: "file:///a.txt" }),
+            headers: { "HTTP_MCP_NAME" => invalid_name },
+          ))
+
+          [by_method, by_name].each do |response|
+            assert_equal 400, response[0]
+            body = JSON.parse(response[2][0])
+            assert_equal(-32020, body.dig("error", "code"))
+            assert_includes body.dig("error", "message"), "\uFFFD"
+          end
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "modern POST answers 400 with -32020 when the body's envelope version is not valid UTF-8" do
+          # The body side of the mismatch message comes out of the JSON parser, which passes such bytes through.
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+          body_string = modern_body("ping", {}, version: "2026-07-28X").b.sub("2026-07-28X", "2026-07-28\xFF".b)
+
+          response = @transport.handle_request(modern_rack_request(body_string))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32020, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "\uFFFD"
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
+        test "modern POST echoes a valid non-ASCII mirror header given as bytes in its -32020 message" do
+          # A Rack server hands the header over as ASCII-8BIT; json 3.1 refuses to serialize such a string
+          # when it holds bytes above 0x7F, valid UTF-8 or not, so the mismatch answered 500 there.
+          reported = []
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(error, _context) { reported << error }
+
+          response = @transport.handle_request(modern_rack_request(
+            modern_body("ping", {}),
+            headers: { "HTTP_MCP_METHOD" => "p\xC3\xAFng".b },
+          ))
+
+          assert_equal 400, response[0]
+          body = JSON.parse(response[2][0])
+          assert_equal(-32020, body.dig("error", "code"))
+          assert_includes body.dig("error", "message"), "p\u00EFng"
+          assert_empty reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+        end
+
         test "modern POST with a header/body version mismatch returns 400 with -32020" do
           # Header names the supported modern version; the body envelope claims another.
           response = @transport.handle_request(modern_rack_request(

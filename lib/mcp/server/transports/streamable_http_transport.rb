@@ -905,7 +905,7 @@ module MCP
               message: "Unsupported protocol version",
               data: {
                 supported: MCP::Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
-                requested: header_version,
+                requested: printable_value(header_version),
               },
               id: body[:id],
             )
@@ -990,7 +990,7 @@ module MCP
           meta_version = params.is_a?(Hash) && params[:_meta].is_a?(Hash) ? params.dig(:_meta, :"io.modelcontextprotocol/protocolVersion") : nil
           if meta_version && meta_version != header_version
             return header_mismatch_response(
-              "MCP-Protocol-Version header value '#{header_version}' does not match body value '#{meta_version}'",
+              "MCP-Protocol-Version header value '#{printable_value(header_version)}' does not match body value '#{printable_value(meta_version)}'",
               body[:id],
             )
           end
@@ -1009,7 +1009,7 @@ module MCP
           end
           if method_header != body[:method]
             return header_mismatch_response(
-              "Mcp-Method header value '#{method_header}' does not match body value '#{body[:method]}'",
+              "Mcp-Method header value '#{printable_value(method_header)}' does not match body value '#{printable_value(body[:method])}'",
               body[:id],
             )
           end
@@ -1020,7 +1020,7 @@ module MCP
             if body_name
               if name_header.to_s.empty?
                 return header_mismatch_response(
-                  "Mcp-Name header is required for `#{body[:method]}`",
+                  "Mcp-Name header is required for `#{printable_value(body[:method])}`",
                   body[:id],
                 )
               end
@@ -1028,7 +1028,7 @@ module MCP
               decoded_name = decode_header_value(name_header)
               if decoded_name != body_name
                 return header_mismatch_response(
-                  "Mcp-Name header value '#{decoded_name}' does not match body value '#{body_name}'",
+                  "Mcp-Name header value '#{printable_value(decoded_name)}' does not match body value '#{printable_value(body_name)}'",
                   body[:id],
                 )
               end
@@ -1611,6 +1611,15 @@ module MCP
           end
         end
 
+        # A client-supplied value for an error message or `data` member. A header value reaches the transport as
+        # ASCII-8BIT from a Rack server, or tagged UTF-8 from a test request or a framework, and a body value comes
+        # out of the JSON parser; a value holding bytes that are not valid UTF-8 would make the response's `to_json`
+        # raise and turn the intended 400 into a 500 with an exception report. Such bytes are replaced with U+FFFD;
+        # a valid value comes through unchanged.
+        def printable_value(value)
+          value.to_s.dup.force_encoding(Encoding::UTF_8).scrub
+        end
+
         def header_mismatch_response(message, id)
           json_rpc_error_response(
             status: 400,
@@ -2095,7 +2104,7 @@ module MCP
           json_rpc_error_response(
             status: 400,
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
-            message: "Bad Request: Unsupported protocol version: #{header_value}. Supported versions: #{supported}",
+            message: "Bad Request: Unsupported protocol version: #{printable_value(header_value)}. Supported versions: #{supported}",
           )
         end
 
