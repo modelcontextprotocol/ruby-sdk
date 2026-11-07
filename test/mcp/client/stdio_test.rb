@@ -679,7 +679,8 @@ module MCP
       def test_env_is_passed_to_process
         transport = Stdio.new(command: "ruby", args: ["server.rb"], env: { "FOO" => "bar" })
 
-        Open3.expects(:popen3).with({ "FOO" => "bar" }, "ruby", "server.rb").returns(
+        spawn_env = Stdio::DEFAULT_INHERITED_ENV_VARS.to_h { |key| [key, ENV[key]] }.compact.merge("FOO" => "bar")
+        Open3.expects(:popen3).with(spawn_env, "ruby", "server.rb", unsetenv_others: true).returns(
           [StringIO.new, StringIO.new, StringIO.new, mock_wait_thread],
         )
 
