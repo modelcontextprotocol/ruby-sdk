@@ -122,6 +122,9 @@ response = client.call_tool(
 stdio_transport.close
 ```
 
+Stdio servers inherit only a small base environment by default, including `GEM_HOME` and `GEM_PATH`.
+Pass extra variables through `env:`, or set `inherit_env: true` to restore full inheritance.
+
 The same client can connect to Streamable HTTP servers with `MCP::Client::HTTP`;
 see [Client Transports](https://ruby.sdk.modelcontextprotocol.io/client/transports/).
 
