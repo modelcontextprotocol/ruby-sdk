@@ -733,9 +733,9 @@ module MCP
 
       handler = @handlers[method]
       unless handler
-        instrument_call("unsupported_method", server_context: { request: request }) do
+        instrument_call("unsupported_method", server_context: { request: request }) do |instrumentation_data|
           client = session&.client || @client
-          add_instrumentation_data(client: client) if client
+          instrumentation_data.merge!(client: client) if client
         end
         return
       end
@@ -798,7 +798,7 @@ module MCP
           method,
           server_context: { request: request },
           exception_already_reported: ->(e) { reported_exception.equal?(e) },
-        ) do
+        ) do |instrumentation_data|
           refuse_non_object_meta!(params)
           envelope = lift_request_envelope(params, method: method, session: session)
 
@@ -817,7 +817,7 @@ module MCP
           when Methods::INITIALIZE
             init(params, session: session)
           when Methods::RESOURCES_READ
-            contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
+            contents = read_resource_contents(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
 
             # An SEP-2322 `input_required` result must not be wrapped as `contents` or stamped with SEP-2549 cache hints.
             contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
@@ -827,9 +827,9 @@ module MCP
 
             subscription_result(handler_result)
           when Methods::TOOLS_CALL
-            call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
+            call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::PROMPTS_GET
-            get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
+            get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::COMPLETION_COMPLETE
             complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::LOGGING_SET_LEVEL
@@ -838,10 +838,10 @@ module MCP
             dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           end
           client = session&.client || @client
-          add_instrumentation_data(client: client) if client
+          instrumentation_data.merge!(client: client) if client
 
           if cancellation&.cancelled?
-            add_instrumentation_data(cancelled: true, cancellation_reason: cancellation.reason)
+            instrumentation_data.merge!(cancelled: true, cancellation_reason: cancellation.reason)
             next JsonRpcHandler::NO_RESPONSE
           end
 
@@ -851,6 +851,7 @@ module MCP
             result = if envelope.nil? && @input_required_legacy_shim && session
               run_legacy_input_required_shim(
                 result,
+                instrumentation_data: instrumentation_data,
                 method: method,
                 params: params,
                 session: session,
@@ -858,7 +859,7 @@ module MCP
                 cancellation: cancellation,
               )
             else
-              serialize_input_required_result(result, envelope: envelope, request: params, method: method)
+              serialize_input_required_result(result, instrumentation_data: instrumentation_data, envelope: envelope, request: params, method: method)
             end
           end
 
@@ -884,25 +885,25 @@ module MCP
 
           result
         rescue CancelledError => e
-          add_instrumentation_data(cancelled: true, cancellation_reason: e.reason)
+          instrumentation_data.merge!(cancelled: true, cancellation_reason: e.reason)
           next JsonRpcHandler::NO_RESPONSE
         rescue OAuth::InsufficientScopeError => e
           # A handler's `require_scopes!` failure is a client authorization error, not a server fault:
           # surface it as an invalid-request JSON-RPC error whose message names the missing scopes.
           # HTTP-level 403 challenges remain the transport `required_scopes` gate's job.
           report_exception(e, { request: request })
-          add_instrumentation_data(error: :insufficient_scope)
+          instrumentation_data.merge!(error: :insufficient_scope)
           converted = RequestHandlerError.new(e.message, request, error_type: :invalid_request, original_error: e)
           reported_exception = converted
           raise converted
         rescue RequestHandlerError => e
           report_exception(e.original_error || e, { request: request })
-          add_instrumentation_data(error: e.error_type)
+          instrumentation_data.merge!(error: e.error_type)
           reported_exception = e
           raise e
         rescue => e
           report_exception(e, { request: request })
-          add_instrumentation_data(error: :internal_error)
+          instrumentation_data.merge!(error: :internal_error)
           wrapped = RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
           reported_exception = wrapped
           raise wrapped
@@ -998,7 +999,7 @@ module MCP
     # a final result. The capability gate enforces the SEP-2575 rule that servers MUST NOT rely on
     # (or embed requests for) capabilities the client did not declare, and reports every missing capability at
     # once so the client sees the full set.
-    def serialize_input_required_result(result, envelope:, request:, method:)
+    def serialize_input_required_result(result, instrumentation_data:, envelope:, request:, method:)
       if envelope.nil?
         raise RequestHandlerError.new(
           "input_required results require the 2026-07-28 stateless lifecycle (SEP-2322)",
@@ -1010,7 +1011,7 @@ module MCP
       missing = result.missing_client_capabilities(envelope.client_capabilities)
       raise MissingRequiredClientCapabilityError.new(missing, request) unless missing.empty?
 
-      add_instrumentation_data(input_required: true)
+      instrumentation_data.merge!(input_required: true)
       serialized = result.to_h
 
       if @request_state_security && serialized[:requestState]
@@ -1039,7 +1040,7 @@ module MCP
     # re-runs with `inputResponses`/`requestState` merged into the original params - the same deterministic replay
     # contract the modern client driver follows. The `requestState` round-trips in-process as the raw value
     # the handler wrote; `RequestStateSecurity` sealing is wire hardening and does not apply.
-    def run_legacy_input_required_shim(result, method:, params:, session:, related_request_id:, cancellation:)
+    def run_legacy_input_required_shim(result, instrumentation_data:, method:, params:, session:, related_request_id:, cancellation:)
       rounds = 0
 
       loop do
@@ -1071,6 +1072,7 @@ module MCP
         result = redispatch_mrtr_method(
           method,
           retry_params,
+          instrumentation_data: instrumentation_data,
           session: session,
           related_request_id: related_request_id,
           cancellation: cancellation,
@@ -1104,14 +1106,14 @@ module MCP
 
     # Re-runs the handler of one of the three MRTR-capable methods for
     # the legacy shim. Legacy wire, so no envelope is threaded.
-    def redispatch_mrtr_method(method, params, session:, related_request_id:, cancellation:)
+    def redispatch_mrtr_method(method, params, instrumentation_data:, session:, related_request_id:, cancellation:)
       case method
       when Methods::TOOLS_CALL
-        call_tool(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
       when Methods::PROMPTS_GET
-        get_prompt(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
       when Methods::RESOURCES_READ
-        contents = read_resource_contents(params, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        contents = read_resource_contents(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
         contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
       else
         raise RequestHandlerError.new(
@@ -1394,21 +1396,21 @@ module MCP
       apply_cache_metadata({ tools: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def call_tool(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
+    def call_tool(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       tool_name = request[:name]
 
       tool = tools[tool_name]
       unless tool
-        add_instrumentation_data(tool_name: tool_name, error: :tool_not_found)
+        instrumentation_data.merge!(tool_name: tool_name, error: :tool_not_found)
 
         raise RequestHandlerError.new("Tool not found: #{tool_name}", request, error_type: :invalid_params)
       end
 
       arguments = request[:arguments] || {}
-      add_instrumentation_data(tool_name: tool_name, tool_arguments: arguments)
+      instrumentation_data.merge!(tool_name: tool_name, tool_arguments: arguments)
 
       if tool.input_schema&.missing_required_arguments?(arguments)
-        add_instrumentation_data(error: :missing_required_arguments)
+        instrumentation_data.merge!(error: :missing_required_arguments)
 
         missing = tool.input_schema.missing_required_arguments(arguments).join(", ")
         return error_tool_response("Missing required arguments: #{missing}")
@@ -1418,7 +1420,7 @@ module MCP
         begin
           tool.input_schema.validate_arguments(arguments)
         rescue Tool::InputSchema::ValidationError => e
-          add_instrumentation_data(error: :invalid_schema)
+          instrumentation_data.merge!(error: :invalid_schema)
 
           return error_tool_response(e.message)
         end
@@ -1473,11 +1475,11 @@ module MCP
       apply_cache_metadata({ prompts: page[:items], nextCursor: page[:next_cursor] }.compact)
     end
 
-    def get_prompt(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
+    def get_prompt(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       prompt_name = request[:name]
       prompt = @prompts[prompt_name]
       unless prompt
-        add_instrumentation_data(error: :prompt_not_found)
+        instrumentation_data.merge!(error: :prompt_not_found)
         # The explicit `error_code` maps an unknown prompt to Invalid Params (-32602) rather than
         # the default Internal Error (-32603), matching the `tools/call`, `resources/read`, and
         # `completion/complete` siblings for the same not-found condition, while `error_type:
@@ -1490,7 +1492,7 @@ module MCP
         )
       end
 
-      add_instrumentation_data(prompt_name: prompt_name)
+      instrumentation_data.merge!(prompt_name: prompt_name)
 
       prompt_args = request[:arguments]
       prompt.validate_arguments!(prompt_args)
@@ -1766,9 +1768,9 @@ module MCP
     # Default `resources/read` handler: routes to class-based resources and resource templates.
     # Fully replaced when `resources_read_handler` is set. When no class-based resource or template is registered,
     # unknown URIs keep the historical no-op `[]` response instead of raising.
-    def read_resource(request, server_context: nil)
+    def read_resource(request, instrumentation_data:, server_context: nil)
       uri = request[:uri]
-      add_instrumentation_data(resource_uri: uri)
+      instrumentation_data.merge!(resource_uri: uri)
 
       # Files of directory-backed skills are looked up by exact string equality in a map built at construction,
       # so request data never reaches the filesystem; a miss falls through to the routing below.
@@ -1798,7 +1800,7 @@ module MCP
         params = template.match_uri(uri)
         next unless params
 
-        add_instrumentation_data(resource_template: template.uri_template)
+        instrumentation_data.merge!(resource_template: template.uri_template)
         return normalize_resource_contents(call_template_contents(template, params, server_context))
       end
 
@@ -1884,9 +1886,22 @@ module MCP
     # Invokes `resources/read` via the registered handler. If the handler block opts in to `server_context:`,
     # pass an `MCP::ServerContext` so the handler can observe cancellation via `server_context.cancelled?` or
     # `server_context.raise_if_cancelled!`.
-    def read_resource_contents(request, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
+    def read_resource_contents(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
+      handler = @handlers[Methods::RESOURCES_READ]
+      if handler == method(:read_resource)
+        server_context = build_server_context(
+          request: request,
+          session: session,
+          related_request_id: related_request_id,
+          cancellation: cancellation,
+          envelope: envelope,
+          auth_info: auth_info,
+        )
+        return read_resource(request, instrumentation_data: instrumentation_data, server_context: server_context)
+      end
+
       dispatch_optional_context_handler(
-        @handlers[Methods::RESOURCES_READ],
+        handler,
         request,
         session: session,
         related_request_id: related_request_id,

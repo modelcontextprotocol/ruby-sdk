@@ -84,6 +84,11 @@ If no exception reporter is configured, a default no-op reporter is used that si
 The `around_request` hook wraps request handling, allowing you to execute code before and after each request.
 This is useful for Application Performance Monitoring (APM) tracing, logging, or other observability needs.
 
+The SDK keeps separate instrumentation data for each request. Both hooks receive that request's hash.
+
+`add_instrumentation_data` is deprecated. Update the data hash passed to `around_request` instead.
+The helper retains shared-record behavior and is not safe for concurrent calls.
+
 The hook receives a `data` hash and a `request_handler` block. You must call `request_handler.call` to execute the request:
 
 **Signature:**

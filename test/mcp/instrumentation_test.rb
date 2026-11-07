@@ -455,6 +455,104 @@ module MCP
       assert_equal({ request: { id: 42 } }, reported_context)
     end
 
+    test "#instrument_call isolates overlapping fibers and keeps both hooks on the same record" do
+      subject = Subject.new
+      completed = []
+      around = []
+      subject.configuration.instrumentation_callback = ->(data) { completed << data }
+      subject.configuration.around_request = ->(data, &request_handler) do
+        data.merge!(tool_name: "#{data[:method]}_tool", tool_arguments: { value: data[:method] })
+        request_handler.call
+        data.merge!(client: { name: "slow_client" }, error: :custom_error) if data[:method] == "slow"
+      ensure
+        around << data
+      end
+
+      slow = Fiber.new do
+        subject.instrument_call("slow") { Fiber.yield }
+      end
+      slow.resume
+      subject.instrument_call("fast") {}
+      slow.resume
+
+      assert_equal(["fast", "slow"], completed.map { |data| data[:method] })
+      assert_equal(["fast_tool", "slow_tool"], completed.map { |data| data[:tool_name] })
+      assert_equal([{ value: "fast" }, { value: "slow" }], completed.map { |data| data[:tool_arguments] })
+      refute(completed.first.key?(:client))
+      refute(completed.first.key?(:error))
+      assert_equal({ name: "slow_client" }, completed.last[:client])
+      assert_equal(:custom_error, completed.last[:error])
+      completed.zip(around).each do |callback_data, around_data|
+        assert_same(around_data, callback_data)
+        assert_kind_of(Numeric, callback_data[:duration])
+      end
+    end
+
+    test "#instrument_call keeps the outer record separate after a nested call raises" do
+      subject = Subject.new
+      completed = []
+      subject.configuration.instrumentation_callback = ->(data) { completed << data }
+      subject.configuration.around_request = ->(data, &request_handler) do
+        data.merge!(tool_name: "outer_tool") if data[:method] == "outer"
+        request_handler.call
+        data.merge!(client: { name: "outer_client" }) if data[:method] == "outer"
+      end
+
+      subject.instrument_call("outer") do
+        assert_raises(RuntimeError) do
+          subject.instrument_call("inner") { raise "inner failure" }
+        end
+      end
+
+      assert_equal(["inner", "outer"], completed.map { |data| data[:method] })
+      assert_equal(:internal_error, completed.first[:error])
+      assert_equal("outer_tool", completed.last[:tool_name])
+      assert_equal({ name: "outer_client" }, completed.last[:client])
+      refute(completed.last.key?(:error))
+      refute(completed.first.key?(:client))
+    end
+
+    test "#instrument_call keeps the outer record separate after a nested callback raises" do
+      subject = Subject.new
+      completed = []
+      subject.configuration.instrumentation_callback = ->(data) do
+        completed << data
+        raise "callback failure" if completed.one?
+      end
+      subject.configuration.around_request = ->(data, &request_handler) do
+        data.merge!(tool_name: "outer_tool") if data[:method] == "outer"
+        request_handler.call
+        data.merge!(client: { name: "outer_client" }) if data[:method] == "outer"
+      end
+
+      subject.instrument_call("outer") do
+        error = assert_raises(RuntimeError) { subject.instrument_call("inner") {} }
+        assert_equal("callback failure", error.message)
+      end
+
+      assert_equal(["inner", "outer"], completed.map { |data| data[:method] })
+      assert_equal("outer", completed.last[:method])
+      assert_equal("outer_tool", completed.last[:tool_name])
+      assert_equal({ name: "outer_client" }, completed.last[:client])
+      refute(completed.first.key?(:tool_name))
+      refute(completed.first.key?(:client))
+    end
+
+    test "#add_instrumentation_data preserves the legacy shared-record helper" do
+      subject = Subject.new
+
+      subject.instrument_call("legacy") do
+        subject.add_instrumentation_data(additional_data: "legacy")
+      end
+      data = subject.instrumentation_data_received
+
+      assert_equal("legacy", data[:method])
+      assert_equal("legacy", data[:additional_data])
+      assert_kind_of(Numeric, data[:duration])
+      assert_same(data, subject.add_instrumentation_data(after_request: "updated"))
+      assert_equal("updated", data[:after_request])
+    end
+
     test "#instrument_call resets the instrumentation data between calls" do
       subject = Subject.new
 
