@@ -545,8 +545,12 @@ module MCP
       def send_notification(notification:)
         method = notification[:method] || notification["method"]
 
-        redacting_authorization_header { client.post("", notification, session_headers) }
+        redacting_authorization_header do
+          client.post("", notification, session_headers) { |req| req.options.on_data = bounded_on_data }
+        end
         nil
+      rescue MessageTooLargeError => e
+        raise RequestHandlerError.new(e.message, { method: method }, error_type: :internal_error)
       rescue Faraday::Error => e
         raise RequestHandlerError.new(
           "Failed to send #{method} notification",
@@ -573,7 +577,11 @@ module MCP
         end
 
         begin
-          redacting_authorization_header { client.delete("", nil, session_headers) }
+          redacting_authorization_header do
+            client.delete("", nil, session_headers) { |req| req.options.on_data = bounded_on_data }
+          end
+        rescue MessageTooLargeError => e
+          raise RequestHandlerError.new(e.message, {}, error_type: :internal_error)
         rescue Faraday::ClientError => e
           raise unless [404, 405].include?(e.response&.dig(:status))
         ensure
@@ -1234,7 +1242,22 @@ module MCP
       end
 
       def send_client_response(response)
-        redacting_authorization_header { client.post("", response, session_headers) }
+        redacting_authorization_header do
+          client.post("", response, session_headers) { |req| req.options.on_data = bounded_on_data }
+        end
+      end
+
+      # Counts discarded response bytes without parsing the body, whatever its content type.
+      def bounded_on_data
+        received_bytes = 0
+
+        proc do |chunk, _received_bytes, _env|
+          received_bytes += chunk.bytesize
+
+          if received_bytes > @max_message_bytes
+            raise MessageTooLargeError, "Server response body exceeds #{@max_message_bytes} bytes"
+          end
+        end
       end
 
       def parse_json_buffer(buffer, method, params)

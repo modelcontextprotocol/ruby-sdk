@@ -1338,6 +1338,210 @@ module MCP
         assert_equal({ "tools" => [] }, response["result"])
       end
 
+      def test_send_notification_rejects_response_body_exceeding_max_message_bytes
+        notification = {
+          jsonrpc: "2.0",
+          method: MCP::Methods::NOTIFICATIONS_CANCELLED,
+          params: { requestId: "req-1" },
+        }
+        client = HTTP.new(url: url, max_message_bytes: 64)
+
+        stub_request(:post, url).with(body: notification.to_json).to_return(status: 202, body: "a" * 128)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_notification(notification: notification)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        assert_equal(:internal_error, error.error_type)
+      end
+
+      def test_send_request_rejects_pong_acknowledgement_exceeding_max_message_bytes
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "tools/list",
+        }
+        client = HTTP.new(url: url, max_message_bytes: 128)
+
+        server_ping = { jsonrpc: "2.0", id: 7, method: "ping" }
+        tools_result = { jsonrpc: "2.0", id: "test_id", result: { tools: [] } }
+        stub_request(:post, url).with(
+          body: request.to_json,
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: #{server_ping.to_json}\n\ndata: #{tools_result.to_json}\n\n",
+        )
+
+        pong = { jsonrpc: "2.0", id: 7, result: {} }
+        stub_request(:post, url).with(body: pong.to_json).to_return(status: 202, body: "a" * 256)
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_request(request: request)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 128 bytes")
+        assert_equal(:internal_error, error.error_type)
+      end
+
+      def test_close_rejects_response_body_exceeding_max_message_bytes_and_still_clears_state
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        stub_initialize
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+
+        stub_request(:delete, url).to_return(status: 200, body: "a" * 128)
+
+        error = assert_raises(RequestHandlerError) do
+          client.close
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        assert_nil(client.session_id)
+      end
+
+      def test_send_notification_bounds_sse_framed_response_without_parser
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        notification = { jsonrpc: "2.0", method: MCP::Methods::NOTIFICATIONS_CANCELLED }
+        stub_event_stream_parser_unavailable
+        stub_request(:post, url).with(body: notification.to_json).to_return(
+          status: 202,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: {}\n\n" * 16,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.send_notification(notification: notification)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        assert_equal(:internal_error, error.error_type)
+      end
+
+      def test_pong_acknowledgement_bounds_sse_framed_response_without_parser
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        server_ping = { "jsonrpc" => "2.0", "id" => 7, "method" => "ping" }
+        pong = { jsonrpc: "2.0", id: 7, result: {} }
+        stub_event_stream_parser_unavailable
+        stub_request(:post, url).with(body: pong.to_json).to_return(
+          status: 202,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: {}\n\n" * 16,
+        )
+
+        error = assert_raises(HTTP.const_get(:MessageTooLargeError)) do
+          client.send(:dispatch_server_request, server_ping)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+      end
+
+      def test_close_bounds_sse_framed_response_without_parser
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        stub_initialize
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+        stub_event_stream_parser_unavailable
+        stub_request(:delete, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: {}\n\n" * 16,
+        )
+
+        error = assert_raises(RequestHandlerError) do
+          client.close
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        assert_nil(client.session_id)
+        assert_nil(client.protocol_version)
+      end
+
+      def test_discarded_responses_within_limit_do_not_load_parser
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        stub_initialize
+        client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+        stub_event_stream_parser_unavailable
+        stub_request(:post, url).to_return(
+          status: 202,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: {}\n\n" * 4,
+        )
+        stub_request(:delete, url).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "data: {}\n\n" * 4,
+        )
+
+        notification = { jsonrpc: "2.0", method: MCP::Methods::NOTIFICATIONS_CANCELLED }
+        assert_nil(client.send_notification(notification: notification))
+        client.send(:dispatch_server_request, { "jsonrpc" => "2.0", "id" => 7, "method" => "ping" })
+        client.close
+
+        assert_requested(:post, url, times: 3)
+        assert_nil(client.session_id)
+        assert_nil(client.protocol_version)
+      end
+
+      def test_discarded_response_reader_counts_bytes_across_chunks
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        reader = client.send(:bounded_on_data)
+        reader.call("é" * 16, 0)
+        reader.call("é" * 16, 0)
+
+        error = assert_raises(HTTP.const_get(:MessageTooLargeError)) do
+          reader.call("a", 0)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+        client.send(:bounded_on_data).call("a" * 64, 0)
+      end
+
+      def test_discarded_response_reader_bounds_the_whole_sse_framed_body
+        client = HTTP.new(url: url, max_message_bytes: 64)
+        reader = client.send(:bounded_on_data)
+        env = stub(response_headers: { "content-type" => "text/event-stream" })
+        chunk = "data: {}\n\n" * 4
+        reader.call(chunk, chunk.bytesize, env)
+
+        error = assert_raises(HTTP.const_get(:MessageTooLargeError)) do
+          reader.call(chunk, chunk.bytesize * 2, env)
+        end
+
+        assert_includes(error.message, "Server response body exceeds 64 bytes")
+      end
+
+      def test_close_applies_response_size_limit_before_status_errors
+        [404, 405, 500].each do |status|
+          client = HTTP.new(url: url, max_message_bytes: 64)
+          stub_initialize
+          client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+          stub_request(:delete, url).to_return(status: status, body: "a" * 128)
+
+          error = assert_raises(RequestHandlerError) do
+            client.close
+          end
+
+          assert_includes(error.message, "Server response body exceeds 64 bytes")
+          assert_equal(:internal_error, error.error_type)
+          assert_nil(client.session_id)
+          assert_nil(client.protocol_version)
+        end
+      end
+
+      def test_close_tolerates_404_and_405_response_bodies_within_max_message_bytes
+        [404, 405].each do |status|
+          client = HTTP.new(url: url, max_message_bytes: 64)
+          stub_initialize
+          client.send_request(request: { jsonrpc: "2.0", id: "1", method: "initialize" })
+          stub_request(:delete, url).to_return(status: status, body: "a" * 64)
+
+          client.close
+
+          assert_nil(client.session_id)
+          assert_nil(client.protocol_version)
+        end
+      end
+
       def test_sse_stream_rejects_unterminated_event_exceeding_max_message_bytes
         stream = HTTP.const_get(:SSEStream).new(abortable: false, max_message_bytes: 64)
         env = stub(response_headers: { "content-type" => "text/event-stream" })
@@ -3220,6 +3424,14 @@ module MCP
         stub_request(:post, url)
           .with { |req| JSON.parse(req.body)["method"] == "notifications/initialized" }
           .to_return(status: 202, body: "")
+      end
+
+      def stub_event_stream_parser_unavailable
+        HTTP.any_instance.stubs(:require).with("faraday").returns(true)
+        HTTP.any_instance.stubs(:require).with("event_stream_parser").raises(LoadError, "cannot load event_stream_parser")
+        HTTP.const_get(:SSEStream).any_instance.stubs(:require).with("event_stream_parser")
+          .raises(LoadError, "cannot load event_stream_parser")
+        EventStreamParser::Parser.expects(:new).never
       end
 
       def stub_discover
