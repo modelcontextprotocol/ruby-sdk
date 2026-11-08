@@ -58,11 +58,29 @@ module MCP
           assert_equal("https://auth.example.com", provider.client_information["issuer"])
         end
 
-        def test_initialize_rejects_an_issuer_that_is_not_a_non_empty_string
-          ["", " ", :issuer, false, 123].each do |issuer|
-            assert_raises(ClientCredentialsProvider::InvalidCredentialsError) do
+        def test_initialize_rejects_an_issuer_that_is_not_an_issuer_url
+          [
+            "", " ", :issuer, false, 123, :"https://auth.example.com", URI("https://auth.example.com"),
+            "auth.example.com", "ftp://auth.example.com", "https://", "https://auth.example.com/ metadata",
+            "https://auth.example.com/?tenant=1", "https://auth.example.com/#section",
+            "http://auth.example.com", "http://10.0.0.5", "http://localhost.example.com", "http://127.attacker.example"
+          ].each do |issuer|
+            error = assert_raises(ClientCredentialsProvider::InvalidCredentialsError, issuer.inspect) do
               ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: issuer)
             end
+
+            assert_match(/issuer must be the authorization server's issuer URL/, error.message)
+          end
+        end
+
+        def test_initialize_accepts_an_https_issuer_and_a_loopback_http_issuer
+          [
+            "https://auth.example.com", "https://auth.example.com/", "https://auth.example.com/tenant", "HTTPS://auth.example.com",
+            "http://127.0.0.1:9292", "http://localhost:8080/auth", "http://[::1]:9292"
+          ].each do |issuer|
+            provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: issuer)
+
+            assert_equal(issuer, provider.client_information["issuer"])
           end
         end
 

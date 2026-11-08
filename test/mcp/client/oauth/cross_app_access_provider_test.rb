@@ -54,9 +54,13 @@ module MCP
           assert_equal("https://auth.example.com", provider.client_information["issuer"])
         end
 
-        def test_initialize_rejects_an_issuer_that_is_not_a_non_empty_string
-          ["", " ", :issuer, false, 123].each do |issuer|
-            assert_raises(CrossAppAccessProvider::InvalidConfigurationError) do
+        def test_initialize_rejects_an_issuer_that_is_not_an_issuer_url
+          [
+            "", " ", :issuer, false, 123, URI("https://auth.example.com"),
+            "auth.example.com", "ftp://auth.example.com", "https://", "https://auth.example.com/?tenant=1",
+            "http://auth.example.com", "http://10.0.0.5"
+          ].each do |issuer|
+            error = assert_raises(CrossAppAccessProvider::InvalidConfigurationError, issuer.inspect) do
               CrossAppAccessProvider.new(
                 client_id: "xaa-client",
                 client_secret: "xaa-secret",
@@ -64,6 +68,21 @@ module MCP
                 issuer: issuer,
               )
             end
+
+            assert_match(/issuer must be the authorization server's issuer URL/, error.message)
+          end
+        end
+
+        def test_initialize_accepts_an_https_issuer_and_a_loopback_http_issuer
+          ["https://auth.example.com", "HTTPS://auth.example.com", "http://127.0.0.1:9292", "http://[::1]:9292"].each do |issuer|
+            provider = CrossAppAccessProvider.new(
+              client_id: "xaa-client",
+              client_secret: "xaa-secret",
+              assertion_provider: ->(**) { "id-jag" },
+              issuer: issuer,
+            )
+
+            assert_equal(issuer, provider.client_information["issuer"])
           end
         end
 
