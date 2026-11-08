@@ -25,9 +25,21 @@ Use the `MCP::Client::Stdio` transport to interact with MCP servers running as s
 |---|---|---|
 | `command:` | Yes | The command to spawn the server process (e.g., `"ruby"`, `"bundle"`, `"npx"`). |
 | `args:` | No | An array of arguments passed to the command. Defaults to `[]`. |
-| `env:` | No | A hash of environment variables to set for the server process. Defaults to `nil`. |
+| `env:` | No | Extra environment variables for the server process, merged over the inherited base environment. Values override inherited variables; a `nil` value removes a variable. Defaults to `nil`. |
+| `inherit_env:` | No | Inherit the full parent environment instead of the default allow-list. Defaults to `false`. |
 | `read_timeout:` | No | Timeout in seconds for waiting for a server response. Defaults to `nil` (no timeout). |
 | `max_line_bytes:` | No | Maximum byte length of a single newline-delimited response frame. A frame that reaches this limit without a newline is rejected as a transport error, preventing unbounded memory growth from a server that never emits a newline. Defaults to `4 * 1024 * 1024` (4 MiB). |
+
+By default, the server inherits only these variables that are present in the parent environment:
+
+- Unix: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, `GEM_HOME`, `GEM_PATH`.
+- Windows: `APPDATA`, `HOMEDRIVE`, `HOMEPATH`, `LOCALAPPDATA`, `PATH`, `PATHEXT`,
+  `PROCESSOR_ARCHITECTURE`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`, `USERNAME`, `USERPROFILE`,
+  `GEM_HOME`, `GEM_PATH`.
+
+**Migration:** Previous versions inherited the full parent environment. Pass required extra variables
+through `env:`, or set `inherit_env: true` to restore that behavior. Full inheritance also passes
+parent credentials and unrelated variables to the server.
 
 Example usage:
 
