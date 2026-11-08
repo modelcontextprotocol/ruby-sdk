@@ -509,6 +509,20 @@ module MCP
           end
         end
 
+        # Sessions a server-wide log broadcast is offered to, each applying its own level or the server default.
+        # Public only so that `Server#notify_log_message` can call it. Custom transports may implement this hook;
+        # returning `nil` keeps the server-wide filter.
+        #
+        # @api private
+        # @return [Array<ServerSession>]
+        def logging_sessions
+          @mutex.synchronize do
+            @sessions.values.filter_map do |session|
+              session[:server_session] if session[:get_sse_stream]
+            end
+          end
+        end
+
         def send_notification(method, params = nil, session_id: nil, related_request_id: nil)
           # `subscriptions/listen` streams (SEP-2575) receive matching change notifications regardless of the delivery below:
           # a resource updated by one session's tool call changed globally, so modern subscribers hear about it too.
