@@ -73,6 +73,21 @@ describe JsonRpcHandler do
       assert_equal 1, @response[:id]
     end
 
+    it "returns an error and does not call the method when the method name is not valid UTF-8" do
+      # Such a name reached dispatch: unknown, its Method not found error could not be written as JSON, and registered, it ran.
+      called = false
+      register("no\xFFpe".dup.force_encoding(Encoding::UTF_8)) { called = true }
+
+      handle_json "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"no\xFFpe\"}".b
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: 'Method name must be a string and not start with "rpc."',
+      }
+      refute called
+    end
+
     it "returns an error when method begins with 'rpc.'" do
       handle jsonrpc: "2.0", id: 1, method: "rpc.add", params: { a: 1, b: 2 }
 
