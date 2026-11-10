@@ -39,6 +39,15 @@ module MCP
 
         DEFAULT_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"].freeze
 
+        EC_CURVE_ALGORITHMS = {
+          "prime256v1" => "ES256",
+          "secp256r1" => "ES256",
+          "secp384r1" => "ES384",
+          "secp521r1" => "ES512",
+          "secp256k1" => "ES256K",
+        }.freeze
+        private_constant :EC_CURVE_ALGORITHMS
+
         HMAC_ALGORITHM_PATTERN = /\AHS\d+\z/i.freeze
         private_constant :HMAC_ALGORITHM_PATTERN
 
@@ -126,12 +135,32 @@ module MCP
             leeway: @leeway,
           }
 
-          if @key
-            JWT.decode(token, @key, true, options)
-          elsif @static_jwks
-            JWT.decode(token, nil, true, options.merge(jwks: @static_jwks))
+          JWT.decode(token, nil, true, options) do |header|
+            raise InvalidTokenError, "Invalid token" unless @key || header["kid"]
+
+            key = @key || JWT::JWK::KeyFinder.new(jwks: @static_jwks || jwk_loader).key_for(header["kid"])
+            keys = Array(key).select { |candidate| algorithm_matches_key?(header["alg"], candidate) }
+            raise InvalidTokenError, "Invalid token" if keys.empty?
+
+            keys
+          end
+        end
+
+        def algorithm_matches_key?(algorithm, key)
+          case key
+          when OpenSSL::PKey::RSA
+            algorithm.match?(/\A(?:RS|PS)(?:256|384|512)\z/i)
+          when OpenSSL::PKey::EC, OpenSSL::PKey::EC::Point
+            curve_algorithm = EC_CURVE_ALGORITHMS[key.group.curve_name]
+            curve_algorithm && curve_algorithm.casecmp?(algorithm)
+          when String
+            algorithm.match?(/\AHS(?:256|384|512)\z/i)
+          when JWT::JWK::KeyBase
+            algorithm_matches_key?(algorithm, key.verify_key)
           else
-            JWT.decode(token, nil, true, options.merge(jwks: jwk_loader))
+            ed25519_key = (defined?(Ed25519::VerifyKey) && key.is_a?(Ed25519::VerifyKey)) ||
+              (defined?(RbNaCl::Signatures::Ed25519::VerifyKey) && key.is_a?(RbNaCl::Signatures::Ed25519::VerifyKey))
+            ed25519_key && ["EdDSA", "Ed25519"].any? { |name| name.casecmp?(algorithm) }
           end
         end
 

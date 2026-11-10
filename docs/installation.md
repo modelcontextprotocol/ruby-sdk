@@ -45,6 +45,8 @@ See [Authorization](/server/authorization/).
 gem "jwt"
 ```
 
+jwt 3.3.0 or later is recommended for its upstream key-type fix. Older versions remain supported.
+
 The HTTP client transport requires the `faraday` gem:
 
 ```ruby
