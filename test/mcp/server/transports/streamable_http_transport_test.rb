@@ -7291,6 +7291,21 @@ module MCP
           assert_equal(-32020, JSON.parse(mismatched[2][0]).dig("error", "code"))
         end
 
+        test "modern POST checks Mcp-Name against the uri of a resources/read whatever name the params carry" do
+          matched = @transport.handle_request(modern_rack_request(
+            modern_body("resources/read", { uri: "file:///a.txt", name: "file:///b.txt" }),
+            name_header: "file:///a.txt",
+          ))
+          mismatched = @transport.handle_request(modern_rack_request(
+            modern_body("resources/read", { uri: "file:///a.txt", name: "file:///b.txt" }),
+            name_header: "file:///b.txt",
+          ))
+
+          assert_equal 200, matched[0]
+          assert_equal 400, mismatched[0]
+          assert_equal(-32020, JSON.parse(mismatched[2][0]).dig("error", "code"))
+        end
+
         test "modern POST rejects an Mcp-Session-Id header" do
           response = @transport.handle_request(modern_rack_request(
             modern_body("ping", {}),

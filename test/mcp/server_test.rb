@@ -714,6 +714,27 @@ module MCP
       assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, cross_call.dig(:error, :code)
     end
 
+    test "#handle rejects a requestState of one resource on another whatever name the params carry" do
+      security = Server::RequestStateSecurity.new(key: "k" * 32)
+      server = Server.new(name: "mrtr_test", request_state_security: security)
+      server.resources_read_handler do |params, server_context:|
+        if server_context.request_state
+          [{ uri: params[:uri], text: "contents" }]
+        else
+          Server::InputRequiredResult.new(request_state: "confirmed")
+        end
+      end
+
+      first = server.handle(modern_request("resources/read", { uri: "doc://public", name: "same" }))
+      sealed = first.dig(:result, :requestState)
+      same_resource = server.handle(modern_request("resources/read", { uri: "doc://public", name: "other", requestState: sealed }))
+      other_resource = server.handle(modern_request("resources/read", { uri: "doc://secret", name: "same", requestState: sealed }))
+
+      refute_nil same_resource[:result]
+      assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, other_resource.dig(:error, :code)
+      assert_equal "Invalid or expired requestState", other_resource.dig(:error, :message)
+    end
+
     test "#handle passes requestState through untouched without request_state_security" do
       server = Server.new(name: "mrtr_test", tools: [])
       seen_state = nil

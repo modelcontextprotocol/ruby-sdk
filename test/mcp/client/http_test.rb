@@ -163,6 +163,25 @@ module MCP
         client.send_request(request: request)
       end
 
+      def test_mcp_name_header_is_the_uri_of_a_resources_read_whatever_name_the_params_carry
+        request = {
+          jsonrpc: "2.0",
+          id: "test_id",
+          method: "resources/read",
+          params: { uri: "file:///README.md", name: "readme" },
+        }
+
+        stub_request(:post, url).with(
+          headers: { "Mcp-Method" => "resources/read", "Mcp-Name" => "file:///README.md" },
+        ).to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { jsonrpc: "2.0", result: {} }.to_json,
+        )
+
+        client.send_request(request: request)
+      end
+
       def test_mcp_method_and_name_headers_for_prompts_get
         request = {
           jsonrpc: "2.0",
