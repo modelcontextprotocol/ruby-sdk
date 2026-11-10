@@ -66,11 +66,13 @@ module MCP
 
       def test_default_environment_preserves_case_insensitive_variable_lookups
         # Windows retains mixed-case names in ENV.to_h but accepts uppercase ENV lookups.
-        ENV.stubs(:to_h).returns("Path" => "server-path")
-        ENV.stubs(:[]).returns(nil)
-        ENV.stubs(:[]).with("PATH").returns("server-path")
+        environment = Hash.new { |hash, key| hash.find { |name, _| name.casecmp?(key) }&.last }
+        environment["Path"] = "server-path"
+        Stdio.const_set(:ENV, environment)
 
         assert_equal("server-path", server_environment["PATH"])
+      ensure
+        Stdio.send(:remove_const, :ENV)
       end
 
       def test_explicit_env_overrides_default_variables
