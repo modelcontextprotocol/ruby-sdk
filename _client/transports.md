@@ -25,9 +25,21 @@ Use the `MCP::Client::Stdio` transport to interact with MCP servers running as s
 |---|---|---|
 | `command:` | Yes | The command to spawn the server process (e.g., `"ruby"`, `"bundle"`, `"npx"`). |
 | `args:` | No | An array of arguments passed to the command. Defaults to `[]`. |
-| `env:` | No | A hash of environment variables to set for the server process. Defaults to `nil`. |
+| `env:` | No | Extra environment variables for the server process, merged over the inherited base environment. Values override inherited variables; a `nil` value removes a variable. Defaults to `nil`. |
+| `inherit_env:` | No | Inherit the full parent environment instead of the default allow-list. Defaults to `false`. |
 | `read_timeout:` | No | Timeout in seconds for waiting for a server response. Defaults to `nil` (no timeout). |
 | `max_line_bytes:` | No | Maximum byte length of a single newline-delimited response frame. A frame that reaches this limit without a newline is rejected as a transport error, preventing unbounded memory growth from a server that never emits a newline. Defaults to `4 * 1024 * 1024` (4 MiB). |
+
+By default, the server inherits only these variables that are present in the parent environment:
+
+- Unix: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, `GEM_HOME`, `GEM_PATH`.
+- Windows: `APPDATA`, `HOMEDRIVE`, `HOMEPATH`, `LOCALAPPDATA`, `PATH`, `PATHEXT`,
+  `PROCESSOR_ARCHITECTURE`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`, `USERNAME`, `USERPROFILE`,
+  `GEM_HOME`, `GEM_PATH`.
+
+**Migration:** Previous versions inherited the full parent environment. Pass required extra variables
+through `env:`, or set `inherit_env: true` to restore that behavior. Full inheritance also passes
+parent credentials and unrelated variables to the server.
 
 Example usage:
 
@@ -131,7 +143,10 @@ See the [Progress](/server/progress/) page.
 
 `MCP::Client::HTTP.new` accepts an optional `max_message_bytes:` keyword that caps the bytes buffered in memory for a single message from the server -
 an SSE event or a JSON response body. A message that reaches this limit before completing is rejected as a transport error, preventing unbounded memory growth from
-a server that never terminates an SSE event. It defaults to `4 * 1024 * 1024` (4 MiB); raise it if your server returns larger responses.
+a server that never terminates an SSE event. The same limit applies to the bodies the client reads and drops: the acknowledgement of a notification or of a response
+to a server-to-client request, and the answer to the session DELETE. These bodies are counted in full, regardless of content type, without parsing or loading
+`event_stream_parser`. An over-limit DELETE reply raises a transport error before its status is handled, including 404 or 405; replies with those statuses
+within the limit are still tolerated. It defaults to `4 * 1024 * 1024` (4 MiB); raise it if your server returns larger responses.
 
 `MCP::Client::HTTP.new` also accepts `max_reconnection_wait:`, a budget in seconds for resuming a closed SSE stream. It gates every wait between reconnection attempts,
 and what is left of it becomes the read timeout of each resumed stream. The server chooses that wait through the SSE `retry:` field, and resuming happens on the calling thread,
@@ -183,6 +198,9 @@ Registering a handler opens a standalone HTTP GET SSE stream on a background thr
 since servers deliver requests that are not tied to a client request on that stream. Server requests with no registered handler are answered with
 a JSON-RPC `-32601` (method not found) error. To handle methods other than `elicitation/create`, register directly on the transport with
 `http_transport.on_server_request("method/name") { |params| ... }`.
+
+If a handler raises an unexpected exception, the HTTP transport answers with JSON-RPC error `-32603`, `Internal error`.
+The exception class and message are written to local stderr, not sent to the server.
 
 On a [modern](/client/lifecycle/) connection servers cannot send requests at all; the same
 registered handlers instead drive the requests embedded in `input_required` results,

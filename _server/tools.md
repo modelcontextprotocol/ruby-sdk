@@ -153,6 +153,48 @@ Annotations can be set either through the class definition using the `annotation
 {: .note }
 > This **Tool Annotations** feature is supported starting from `protocol_version: '2025-03-26'`.
 
+## Custom Headers from Tool Parameters
+
+On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28, SEP-2243), a tool can designate parameters
+whose values the client mirrors into `Mcp-Param-{Name}` request headers, so intermediaries can route or apply policy on them
+without parsing bodies. Declare the header name with an `x-mcp-header` annotation on the parameter's property:
+
+```ruby
+class RegionalTool < MCP::Tool
+  description "Runs in the region the request names"
+  input_schema(
+    properties: {
+      region: { type: "string", "x-mcp-header": "Region" },
+    },
+    required: ["region"]
+  )
+
+  class << self
+    def call(region:, server_context:)
+      MCP::Tool::Response.new([{ type: "text", text: "Running in #{region}" }])
+    end
+  end
+end
+```
+
+The annotation must be a non-empty HTTP token, unique among the tool's annotations regardless of case,
+and sit on a `string`, `integer`, or `boolean` property reachable from the schema root through `properties` keys only
+(a `number` property is accepted as well, for compatibility with the conformance referee's fixtures, although the specification does not permit it).
+Prefer `-` to `_` inside the name: proxies such as nginx drop header fields whose names hold an underscore by default,
+and the request is then refused for its missing header.
+Conforming clients drop a tool whose annotations break these rules and send no headers for it, and the transport validates nothing for such a tool.
+
+`StreamableHTTPTransport` enforces the server side before the tool runs: on a `tools/call` of the modern lifecycle,
+the `Mcp-Param-{Name}` header of each declared parameter must be present exactly when the body carries a value the client mirrors for it
+(a string, a boolean, a finite float, or an integer within the safe JavaScript range; a value with no header rendering, such as an object, is left to argument validation)
+and must agree with that value once a `=?base64?...?=` sentinel is decoded. A missing or disagreeing header,
+a header whose argument is absent or `null` in the body, a header holding a byte outside the field-value set (visible ASCII, space, and tab)
+without the sentinel, and a sentinel whose payload is not canonical Base64 or not UTF-8
+are refused with HTTP 400 and JSON-RPC error `-32020` (`HeaderMismatch`) naming the header and, except in the two encoding refusals, the argument, never their values.
+Integer and number parameters compare numerically when the header is a canonical decimal of at most 64 bytes, so a header of `42.0` agrees with a body value of `42`;
+the comparison reads plain decimals only, so a number another SDK's client mirrors in exponent form is refused unless it repeats this SDK's own rendering byte for byte.
+Headers for parameters without an annotation are ignored, and the handshake lifecycle (2025-11-25 and earlier) has no such headers.
+
 ## Tool Output Schemas
 
 Tools can optionally define an `output_schema` to specify the expected structure of their results. This works similarly to how `input_schema` is defined and can be used in three ways.

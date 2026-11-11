@@ -82,8 +82,12 @@ end
 
 The `requested_schema` must be a flat object schema: a top-level `type: "object"` whose `properties` are limited to
 primitive types (`string`, `number`, `integer`, `boolean`). Nested objects and arrays are not allowed, which keeps
-the schema simple enough for clients to render as a form. Per the MCP specification, the client validates
-the user's input against this schema before returning it, so the `content` of an `accept` response matches the requested shape.
+the schema simple enough for clients to render as a form.
+
+On the legacy lifecycle, `create_form_elicitation`, `create_url_elicitation`, and the `input_required` shim validate reply actions.
+The SDK checks accepted form content against the requested schema unless `content` is omitted or `nil` (`null` on the wire).
+Invalid replies raise `MCP::Server::ValidationError` with a message starting with `Response validation failed:`.
+On the 2026-07-28 lifecycle, a retried request's `inputResponses` reach the handler through `server_context.input_response` without this check.
 
 ## Default Values and Enums
 
