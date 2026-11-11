@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "base64"
 require "json"
 require "openssl"
 require "securerandom"
@@ -1653,7 +1652,7 @@ module MCP
         def basic_auth_credentials(client_id, client_secret)
           encoded_id = URI.encode_www_form_component(client_id)
           encoded_secret = URI.encode_www_form_component(client_secret)
-          Base64.strict_encode64("#{encoded_id}:#{encoded_secret}")
+          ["#{encoded_id}:#{encoded_secret}"].pack("m0")
         end
 
         def http_get(url)

@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "base64"
 require "digest"
 require "securerandom"
 
@@ -27,7 +26,9 @@ module MCP
           # Generates a PKCE pair (code_verifier and S256 code_challenge).
           def generate
             verifier = SecureRandom.urlsafe_base64(64)
-            challenge = Base64.urlsafe_encode64(Digest::SHA256.digest(verifier), padding: false)
+            # base64url without padding (RFC 7636 Appendix A), spelled with `pack` because `base64` is no longer
+            # a default gem as of Ruby 3.4 and this gem does not depend on it.
+            challenge = [Digest::SHA256.digest(verifier)].pack("m0").tr("+/", "-_").delete("=")
 
             { code_verifier: verifier, code_challenge: challenge, code_challenge_method: "S256" }
           end

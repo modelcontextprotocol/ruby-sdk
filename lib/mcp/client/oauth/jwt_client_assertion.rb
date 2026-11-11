@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "base64"
 require "json"
 require "openssl"
 require "securerandom"
@@ -118,8 +117,10 @@ module MCP
             end.join.then { |hex| [hex].pack("H*") }
           end
 
+          # base64url without padding (RFC 7515 Section 2), spelled with `pack` because `base64` is no longer
+          # a default gem as of Ruby 3.4 and this gem does not depend on it.
           def base64url(data)
-            Base64.urlsafe_encode64(data, padding: false)
+            [data].pack("m0").tr("+/", "-_").delete("=")
           end
         end
       end
