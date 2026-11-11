@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-11
+
+This release validates the `Mcp-Param-*` headers of a tool call against its body (SEP-2243) and adds an optional `issuer:` to
+the machine-to-machine OAuth providers. The Changed entries alter defaults under the exceptions described in [VERSIONING.md](VERSIONING.md):
+the stdio client passes the server process a reduced environment, a stalled SSE stream is closed after `stream_write_timeout:` seconds,
+and an elicitation reply that does not match its schema raises.
+
+### Added
+
+- Validate `Mcp-Param-*` headers against the tool call body (#654)
+- Add an optional `issuer:` to machine-to-machine providers (#674)
+
+### Changed
+
+- Restrict the environment the stdio client passes to the server process (#665)
+- Validate elicitation replies before returning them (#669)
+- Drop a stream whose reader stalls instead of blocking its writers (#676)
+
+### Fixed
+
+- Autoload `MCP::ServerContext` from the gem entry point (#656)
+- Keep HTTP client handler exception details local (#664)
+- Validate JWT algorithms against verification keys (#666)
+- Keep logging levels per session (#667)
+- Isolate instrumentation data per request (#668)
+- Scrub the header and body values echoed into error responses (#671)
+- Refuse ids and method names that cannot be encoded (#672)
+- Apply `max_message_bytes` to remaining HTTP client responses (#673)
+- Stop requiring `base64` in the OAuth client (#678)
+
 ## [1.9.0] - 2026-11-03
 
 This release adds the Skills extension (SEP-2640): a server publishes Agent Skills from a directory or a handler,
