@@ -35,6 +35,9 @@ module MCP
       #   the server's `token_endpoint_auth_signing_alg_values_supported` fails
       #   loudly at construction instead of as a 401 (the TypeScript and Python SDKs
       #   also take the algorithm as an explicit option).
+      # - `issuer`  - String issuer identifier of the authorization server the credentials belong to.
+      #   A different authorization server raises `Flow::AuthorizationError`. Omitting this is deprecated
+      #   and emits a warning; without it, credentials go to whichever authorization server the MCP server names.
       # - `scope`   - String of space-separated scopes to request when the server's
       #   `WWW-Authenticate` and the Protected Resource Metadata do not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`, `client_information`,
@@ -59,12 +62,14 @@ module MCP
 
         attr_reader :scope, :storage
 
+        # @note Omitting `issuer:` is deprecated. Pass the authorization server's issuer URL to limit the credentials to that server.
         def initialize(
           client_id:,
           client_secret: nil,
           token_endpoint_auth_method: "client_secret_basic",
           private_key: nil,
           signing_algorithm: nil,
+          issuer: nil,
           scope: nil,
           storage: nil,
           authorization_request_validator: nil,
@@ -82,7 +87,18 @@ module MCP
                 "client_credentials request is not allowed."
           end
 
+          if issuer.nil?
+            warn(
+              "Omitting `issuer:` is deprecated. Without it, the credentials go to whichever authorization server " \
+                "the MCP server names. Pass the authorization server's issuer URL as `issuer:` so they are only sent there.",
+              uplevel: 1,
+            )
+          elsif !issuer.is_a?(String) || blank?(issuer)
+            raise InvalidCredentialsError, "issuer must be a non-empty String: the issuer identifier of the authorization server the credentials belong to."
+          end
+
           client_information = { "client_id" => client_id, "token_endpoint_auth_method" => token_endpoint_auth_method }
+          client_information["issuer"] = issuer if issuer
 
           if token_endpoint_auth_method == "private_key_jwt"
             validate_private_key_jwt_arguments!(

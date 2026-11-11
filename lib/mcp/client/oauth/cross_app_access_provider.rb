@@ -21,6 +21,9 @@ module MCP
       #
       # Optional keyword arguments:
       #
+      # - `issuer`  - String issuer identifier of the MCP authorization server the credentials belong to.
+      #   A mismatch raises `Flow::AuthorizationError` before `assertion_provider` is called. Omitting this is
+      #   deprecated and emits a warning; without it, credentials go to whichever authorization server the MCP server names.
       # - `scope`   - String of space-separated scopes to request when the server's `WWW-Authenticate` and
       #   the Protected Resource Metadata do not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`, `client_information`, and `save_client_information(info)`.
@@ -41,10 +44,12 @@ module MCP
 
         attr_reader :scope, :storage
 
+        # @note Omitting `issuer:` is deprecated. Pass the authorization server's issuer URL to limit the credentials to that server.
         def initialize(
           client_id:,
           client_secret:,
           assertion_provider:,
+          issuer: nil,
           scope: nil,
           storage: nil,
           authorization_request_validator: nil,
@@ -63,6 +68,16 @@ module MCP
             raise InvalidConfigurationError, "assertion_provider must be callable as `call(audience:, resource:)` and return the ID-JAG assertion."
           end
 
+          if issuer.nil?
+            warn(
+              "Omitting `issuer:` is deprecated. Without it, the credentials go to whichever authorization server " \
+                "the MCP server names. Pass the authorization server's issuer URL as `issuer:` so they are only sent there.",
+              uplevel: 1,
+            )
+          elsif !issuer.is_a?(String) || blank?(issuer)
+            raise InvalidConfigurationError, "issuer must be a non-empty String: the issuer identifier of the authorization server the credentials belong to."
+          end
+
           http_client_customizer = validated_http_client_customizer(http_client_customizer)
 
           @assertion_provider = assertion_provider
@@ -71,11 +86,13 @@ module MCP
           @authorization_request_validator = authorization_request_validator
           @token_request_params = frozen_token_request_params(token_request_params)
           @http_client_customizer = http_client_customizer
-          @storage.save_client_information(
+          client_information = {
             "client_id" => client_id,
             "client_secret" => client_secret,
             "token_endpoint_auth_method" => "client_secret_basic",
-          )
+          }
+          client_information["issuer"] = issuer if issuer
+          @storage.save_client_information(client_information)
         end
 
         # See `Provider#authorization_flow`.

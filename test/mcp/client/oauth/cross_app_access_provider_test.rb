@@ -7,6 +7,8 @@ module MCP
   class Client
     module OAuth
       class CrossAppAccessProviderTest < Minitest::Test
+        include DeprecationWarningTestHelper
+
         def build_provider(assertion_provider: ->(**) { "id-jag" })
           CrossAppAccessProvider.new(
             client_id: "xaa-client",
@@ -22,6 +24,47 @@ module MCP
           assert_equal("xaa-client", info["client_id"])
           assert_equal("xaa-secret", info["client_secret"])
           assert_equal("client_secret_basic", info["token_endpoint_auth_method"])
+          refute(info.key?("issuer"))
+        end
+
+        def test_initialize_warns_at_the_call_site_when_issuer_is_omitted
+          [{}, { issuer: nil }].each do |args|
+            constructor_line = __LINE__ + 2
+            assert_deprecation_warning("#{__FILE__}:#{constructor_line}: warning: Omitting `issuer:` is deprecated. Without it, the credentials go to whichever authorization server the MCP server names. Pass the authorization server's issuer URL as `issuer:` so they are only sent there.\n") do
+              CrossAppAccessProvider.new(client_id: "xaa-client", client_secret: "xaa-secret", assertion_provider: ->(**) { "id-jag" }, **args)
+            end
+          end
+        end
+
+        def test_initialize_does_not_warn_when_issuer_is_set
+          assert_no_deprecation_warning do
+            args = { issuer: "https://auth.example.com" }
+            CrossAppAccessProvider.new(client_id: "xaa-client", client_secret: "xaa-secret", assertion_provider: ->(**) { "id-jag" }, **args)
+          end
+        end
+
+        def test_initialize_stores_the_issuer_with_the_credentials
+          provider = CrossAppAccessProvider.new(
+            client_id: "xaa-client",
+            client_secret: "xaa-secret",
+            assertion_provider: ->(**) { "id-jag" },
+            issuer: "https://auth.example.com",
+          )
+
+          assert_equal("https://auth.example.com", provider.client_information["issuer"])
+        end
+
+        def test_initialize_rejects_an_issuer_that_is_not_a_non_empty_string
+          ["", " ", :issuer, false, 123].each do |issuer|
+            assert_raises(CrossAppAccessProvider::InvalidConfigurationError) do
+              CrossAppAccessProvider.new(
+                client_id: "xaa-client",
+                client_secret: "xaa-secret",
+                assertion_provider: ->(**) { "id-jag" },
+                issuer: issuer,
+              )
+            end
+          end
         end
 
         def test_authorization_flow_is_jwt_bearer

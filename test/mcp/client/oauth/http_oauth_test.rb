@@ -1223,6 +1223,120 @@ module MCP
           assert_equal("brand-new-token", provider.access_token)
         end
 
+        def test_send_request_does_not_send_client_credentials_to_a_new_authorization_server
+          # The configured issuer applies to every grant. A different authorization server raises an error
+          # before the token request.
+          authorization_server = @auth_base
+          other_auth_base = "https://other-auth.example.com"
+
+          stub_request(:post, @mcp_url).to_return do |req|
+            if req.headers["Authorization"] == "Bearer token-from-#{authorization_server}"
+              {
+                status: 200,
+                headers: { "Content-Type" => "application/json" },
+                body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+              }
+            else
+              { status: 401, headers: { "WWW-Authenticate" => %(Bearer resource_metadata="#{@prm_url}") }, body: "" }
+            end
+          end
+
+          stub_request(:get, @prm_url).to_return do
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [authorization_server]),
+            }
+          end
+
+          [@auth_base, other_auth_base].each do |issuer|
+            stub_request(:get, "#{issuer}/.well-known/oauth-authorization-server").to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(issuer: issuer, token_endpoint: "#{issuer}/token"),
+            )
+            stub_request(:post, "#{issuer}/token").to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(access_token: "token-from-#{issuer}", token_type: "Bearer", expires_in: 3600),
+            )
+          end
+
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: @auth_base)
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          request = { jsonrpc: "2.0", id: "1", method: "tools/list" }
+          transport.send_request(request: request)
+
+          authorization_server = other_auth_base
+
+          error = assert_raises(Flow::AuthorizationError) do
+            transport.send_request(request: request)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
+        def test_send_request_does_not_send_client_credentials_to_a_new_authorization_server_after_a_refused_refresh
+          # A provider that holds a refresh token tries a refresh first. The refresh is refused at the new authorization server
+          # and the transport falls back to the grant, which must refuse too, so neither request reaches the new server.
+          authorization_server = @auth_base
+          other_auth_base = "https://other-auth.example.com"
+
+          stub_request(:post, @mcp_url).to_return do |req|
+            if req.headers["Authorization"] == "Bearer token-from-#{authorization_server}"
+              {
+                status: 200,
+                headers: { "Content-Type" => "application/json" },
+                body: JSON.generate(jsonrpc: "2.0", id: "1", result: { ok: true }),
+              }
+            else
+              { status: 401, headers: { "WWW-Authenticate" => %(Bearer resource_metadata="#{@prm_url}") }, body: "" }
+            end
+          end
+
+          stub_request(:get, @prm_url).to_return do
+            {
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: [authorization_server]),
+            }
+          end
+
+          [@auth_base, other_auth_base].each do |issuer|
+            stub_request(:get, "#{issuer}/.well-known/oauth-authorization-server").to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(issuer: issuer, token_endpoint: "#{issuer}/token"),
+            )
+            stub_request(:post, "#{issuer}/token").to_return(
+              status: 200,
+              headers: { "Content-Type" => "application/json" },
+              body: JSON.generate(
+                access_token: "token-from-#{issuer}",
+                token_type: "Bearer",
+                expires_in: 3600,
+                refresh_token: "rt-from-#{issuer}",
+              ),
+            )
+          end
+
+          provider = ClientCredentialsProvider.new(client_id: "cc-client", client_secret: "cc-secret", issuer: @auth_base)
+          transport = HTTP.new(url: @mcp_url, oauth: provider)
+          request = { jsonrpc: "2.0", id: "1", method: "tools/list" }
+          transport.send_request(request: request)
+
+          authorization_server = other_auth_base
+
+          error = assert_raises(Flow::AuthorizationError) do
+            transport.send_request(request: request)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+          assert_equal("rt-from-#{@auth_base}", provider.tokens["refresh_token"])
+        end
+
         def test_oauth_flow_preserves_query_string_in_resource_claim
           # Query parameters on the MCP URL (e.g. `?tenant=...`) must be carried
           # into the RFC 8707 `resource` claim sent on the authorization and
