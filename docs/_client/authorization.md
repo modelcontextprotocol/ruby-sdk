@@ -321,10 +321,10 @@ Keyword arguments:
 - `private_key`, `signing_algorithm`: Required with `private_key_jwt` - the key (a PEM string
   or `OpenSSL::PKey::PKey`, never written to `storage`) signs the client assertion with `"ES256"`
   or `"RS256"`; `client_secret` must not be set, because the private key is the credential.
-- `issuer`: Optional. The issuer identifier of the authorization server the credentials belong to. A different authorization server raises
-  `Flow::AuthorizationError`. A single trailing slash difference is accepted, as in the TypeScript SDK. Omitting `issuer:` is deprecated
-  and emits a warning at construction. Without it, credentials go to whichever authorization server the MCP server names, as before.
-  To use credentials for another authorization server, construct a provider with that server's `issuer:` and credentials.
+- `issuer`: Optional. The issuer identifier of the authorization server the credentials belong to. A different authorization server raises `Flow::AuthorizationError`.
+  A single trailing slash difference is accepted, as in the TypeScript SDK. When the protected resource metadata lists several authorization servers,
+  the one naming `issuer:` is used. Omitting `issuer:` is deprecated and emits a warning at construction. Without it, credentials go to whichever authorization server
+  the MCP server names, as before. To use credentials for another authorization server, construct a provider with that server's `issuer:` and credentials.
 - `scope`, `storage`, `authorization_request_validator`, `token_request_params`, `http_client_customizer`: Optional, same meaning as on `Provider`.
   Use `token_request_params` for a parameter the authorization server requires on the `client_credentials` grant, such as Auth0's `audience`.
 
