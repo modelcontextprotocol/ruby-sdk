@@ -2,6 +2,7 @@
 
 require "json"
 require "set"
+require "timeout"
 require_relative "../../result_type"
 require_relative "../../transport"
 
@@ -188,6 +189,13 @@ module MCP
         # @param server_to_client_request_timeout [Numeric] seconds a server-to-client request waits for its
         #   response before the transport stops waiting and raises `MCP::Server::RequestTimeoutError`.
         #   Defaults to `DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT` (600); individual calls override it with `timeout:`.
+        # @param stream_write_timeout [Numeric, nil] seconds a notification, a server-to-client request, a listen
+        #   acknowledgement or a keepalive may take to be written to an SSE stream before the stream is dropped as stalled.
+        #   These writes are made on behalf of every stream in turn, so a peer that stops reading would otherwise hold
+        #   the writer, and the streams after it, for as long as its buffers stay full. The response of a request is not bounded:
+        #   it is written on that request's own thread and may be large. The bound is per stream, so several stalled streams delay
+        #   a notification by the sum of their waits, once each. Closing a stream is given the same number of seconds, once.
+        #   Defaults to `DEFAULT_STREAM_WRITE_TIMEOUT` (10); pass `nil` to wait without limit.
         # @param token_verifier [#verify, nil] enables built-in OAuth 2.1 bearer enforcement: anything responding to
         #   `verify(token) -> MCP::Server::OAuth::AccessToken | nil` (see `MCP::Server::OAuth::TokenVerifier` for
         #   the contract and the built-in JWT/introspection implementations). Every POST, GET, and DELETE is verified
@@ -227,6 +235,7 @@ module MCP
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
           serve_subscriptions_listen: true,
           server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT,
+          stream_write_timeout: DEFAULT_STREAM_WRITE_TIMEOUT,
           token_verifier: nil,
           required_scopes: [],
           resource_metadata: nil,
@@ -325,6 +334,15 @@ module MCP
 
           @server_to_client_request_timeout = server_to_client_request_timeout
 
+          unless stream_write_timeout.nil? || (stream_write_timeout.is_a?(Numeric) && stream_write_timeout.positive?)
+            raise ArgumentError, "stream_write_timeout must be a positive number or nil"
+          end
+
+          @stream_write_timeout = stream_write_timeout
+
+          # Keyed by identity and weak, so a stream is not kept alive for having been recorded here.
+          @streams_with_abandoned_close = ObjectSpace::WeakMap.new
+
           if token_verifier
             @oauth_authenticator = OAuth::Authenticator.new(
               token_verifier: token_verifier,
@@ -358,6 +376,14 @@ module MCP
         REQUIRED_POST_ACCEPT_TYPES_JSON = ["application/json"].freeze
         REQUIRED_GET_ACCEPT_TYPES = ["text/event-stream"].freeze
         STREAM_WRITE_ERRORS = [IOError, Errno::EPIPE, Errno::ECONNRESET].freeze
+
+        # Raised from a write the transport pushes onto an SSE stream when it has not finished within `stream_write_timeout:` seconds.
+        # An `IOError`, so every path that drops a stream on a failed write drops this one the same way.
+        class StreamWriteTimeoutError < IOError; end
+
+        # A write blocks only once the peer's socket buffers are full, which takes a reader already hundreds of kilobytes behind;
+        # one that still has not taken the frame after this long is dropped whether it stopped reading or is only that slow.
+        DEFAULT_STREAM_WRITE_TIMEOUT = 10
         SESSION_REAP_INTERVAL = 60
         # Seconds `close` waits for a reap in progress to finish closing its streams before it kills the reaper.
         REAPER_JOIN_TIMEOUT = 5
@@ -633,7 +659,7 @@ module MCP
         # Writes a notification to an SSE stream without holding `@mutex`. On a write error,
         # drops the broken stream and returns false; on success returns true.
         def write_notification(stream, notification, session_id, related_request_id)
-          send_to_stream(stream, notification)
+          push_to_stream(stream, notification)
           true
         rescue *STREAM_WRITE_ERRORS => e
           MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to send notification" })
@@ -736,7 +762,7 @@ module MCP
           sent = false
           if stream
             begin
-              send_to_stream(stream, request)
+              push_to_stream(stream, request)
               sent = true
             rescue *STREAM_WRITE_ERRORS
               drop_broken_stream(session_id, stream, related_request_id)
@@ -878,6 +904,41 @@ module MCP
         def send_ping_to_stream(stream)
           stream.write(": ping #{Time.now.iso8601}\n\n")
           stream.flush
+        end
+
+        # `send_to_stream` and `send_ping_to_stream` for the frames the transport pushes onto a stream on its own: a notification,
+        # a server-to-client request, a listen acknowledgement, a keepalive. One thread writes them to stream after stream,
+        # and a keepalive write holds its stream's write mutex, so a peer that stopped reading would stall the notifications of
+        # every other client, and each thread that sends one, for as long as its buffers stay full.
+        # The write is given `stream_write_timeout:` seconds; past that it fails as a write to a broken stream does, and the caller drops the stream.
+        #
+        # The deadline may cut a frame short, so the stream is closed here, before the error leaves: a listen stream is written under its write mutex,
+        # which the error releases on its way out, ahead of the caller's removal of the entry, and a writer waiting on that mutex would otherwise put
+        # its frame after the cut one. Closed first, every later write fails as on any closed stream. The entry of a listen stream, passed as `subscription`,
+        # is marked closed as well, still under its write mutex, so those writers skip it even when the close itself had to be abandoned.
+        #
+        #
+        # The deadline interrupts the write with the exception `Timeout` raises on its own, which no `rescue` of an `IOError` or a `StandardError` inside
+        # a stream implementation catches, and becomes `StreamWriteTimeoutError` only here, where it leaves the write.
+        def push_to_stream(stream, data, subscription: nil)
+          within_stream_write_timeout(stream, subscription) { send_to_stream(stream, data) }
+        end
+
+        def push_ping_to_stream(stream, subscription: nil)
+          within_stream_write_timeout(stream, subscription) { send_ping_to_stream(stream) }
+        end
+
+        def within_stream_write_timeout(stream, subscription, &block)
+          return yield unless @stream_write_timeout
+
+          begin
+            Timeout.timeout(@stream_write_timeout, &block)
+          rescue Timeout::Error
+            subscription[:closed] = true if subscription
+            close_stream_safely(stream)
+
+            raise StreamWriteTimeoutError, "SSE stream write did not finish within #{@stream_write_timeout} seconds"
+          end
         end
 
         # Serves one request of the stateless modern lifecycle (MCP 2026-07-28, SEP-2575):
@@ -1284,7 +1345,7 @@ module MCP
                 acknowledged = subscription[:write_mutex].synchronize do
                   next false if subscription[:closed]
 
-                  send_to_stream(stream, acknowledgement)
+                  push_to_stream(stream, acknowledgement, subscription: subscription)
 
                   # Set on the entry itself, not through the registry: a concurrent close may already have cleared the registry
                   # while its result write waits on this mutex, and that write must still find the stream acknowledged.
@@ -1365,7 +1426,7 @@ module MCP
           subscription[:write_mutex].synchronize do
             next if subscription[:closed]
 
-            send_ping_to_stream(subscription[:stream])
+            push_ping_to_stream(subscription[:stream], subscription: subscription)
           end
         end
 
@@ -1507,7 +1568,7 @@ module MCP
               subscription[:write_mutex].synchronize do
                 next if subscription[:closed]
 
-                send_to_stream(subscription[:stream], notification)
+                push_to_stream(subscription[:stream], notification, subscription: subscription)
               end
             rescue *STREAM_WRITE_ERRORS => e
               MCP.configuration.exception_reporter.call(
@@ -1597,6 +1658,10 @@ module MCP
         # The stream is left open for the caller to close.
         def write_listen_closing_result(subscription)
           subscription[:write_mutex].synchronize do
+            # Already marked by a write that ran into its deadline: the last frame on the stream may be cut short,
+            # and the stream may still be open because its close was abandoned, so the result must not follow it.
+            next if subscription[:closed]
+
             subscription[:closed] = true
 
             # A stream whose acknowledgement was never written gets no result either: SEP-2575 makes
@@ -1905,8 +1970,21 @@ module MCP
           removed[:post_request_streams]&.each_value { |stream| streams_to_close << stream }
         end
 
+        # A close can block on the same full buffers a write does (a TLS stream writes its closing alert, a buffered one flushes),
+        # and it runs on the threads that deliver to every stream, in places under a stream's write mutex,
+        # so it gets `stream_write_timeout:` seconds as well. One that has not finished by then is abandoned,
+        # and not tried again: the path that drops a stream after its write timed out closes it a second time,
+        # which would wait out the same block once more.
         def close_stream_safely(stream)
-          stream&.close
+          return unless stream
+          return stream.close unless @stream_write_timeout
+          return if @streams_with_abandoned_close.key?(stream)
+
+          begin
+            Timeout.timeout(@stream_write_timeout) { stream.close }
+          rescue Timeout::Error
+            @streams_with_abandoned_close[stream] = true
+          end
         rescue StandardError
           # Ignore close-related errors from already closed/broken streams.
         end
@@ -2728,7 +2806,7 @@ module MCP
         def send_keepalive_ping(session_id, stream)
           return unless session_holds_stream?(session_id, stream)
 
-          send_ping_to_stream(stream)
+          push_ping_to_stream(stream)
         rescue *STREAM_WRITE_ERRORS => e
           MCP.configuration.exception_reporter.call(
             e,

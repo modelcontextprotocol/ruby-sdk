@@ -8174,6 +8174,216 @@ module MCP
           transport.close
         end
 
+        test "a listen stream whose reader stalls is dropped and the streams after it still get the notification" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          stalled = open_listen_stream(id: "stalled", notifications: { toolsListChanged: true }, transport: transport)
+          reading = open_listen_stream(id: "reading", notifications: { toolsListChanged: true }, transport: transport)
+          reported = []
+          closed_when_reported = nil
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = lambda do |error, _context|
+            reported << error.class
+            closed_when_reported = stalled.closed?
+          end
+
+          # A peer that stopped reading: the write blocks for as long as its socket buffers stay full.
+          # The sleep stands for that block and is cut short by the transport's own deadline.
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          transport.send_notification("notifications/tools/list_changed", nil, **{})
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 5
+          assert_predicate stalled, :closed?
+          assert_equal [reading], transport.instance_variable_get(:@listen_subscriptions).values.map { |entry| entry[:stream] }
+          assert_equal 1, sse_events(reading).count { |event| event["method"] == "notifications/tools/list_changed" }
+          assert_equal [StreamableHTTPTransport::StreamWriteTimeoutError], reported
+
+          # Closed before the error left the write, so that no writer waiting on the stream's write mutex follows the cut frame.
+          assert closed_when_reported
+        ensure
+          MCP.configuration.exception_reporter = original_reporter
+          transport.close
+        end
+
+        test "a session stream whose reader stalls is dropped and the other sessions still get the broadcast" do
+          transport = StreamableHTTPTransport.new(@server, stream_write_timeout: 0.1)
+          streams = Array.new(2) do |index|
+            init_request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              { jsonrpc: "2.0", method: "initialize", id: "init-#{index}", params: initialize_params }.to_json,
+            )
+            session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+            stream = StringIO.new
+            transport.handle_request(create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id }))[2].call(stream)
+            stream
+          end
+          stalled, reading = streams
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          delivered = transport.send_notification("notifications/tools/list_changed", nil, **{})
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 5
+          assert_equal 1, delivered
+          assert_predicate stalled, :closed?
+          assert_equal 1, sse_events(reading).count { |event| event["method"] == "notifications/tools/list_changed" }
+          assert_equal 1, transport.instance_variable_get(:@sessions).size
+        ensure
+          transport.close
+        end
+
+        test "a stalled write is cut off even when the stream rescues IOError and retries" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          stalled = open_listen_stream(id: "stalled", notifications: { toolsListChanged: true }, transport: transport)
+          reading = open_listen_stream(id: "reading", notifications: { toolsListChanged: true }, transport: transport)
+          stalled.define_singleton_method(:write) do |_data|
+            sleep(30)
+          rescue IOError
+            retry
+          end
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          transport.send_notification("notifications/tools/list_changed", nil, **{})
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 5
+          assert_predicate stalled, :closed?
+          assert_equal [reading], transport.instance_variable_get(:@listen_subscriptions).values.map { |entry| entry[:stream] }
+          assert_equal 1, sse_events(reading).count { |event| event["method"] == "notifications/tools/list_changed" }
+        ensure
+          transport.close
+        end
+
+        test "a stalled stream whose close blocks as well does not hold the sender" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          stalled = open_listen_stream(id: "stalled", notifications: { toolsListChanged: true }, transport: transport)
+          reading = open_listen_stream(id: "reading", notifications: { toolsListChanged: true }, transport: transport)
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+          close_attempts = 0
+          stalled.define_singleton_method(:close) do
+            close_attempts += 1
+            sleep(30)
+          end
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          transport.send_notification("notifications/tools/list_changed", nil, **{})
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 5
+          # The close abandoned at the deadline is not waited out again by the path that then drops the stream,
+          # nor by the transport's own close in the `ensure` below.
+          assert_equal 1, close_attempts
+          assert_equal [reading], transport.instance_variable_get(:@listen_subscriptions).values.map { |entry| entry[:stream] }
+          assert_equal 1, sse_events(reading).count { |event| event["method"] == "notifications/tools/list_changed" }
+        ensure
+          transport.close
+        end
+
+        test "a listen stream a write deadline marked closed gets no closing result on teardown" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          timed_out = open_listen_stream(id: "timed-out", notifications: { toolsListChanged: true }, transport: transport)
+          open = open_listen_stream(id: "open", notifications: { toolsListChanged: true }, transport: transport)
+
+          # The state a deadline leaves when the teardown took the entry before the delivery removed it
+          # and the close of the stream was abandoned: marked closed, the stream still writable.
+          entry = transport.instance_variable_get(:@listen_subscriptions).values.find { |subscription| subscription[:stream].equal?(timed_out) }
+          entry[:write_mutex].synchronize { entry[:closed] = true }
+
+          transport.close
+
+          assert_empty(sse_events(timed_out).select { |event| event.key?("result") })
+          assert_equal 1, sse_events(open).count { |event| event.key?("result") }
+        ensure
+          transport.close
+        end
+
+        test "a listen stream whose reader stalls is dropped by its keepalive" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 0.05, stream_write_timeout: 0.1)
+          stalled = open_listen_stream(id: "stalled", notifications: { toolsListChanged: true }, transport: transport)
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+          until transport.instance_variable_get(:@listen_subscriptions).empty? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            sleep(0.02)
+          end
+
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+          assert_predicate stalled, :closed?
+        ensure
+          transport.close
+        end
+
+        test "a listen stream that stalls on its acknowledgement is dropped" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          response = transport.handle_request(modern_rack_request(
+            modern_listen_body(id: "stalled", params: { notifications: { toolsListChanged: true } }),
+          ))
+          stalled = StringIO.new
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          response[2].call(stalled)
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_operator elapsed, :<, 5
+          assert_predicate stalled, :closed?
+          assert_empty transport.instance_variable_get(:@listen_subscriptions)
+        ensure
+          transport.close
+        end
+
+        test "a server-to-client request to a session stream whose reader stalls fails and drops the session" do
+          transport = StreamableHTTPTransport.new(@server, stream_write_timeout: 0.1)
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init_request)[1]["mcp-session-id"]
+          stalled = StringIO.new
+          transport.handle_request(create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id }))[2].call(stalled)
+          stalled.define_singleton_method(:write) { |_data| sleep(30) }
+
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          error = assert_raises(RuntimeError) { transport.send_request("ping", nil, session_id: session_id) }
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          assert_equal "No active stream for ping request.", error.message
+          assert_operator elapsed, :<, 5
+          assert_predicate stalled, :closed?
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          transport.close
+        end
+
+        test "stream_write_timeout: nil writes and closes without a deadline" do
+          transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: nil, stream_write_timeout: nil)
+          reading = open_listen_stream(id: "reading", notifications: { toolsListChanged: true }, transport: transport)
+          Timeout.expects(:timeout).never
+
+          transport.send_notification("notifications/tools/list_changed", nil, **{})
+          transport.close
+
+          assert_equal 1, sse_events(reading).count { |event| event["method"] == "notifications/tools/list_changed" }
+          assert_predicate reading, :closed?
+        ensure
+          transport.close
+        end
+
+        test "stream_write_timeout must be a positive number or nil" do
+          [0, -1, "10"].each do |value|
+            error = assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, stream_write_timeout: value) }
+
+            assert_equal "stream_write_timeout must be a positive number or nil", error.message
+          end
+        end
+
         test "listen keepalive ends with its slot when a delivery write fails" do
           # A long interval: were the thread still sleeping it out after the slot is freed, the join below would time out.
           transport = StreamableHTTPTransport.new(@server, listen_keepalive_interval: 30)
