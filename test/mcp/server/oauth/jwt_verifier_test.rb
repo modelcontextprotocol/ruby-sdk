@@ -206,6 +206,18 @@ module MCP
           assert_includes(error.message, "jwks_uri must use https")
         end
 
+        def test_rejects_http_jwks_uri_on_a_name_under_localhost
+          # The key set is fetched from this URL, and a resolver is not bound to answer such a name with the loopback address,
+          # so the rule `ProtectedResourceMetadata` applies to the values it only publishes does not extend to it.
+          metadata = ProtectedResourceMetadata.new(resource: "http://acme.localhost:3000/mcp", authorization_servers: ["http://acme.localhost:3000"])
+
+          error = assert_raises(ArgumentError) do
+            JWTVerifier.new(resource_metadata: metadata, jwks_uri: "http://acme.localhost:3000/jwks.json")
+          end
+
+          assert_includes(error.message, "jwks_uri must use https")
+        end
+
         def test_static_jwks_with_string_keys
           verifier = JWTVerifier.new(resource_metadata: METADATA, jwks: JSON.parse(JSON.generate(@jwks)))
 

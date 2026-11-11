@@ -50,6 +50,46 @@ module MCP
           assert_includes(error.message, "authorization_servers must use https")
         end
 
+        def test_accepts_http_on_a_name_under_localhost
+          # Reserved for loopback as a whole (RFC 6761 Section 6.3); this server publishes and compares the two values
+          # and never connects to them.
+          metadata = ProtectedResourceMetadata.new(
+            resource: "http://acme.localhost:3000/mcp",
+            authorization_servers: ["http://acme.localhost:3000", "http://AUTH.Acme.LOCALHOST.:9393"],
+          )
+
+          assert_equal("http://acme.localhost:3000/mcp", metadata.resource)
+          assert_equal(["http://acme.localhost:3000", "http://AUTH.Acme.LOCALHOST.:9393"], metadata.authorization_servers)
+          assert_equal("http://acme.localhost:3000/.well-known/oauth-protected-resource/mcp", metadata.well_known_url)
+        end
+
+        def test_rejects_http_on_a_name_that_only_looks_like_one_under_localhost
+          [
+            "http://acme.localhost.example.com/mcp",
+            "http://acme.localhost@example.com/mcp",
+            "http://example.com/acme.localhost",
+            "http://example.com/mcp?host=acme.localhost",
+            "http://acmelocalhost/mcp",
+            "http://.localhost/mcp",
+            "http://acme..localhost/mcp",
+            # `URI` keeps a percent-encoded host as written, and this one ends in `.localhost`.
+            "http://example.com%2F.localhost/mcp",
+            "http://acme_1.localhost/mcp",
+          ].each do |url|
+            error = assert_raises(ArgumentError, url) do
+              ProtectedResourceMetadata.new(resource: url, authorization_servers: ["https://as.example.com"])
+            end
+            assert_includes(error.message, "resource must", url)
+
+            next if url.include?("?")
+
+            error = assert_raises(ArgumentError, url) do
+              ProtectedResourceMetadata.new(resource: "https://mcp.example.com/mcp", authorization_servers: [url])
+            end
+            assert_includes(error.message, "authorization_servers must use https", url)
+          end
+        end
+
         def test_extra_fields_are_merged_into_the_document
           metadata = ProtectedResourceMetadata.new(
             resource: "https://mcp.example.com/mcp",

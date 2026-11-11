@@ -57,6 +57,13 @@ and the member is omitted when nothing is left.
 `resource:` is published exactly as given, so pass the canonical URL without a trailing slash, the form the specification prefers for interoperability,
 unless the slash is significant for your resource; the verifiers check `aud` against that same value.
 
+`resource:` and `authorization_servers:` must use https; plain `http` is accepted on a loopback address, on `localhost`, and, for development,
+on a name under `localhost` such as `http://acme.localhost:3000/mcp`. A name under `localhost` is accepted for these two values
+because the server only publishes and compares them. `jwks_uri:` and `introspection_endpoint:`, which the server connects to, take plain `http` only
+on `localhost` itself or a loopback address, since a resolver is not bound to answer `acme.localhost` with the loopback address.
+A server reached under such a name also lists it in the `allowed_hosts:` of the transport, and `MCP::Client::HTTP` with `oauth:`
+does not connect to it over plain `http`.
+
 Every `POST`, `GET` (SSE), and `DELETE` request is verified, per HTTP request; SSE streams are verified when opened,
 and a stream whose token expires while open is closed the next time a notification is picked for it, instead of receiving it
 (a write already under way when the expiry passes may still complete), and by its keepalive when nothing is delivered:

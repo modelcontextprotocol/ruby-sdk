@@ -241,6 +241,19 @@ module MCP
           assert_includes(error.message, "introspection_endpoint must use https")
         end
 
+        def test_rejects_http_endpoint_on_a_name_under_localhost
+          # The client credentials and the token are posted to this URL, so it keeps to `localhost` itself.
+          error = assert_raises(ArgumentError) do
+            IntrospectionVerifier.new(
+              introspection_endpoint: "http://acme.localhost:9000/introspect",
+              client_id: "c",
+              resource_metadata: METADATA,
+            )
+          end
+
+          assert_includes(error.message, "introspection_endpoint must use https")
+        end
+
         def test_allows_loopback_http_endpoint
           verifier = IntrospectionVerifier.new(
             introspection_endpoint: "http://localhost:9000/introspect",
