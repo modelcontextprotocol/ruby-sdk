@@ -98,6 +98,14 @@ Concurrent streams are capped by `max_listen_subscriptions:` (default 1000; pass
 comment frame every `listen_keepalive_interval:` seconds (default 15) so a dropped connection frees its slot; pass `listen_keepalive_interval: nil`
 when an upstream proxy already keeps the stream alive.
 
+A notification is written to one stream after another, so a client that stops reading its stream must not hold the others up.
+A notification, an acknowledgement or a keepalive that has not been written within `stream_write_timeout:` seconds (default 10) ends that stream,
+as a failed write does, and delivery moves on; pass `stream_write_timeout: nil` to wait without limit. The same bound applies to
+the notifications and server-to-client requests written to the streams of a session.
+The bound is per stream: each stalled stream still holds a notification back for that long once, before it is dropped,
+and for up to twice that long when closing it blocks as well, so the waits of several stalled streams add up.
+A reader too slow to take a frame in that time is dropped like one that stopped.
+
 The resource URIs one request names in `resourceSubscriptions` are held for the life of the stream, so the total byte length
 of the distinct URIs is bounded by `max_resource_subscription_bytes:` (default 64 KiB, about a thousand ordinary URIs;
 pass `nil` to remove the bound). The number of distinct URIs is bounded as well, at 1024, and that bound always applies,
