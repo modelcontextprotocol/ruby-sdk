@@ -21,9 +21,10 @@ module MCP
       #
       # Optional keyword arguments:
       #
-      # - `issuer`  - String issuer identifier of the MCP authorization server the credentials belong to.
-      #   A mismatch raises `Flow::AuthorizationError` before `assertion_provider` is called. Omitting this is
-      #   deprecated and emits a warning; without it, credentials go to whichever authorization server the MCP server names.
+      # - `issuer`  - String issuer identifier of the MCP authorization server the credentials belong to,
+      #   as its metadata states it: an `https` URL, or `http` on a loopback address, without query or fragment.
+      #   A mismatch raises `Flow::AuthorizationError` before `assertion_provider` is called. Omitting this is deprecated
+      #   and emits a warning; without it, credentials go to whichever authorization server the MCP server names.
       # - `scope`   - String of space-separated scopes to request when the server's `WWW-Authenticate` and
       #   the Protected Resource Metadata do not specify one.
       # - `storage` - Object responding to `tokens`, `save_tokens(tokens)`, `client_information`, and `save_client_information(info)`.
@@ -74,8 +75,9 @@ module MCP
                 "the MCP server names. Pass the authorization server's issuer URL as `issuer:` so they are only sent there.",
               uplevel: 1,
             )
-          elsif !issuer.is_a?(String) || blank?(issuer)
-            raise InvalidConfigurationError, "issuer must be a non-empty String: the issuer identifier of the authorization server the credentials belong to."
+          elsif !Discovery.issuer_identifier?(issuer)
+            raise InvalidConfigurationError, "issuer must be the authorization server's issuer URL as its metadata states it, over HTTPS " \
+                                             "(HTTP only on a loopback address) and without query or fragment, got #{issuer.inspect}."
           end
 
           http_client_customizer = validated_http_client_customizer(http_client_customizer)

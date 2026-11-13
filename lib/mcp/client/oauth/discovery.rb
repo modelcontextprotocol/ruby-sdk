@@ -200,6 +200,20 @@ module MCP
             false
           end
 
+          # Whether `value` can be an authorization server issuer identifier the flow could ever match: a String naming an `https` URL,
+          # or `http` on a loopback address as `secure_url?` allows, without query or fragment (RFC 8414 Section 2).
+          # The issuer of the metadata is compared as a String, so a value of another type would never equal it, and an issuer with
+          # a query or fragment is one no authorization server may publish.
+          def issuer_identifier?(value)
+            return false unless value.is_a?(String) && secure_url?(value)
+
+            uri = URI.parse(value)
+
+            uri.query.nil? && uri.fragment.nil?
+          rescue URI::InvalidURIError
+            false
+          end
+
           # Returns true when `url` and `other` share an origin: same scheme, same host,
           # and same port. Scheme and host compare case-insensitively, and an implicit default port compares
           # equal to the same port written out, because `URI::HTTP#port` already resolves to the default.
