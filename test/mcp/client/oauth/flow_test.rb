@@ -745,6 +745,104 @@ module MCP
           end
         end
 
+        def test_run_machine_to_machine_grants_use_the_advertised_authorization_server_naming_the_configured_issuer
+          other_auth_base = "https://other-auth.example.com"
+          stub_authorization_servers([other_auth_base, @auth_base])
+          stub_other_authorization_server(other_auth_base)
+
+          [ClientCredentialsProvider, CrossAppAccessProvider].each do |provider_class|
+            args = { client_id: "test-client", client_secret: "test-secret", issuer: @auth_base }
+            args[:assertion_provider] = ->(**) { "id-jag-assertion" } if provider_class == CrossAppAccessProvider
+            provider = provider_class.new(**args)
+
+            result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+            assert_equal(:authorized, result)
+          end
+
+          assert_requested(:post, "#{@auth_base}/token", times: 2)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
+        def test_run_machine_to_machine_grants_match_the_advertised_authorization_server_despite_one_trailing_slash
+          other_auth_base = "https://other-auth.example.com"
+          stub_authorization_servers([other_auth_base, @auth_base])
+          stub_other_authorization_server(other_auth_base)
+          provider = ClientCredentialsProvider.new(client_id: "test-client", client_secret: "test-secret", issuer: "#{@auth_base}/")
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
+        def test_run_machine_to_machine_grants_refuse_a_configured_issuer_the_protected_resource_does_not_list
+          other_auth_base = "https://other-auth.example.com"
+          stub_authorization_servers([other_auth_base, "https://third-auth.example.com"])
+          stub_other_authorization_server(other_auth_base)
+          provider = ClientCredentialsProvider.new(client_id: "test-client", client_secret: "test-secret", issuer: @auth_base)
+
+          error = assert_raises(Flow::AuthorizationError) do
+            Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          end
+
+          assert_match(/bound to a different authorization server/, error.message)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
+        def test_run_without_a_stored_issuer_uses_the_first_advertised_authorization_server
+          other_auth_base = "https://other-auth.example.com"
+          stub_authorization_servers([other_auth_base, @auth_base])
+          stub_other_authorization_server(other_auth_base)
+          provider = client_credentials_provider
+
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:post, "#{other_auth_base}/token")
+          assert_not_requested(:post, "#{@auth_base}/token")
+        end
+
+        def test_refresh_machine_to_machine_grants_use_the_advertised_authorization_server_naming_the_configured_issuer
+          other_auth_base = "https://other-auth.example.com"
+          stub_authorization_servers([other_auth_base, @auth_base])
+          stub_other_authorization_server(other_auth_base)
+          provider = ClientCredentialsProvider.new(client_id: "test-client", client_secret: "test-secret", issuer: @auth_base)
+          provider.save_tokens("refresh_token" => "refresh-token", "issuer" => @auth_base)
+
+          result = Flow.new(provider: provider).refresh!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:refreshed, result)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
+        def test_run_authorization_code_keeps_the_authorization_server_that_registered_the_client
+          other_auth_base = "https://other-auth.example.com"
+          state_holder = {}
+          provider = Provider.new(
+            client_metadata: {
+              redirect_uris: ["http://localhost:0/callback"],
+              grant_types: ["authorization_code"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            },
+            redirect_uri: "http://localhost:0/callback",
+            redirect_handler: ->(url) { state_holder[:state] = URI.decode_www_form(url.query).to_h.fetch("state") },
+            callback_handler: -> { ["test-auth-code", state_holder[:state]] },
+          )
+          Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+          assert_equal(@auth_base, provider.client_information["issuer"])
+
+          stub_authorization_servers([other_auth_base, @auth_base])
+          stub_other_authorization_server(other_auth_base)
+          result = Flow.new(provider: provider).run!(server_url: @server_url, resource_metadata_url: @prm_url)
+
+          assert_equal(:authorized, result)
+          assert_requested(:post, "#{@auth_base}/register", times: 1)
+          assert_requested(:post, "#{@auth_base}/token", times: 2)
+          assert_not_requested(:post, "#{other_auth_base}/token")
+        end
+
         def test_refresh_machine_to_machine_grants_accept_one_trailing_slash_difference_in_the_configured_issuer
           [ClientCredentialsProvider, CrossAppAccessProvider].each do |provider_class|
             args = { client_id: "test-client", client_secret: "test-secret", issuer: "#{@auth_base}/" }
@@ -770,6 +868,44 @@ module MCP
           end
 
           assert_nil(provider.client_information["issuer"])
+        end
+
+        # Points the Protected Resource Metadata at the given authorization servers, in that order.
+        def stub_authorization_servers(issuers)
+          stub_request(:get, @prm_url).to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(resource: "https://srv.example.com/mcp", authorization_servers: issuers),
+          )
+        end
+
+        # Serves metadata and endpoints for another authorization server that every grant could run at, so a flow
+        # that picks it over the configured one fails on the assertions about where the requests went, not earlier.
+        def stub_other_authorization_server(issuer)
+          stub_request(:get, "#{issuer}/.well-known/oauth-authorization-server").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(
+              issuer: issuer,
+              authorization_endpoint: "#{issuer}/authorize",
+              token_endpoint: "#{issuer}/token",
+              registration_endpoint: "#{issuer}/register",
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "client_credentials", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
+            ),
+          )
+          stub_request(:post, "#{issuer}/register").to_return(
+            status: 201,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(client_id: "other-client", client_name: "ruby-sdk-test"),
+          )
+          stub_request(:post, "#{issuer}/token").to_return(
+            status: 200,
+            headers: { "Content-Type" => "application/json" },
+            body: JSON.generate(access_token: "other-token", token_type: "Bearer"),
+          )
         end
 
         # Points the Protected Resource Metadata at another authorization server with its own metadata and token endpoint.

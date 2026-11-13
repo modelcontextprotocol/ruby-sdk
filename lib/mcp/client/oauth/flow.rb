@@ -380,9 +380,7 @@ module MCP
           stored_issuer = client_info_required_value(client_info, "issuer")
           return if stored_issuer.nil?
 
-          current_issuer = as_metadata["issuer"]
-          return if stored_issuer == current_issuer
-          return if stored_issuer == "#{current_issuer}/" || "#{stored_issuer}/" == current_issuer
+          return if issuers_match?(stored_issuer, as_metadata["issuer"])
 
           raise AuthorizationError,
             "Stored client credentials are bound to a different authorization server " \
@@ -633,7 +631,7 @@ module MCP
           end
 
           if prm
-            authorization_server = first_authorization_server(prm)
+            authorization_server = advertised_authorization_server(prm)
             ensure_secure_url!(authorization_server, label: "PRM `authorization_servers` entry")
             ensure_routable_destination!(
               authorization_server,
@@ -722,31 +720,50 @@ module MCP
           ensure_issuer_matches!(expected: expected, returned: returned)
         end
 
-        # Reads `authorization_servers` from a PRM document and returns
-        # the first entry, raising `AuthorizationError` for any of the malformed
-        # shapes a non-compliant server could emit (missing field, non-Array
-        # value, empty Array, non-String first entry). Centralizing this lets
-        # both the full flow and the refresh flow share the same defensive
-        # parse instead of each one duplicating a Hash-and-Array check.
-        def first_authorization_server(prm)
+        # Reads `authorization_servers` from a PRM document and returns the entry to use, raising `AuthorizationError` for any of
+        # the malformed shapes a non-compliant server could emit (missing field, non-Array value, empty Array, non-String entry).
+        # Centralizing this lets both the full flow and the refresh flow share the same defensive parse instead of each one duplicating
+        # a Hash-and-Array check.
+        #
+        # When the provider's stored client information records an `issuer` (the `issuer:` of a machine-to-machine provider,
+        # or the authorization server that issued a registration), the entry naming that issuer is preferred over the first one,
+        # as the Python SDK does: a protected resource may list several authorization servers, and the client's credentials are
+        # usable at only one of them. Without a match the first entry is used as before, and the issuer checks that follow decide.
+        def advertised_authorization_server(prm)
           authorization_servers = prm["authorization_servers"]
           unless authorization_servers.is_a?(Array)
-            raise AuthorizationError,
-              "Protected resource metadata `authorization_servers` is not an array " \
-                "(got #{authorization_servers.class})."
+            raise AuthorizationError, "Protected resource metadata `authorization_servers` is not an array (got #{authorization_servers.class})."
           end
 
           if authorization_servers.empty?
             raise AuthorizationError, "Protected resource metadata has no authorization_servers."
           end
 
-          first = authorization_servers.first
-          unless first.is_a?(String) && !first.empty?
+          stored_issuer = stored_client_information_issuer
+          chosen = authorization_servers.find { |entry| entry.is_a?(String) && issuers_match?(entry, stored_issuer) } if stored_issuer
+          chosen ||= authorization_servers.first
+
+          unless chosen.is_a?(String) && !chosen.empty?
             raise AuthorizationError,
               "Protected resource metadata `authorization_servers[0]` is not a non-empty string."
           end
 
-          first
+          chosen
+        end
+
+        # The `issuer` recorded in the provider's stored client information, or `nil`.
+        def stored_client_information_issuer
+          info = @provider.client_information
+          return unless info.is_a?(Hash)
+
+          client_info_required_value(info, "issuer")
+        end
+
+        # Whether two issuer identifiers name the same authorization server: identical, or differing by one trailing slash,
+        # as the TypeScript SDK's `issuersMatch` accepts (an issuer derived from a URL is often rendered with the slash
+        # the metadata leaves out). Any other difference keeps them distinct.
+        def issuers_match?(first, second)
+          first == second || first == "#{second}/" || "#{first}/" == second
         end
 
         # Walks candidate metadata URLs and returns the parsed body of the first 2xx response that is a JSON object;
