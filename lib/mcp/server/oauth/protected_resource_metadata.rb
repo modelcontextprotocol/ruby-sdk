@@ -33,6 +33,10 @@ module MCP
         VALIDATED_MEMBERS = ["resource", "authorization_servers", "scopes_supported", "resource_name", "resource_documentation", "bearer_methods_supported"].freeze
         private_constant :VALIDATED_MEMBERS
 
+        # One or more host name labels in front of `localhost`.
+        LOCALHOST_SUBDOMAIN = /\A(?:[a-z0-9-]+\.)+localhost\z/.freeze
+        private_constant :LOCALHOST_SUBDOMAIN
+
         attr_reader :resource, :authorization_servers, :scopes_supported, :resource_name, :resource_documentation, :bearer_methods_supported, :extra
 
         def initialize(resource:, authorization_servers:, scopes_supported: nil, resource_name: nil, resource_documentation: nil, bearer_methods_supported: DEFAULT_BEARER_METHODS_SUPPORTED, extra: {})
@@ -43,9 +47,9 @@ module MCP
           raise ArgumentError, "authorization_servers must contain at least one issuer URL" if servers.empty?
 
           servers.each do |server|
-            next if Client::OAuth::Discovery.secure_url?(server)
+            next if secure_identifier?(server)
 
-            raise ArgumentError, "authorization_servers must use https (http is allowed only on loopback): #{server.inspect}"
+            raise ArgumentError, "authorization_servers must use https (http is allowed only on loopback or a name under localhost): #{server.inspect}"
           end
 
           overridden = extra.keys.map(&:to_s) & VALIDATED_MEMBERS
@@ -126,11 +130,33 @@ module MCP
             raise ArgumentError, "resource must not contain a fragment per RFC 8707: #{resource.inspect}"
           end
 
-          unless Client::OAuth::Discovery.secure_url?(resource.to_s)
-            raise ArgumentError, "resource must use https (http is allowed only on loopback): #{resource.inspect}"
+          unless secure_identifier?(resource.to_s)
+            raise ArgumentError, "resource must use https (http is allowed only on loopback or a name under localhost): #{resource.inspect}"
           end
 
           uri
+        end
+
+        # Whether `url` may stand in this document: what `Discovery.secure_url?` admits, and plain `http` on a name under
+        # `localhost` (`http://acme.localhost:3000/mcp`), the way a server that gives each tenant a subdomain is run in development.
+        #
+        # The wider rule is for these two members only, because this server never connects to them: `resource` is published
+        # and compared with a token's audience, `authorization_servers` is published and compared with its issuer.
+        # Such a name is reserved for loopback and cannot be registered (RFC 6761 Section 6.3),
+        # but a resolver is not bound to answer it with the loopback address, which is why `secure_url?`, the check for
+        # a URL that is connected to (`jwks_uri:`, `introspection_endpoint:`, everything in the client), keeps to `localhost` itself.
+        # The host is read from the parsed URL, so `x.localhost.example.com` and `x.localhost@example.com` are ordinary names,
+        # and it has to be made of host name labels: `URI` leaves a percent-encoded host as written,
+        # and `example.com%2F.localhost` would otherwise end the right way.
+        def secure_identifier?(url)
+          return true if Client::OAuth::Discovery.secure_url?(url)
+
+          uri = URI.parse(url.to_s)
+          return false unless uri.scheme&.downcase == "http"
+
+          uri.host.to_s.downcase.delete_suffix(".").match?(LOCALHOST_SUBDOMAIN)
+        rescue URI::InvalidURIError
+          false
         end
       end
     end
