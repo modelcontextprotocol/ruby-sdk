@@ -145,8 +145,10 @@ module MCP
         #   expiry. Not supported in stateless mode.
         # @param max_sessions [Integer, nil] cap on the concurrent session count in stateful mode; a new
         #   `initialize` past the cap is rejected with HTTP 503, and `nil` disables the cap.
-        # @param allowed_origins [Array<String>, nil] extra `Origin` values accepted in addition to
-        #   same-origin requests, for DNS rebinding protection.
+        # @param allowed_origins [Array<String>, :any, nil] extra `Origin` values accepted in addition to
+        #   same-origin requests, for DNS rebinding protection; `:any` accepts every `Origin` while
+        #   the `Host` check stays on, for a server whose every request carries a credential the browser
+        #   does not attach on its own (a bearer token, not a cookie).
         # @param allowed_hosts [Array<String>, nil] extra `Host` values accepted beyond the loopback
         #   defaults (`127.0.0.1`, `::1`, `localhost`); each entry matches a bare host name (any port)
         #   or a full `host:port`.
@@ -262,9 +264,17 @@ module MCP
           @session_request_validator = session_request_validator
           @dns_rebinding_protection = dns_rebinding_protection
 
+          # A Symbol never equals an `Origin` value, so one other than `:any` would refuse every cross-origin request
+          # without a hint that it was mistyped.
+          if allowed_origins.is_a?(Symbol) && allowed_origins != :any
+            raise ArgumentError, "allowed_origins must be an Array of Origin values or :any (got #{allowed_origins.inspect}); " \
+                                 ":any turns Origin validation off, for a server that requires a bearer token on every request"
+          end
+
           # Host names are case-insensitive, so the allow lists are compared down-cased.
           @allowed_hosts = (DEFAULT_LOOPBACK_HOSTS + Array(allowed_hosts)).map(&:downcase).freeze
-          @allowed_origins = Array(allowed_origins).map(&:downcase).freeze
+          @any_origin_allowed = allowed_origins == :any
+          @allowed_origins = (@any_origin_allowed ? [] : Array(allowed_origins)).map(&:downcase).freeze
           @pending_responses = {}
 
           # Maps a key the transport mints for each `subscriptions/listen` stream to
@@ -2681,7 +2691,7 @@ module MCP
         # to prevent DNS rebinding attacks against locally bound MCP servers. Protection is on by default;
         # pass `dns_rebinding_protection: false` to disable it (e.g. when an upstream proxy or middleware already
         # performs the check). The `Host` header is validated against the loopback defaults plus `allowed_hosts:`,
-        # and the `Origin` header, when present, must be same-origin or in `allowed_origins:`.
+        # and the `Origin` header, when present, must be same-origin or in `allowed_origins:`, unless that is `:any`.
         def validate_dns_rebinding(request)
           return unless @dns_rebinding_protection
 
@@ -2713,7 +2723,14 @@ module MCP
 
         # A request without an `Origin` header (typical for non-browser MCP clients) is allowed. A browser cross-origin request is
         # rejected unless the origin is same-origin or explicitly allow-listed via `allowed_origins:`.
+        #
+        # `allowed_origins: :any` skips this check alone. A rebound request names the attacker's host in `Host` and, when it carries one,
+        # in `Origin`, so it is same-origin here and `validate_host` is what refuses it; what this check adds is refusing a page on another site
+        # that relies on what the browser attaches by itself, which a server requiring a bearer token does not accept.
+        # The `Origin` a session was created with still binds its later requests (`session_request_rejection`).
         def validate_origin(request)
+          return if @any_origin_allowed
+
           origin = header_bytes(request, "HTTP_ORIGIN")
           return if origin.nil?
           return if same_origin?(origin, request)

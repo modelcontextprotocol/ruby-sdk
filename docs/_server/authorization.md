@@ -83,6 +83,9 @@ For composition at the Rack layer instead (e.g. sharing one authenticator across
 When a browser-based client is involved, run the CORS middleware before bearer enforcement so preflight `OPTIONS` requests
 are not answered with 401, and expose the `WWW-Authenticate` response header, or the browser withholds the challenge that points
 the client at the metadata document.
+CORS headers alone do not admit a client on another origin: its requests must also pass the transport's `Origin` check,
+by listing the origin in `allowed_origins:` or, when clients on any origin may call the server, with `allowed_origins: :any`;
+see [Streamable HTTP Transport](/server/transports/#streamable-http-transport).
 `Mcp-Session-Id` in the snippet below is unrelated to authorization: a handshake-lifecycle client running in a browser cannot keep its session without it,
 while the modern lifecycle carries no session. `ProtectedResourceMetadataMiddleware` answers preflights and sets `Access-Control-Allow-Origin: *` on its own,
 since the document is meant to be fetched cross-origin:
