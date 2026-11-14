@@ -12,6 +12,15 @@ module Conformance
     SERVER_POLL_INTERVAL = 0.5
     SERVER_HEALTH_CHECK_RETRIES = (SERVER_START_TIMEOUT / SERVER_POLL_INTERVAL).to_i
 
+    # The referee runs on whatever Node `npx` finds. On Node 26, `fetch` rejects a promise without a reason when
+    # a response body is cancelled on a pooled connection while the server's next frame is still in flight,
+    # which the `server-sse-multiple-streams` scenario does right after reading a stream's priming event; nothing is
+    # reported by that rejection, but it ends the referee process mid-suite. Node 22 and 24 (the version CI runs)
+    # do not reject. The warning keeps the suite running; the referee's own checks decide the result as before.
+    # Appended after any `NODE_OPTIONS` the environment sets, so it wins over an `--unhandled-rejections` value given
+    # there: the referee is the only process this script starts, and a strict setting would end it the same way.
+    REFEREE_NODE_OPTIONS = "--unhandled-rejections=warn"
+
     def initialize(port: Server::DEFAULT_PORT, scenario: nil, spec_version: nil, requirements: nil, verbose: false)
       @port = port
       @scenario = scenario
@@ -87,13 +96,20 @@ module Conformance
 
       conformance_exit_code = nil
       begin
-        system(*command)
+        system(referee_env, *command)
         conformance_exit_code = $CHILD_STATUS.exitstatus
       ensure
         terminate_server(server_pid)
       end
 
       exit(conformance_exit_code || 1) unless conformance_exit_code == 0
+    end
+
+    # Appends the referee's Node options to any the environment already sets.
+    def referee_env
+      options = [ENV["NODE_OPTIONS"], REFEREE_NODE_OPTIONS].compact.reject(&:empty?)
+
+      { "NODE_OPTIONS" => options.join(" ") }
     end
 
     def terminate_server(pid)

@@ -207,6 +207,21 @@ $ ruby examples/modern_http_client.rb
 
 The same server still accepts the legacy `initialize` flow: the transport routes each request to the legacy or modern lifecycle by its `MCP-Protocol-Version` header.
 
+### 10. In-Memory Event Store (`in_memory_event_store.rb`)
+
+An `MCP::Server::Transports::EventStore` for resumable SSE streams (MCP 2025-11-25, SEP-1699) that keeps events in the process. The SDK ships the contract of a store and no store of its own,
+so this file is meant to be copied into an application.
+
+**Usage:**
+
+```ruby
+require_relative "in_memory_event_store"
+
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, event_store: InMemoryEventStore.new)
+```
+
+It suits a single process and is bounded by events per stream, by streams, and by bytes. A deployment whose reconnects may reach another process needs a store on a shared backend instead.
+
 ### Testing with MCP Inspector
 
 [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) is a browser-based tool for testing and debugging MCP servers.

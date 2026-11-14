@@ -220,6 +220,72 @@ This mode is suitable for simple tool servers that do not need server-initiated 
 > Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) of MCP 2026-07-28 ignore `enable_json_response:`
 > and are served as SSE-framed single exchanges, so request-scoped notifications still reach the client.
 
+### Resumable SSE Streams
+
+Per MCP 2025-11-25 (SEP-1699), a client whose SSE stream is disconnected can reconnect with a GET carrying
+the `Last-Event-ID` header, and the server replays the events the client missed and resumes the stream from that point.
+`StreamableHTTPTransport` does this once it is given an event store, which keeps each stream's events under the ids it assigns.
+The SDK defines the contract of a store, `MCP::Server::Transports::EventStore`, and ships no store of its own;
+[`examples/in_memory_event_store.rb`](https://github.com/modelcontextprotocol/ruby-sdk/blob/main/examples/in_memory_event_store.rb)
+is one to copy into an application:
+
+```ruby
+require_relative "in_memory_event_store" # copied from the SDK's examples
+
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+  server,
+  event_store: InMemoryEventStore.new,
+  retry_interval: 1000,
+)
+```
+
+With an event store, the SSE events the transport writes carry the `id:` the store assigned them, and each stream opens with a priming event:
+an event with an id, the `retry` field when `retry_interval:` is set (the milliseconds the client waits before reconnecting), and empty data,
+so the client has a cursor to resume from before anything else is sent. A client that negotiated a protocol version before 2025-11-25
+receives no priming event, since it cannot parse an event with empty data; its other events still carry ids.
+An event the store failed to take is written without an id and the failure is reported, so the client's cursor stays at the event before it,
+and the events of the session's GET stream are stored from the moment the client opens that stream, the earliest point it can hold a cursor into them.
+A GET with `Last-Event-ID` resumes the stream the event belongs to, whether the session's GET stream or the response stream of a POST:
+the events after that id are replayed, and when the request is still running, the new connection takes the old one's place,
+so the handler's remaining notifications and its response reach the client. A GET stream whose connection fails is detached from the session
+rather than ending it, so the client resumes it the same way. A resume whose replay passes keep finding events, because events keep being stored
+while each batch is written, is closed after its sixteenth batch instead, and the client reconnects from its new cursor after `retry`.
+The id must name an event of the requesting session;
+an id of another session, or one the store no longer holds, is answered with HTTP 400 and nothing is replayed.
+
+The example `InMemoryEventStore` keeps events in the process, which suits the single-process deployments the session store needs anyway.
+It is bounded: each stream keeps at most `max_events_per_stream:` events (default 1024), at most `max_streams:` streams are kept (default 1024),
+and their messages take at most `max_bytes:` in all (default 64 MiB), apart from the stream written to last, which is never dropped;
+the oldest events of a stream and the least recently written streams go first.
+The store keeps what it holds, responses included, after the request completes and after the session ends, until the bounds drop it,
+and the bounds are shared by every session of the transport, so the traffic of one session can evict the events another would resume from.
+A deployment whose reconnects may reach another process implements `MCP::Server::Transports::EventStore` against a shared backend;
+the class documents the two methods a store provides.
+
+A handler can also close its own connection on purpose, so a long-running operation does not hold one open:
+
+```ruby
+class SlowTool < MCP::Tool
+  class << self
+    def call(server_context:)
+      server_context.close_sse_stream # the client reconnects after `retry_interval`
+      result = compute_for_a_while
+      MCP::Tool::Response.new([{ type: "text", text: result }])
+    end
+  end
+end
+```
+
+`close_sse_stream` returns `true` when it closed the connection of the current request's stream and `false` when there was nothing to close:
+no event store, a client older than 2025-11-25, a request answered as JSON, or a connection whose priming event the store failed to take.
+The request keeps running either way,
+and its remaining messages are stored for the reconnect. `close_standalone_sse_stream` does the same for the session's GET stream.
+
+{: .note }
+> Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) (MCP 2026-07-28) are single exchanges
+> whose streams are not resumable, as that revision specifies, so a `Last-Event-ID` header on them is ignored.
+> Stateless mode (`stateless: true`) has no sessions to resume, so it does not accept `event_store:`.
+
 ### Session Limits
 
 By default, stateful sessions are bounded in three ways: they expire after `session_idle_timeout` seconds of inactivity

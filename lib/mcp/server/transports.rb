@@ -3,6 +3,7 @@
 module MCP
   class Server
     module Transports
+      autoload :EventStore, "mcp/server/transports/event_store"
       autoload :StdioTransport, "mcp/server/transports/stdio_transport"
       autoload :StreamableHTTPTransport, "mcp/server/transports/streamable_http_transport"
     end

@@ -323,6 +323,22 @@ module MCP
       @server.configuration.exception_reporter.call(e, { notification: "log_message" })
     end
 
+    # Closes the SSE connection of the request `related_request_id` without ending the request (SEP-1699), so
+    # the client polls the stream by reconnecting with `Last-Event-ID`; prefer `server_context.close_sse_stream`
+    # inside a handler, which names the current request. Returns `false` on a transport without resumable streams.
+    def close_sse_stream(related_request_id:)
+      return false unless @transport.respond_to?(:close_sse_stream)
+
+      @transport.close_sse_stream(@session_id, related_request_id)
+    end
+
+    # Closes the session's standalone GET stream the same way.
+    def close_standalone_sse_stream
+      return false unless @transport.respond_to?(:close_standalone_sse_stream)
+
+      @transport.close_standalone_sse_stream(@session_id)
+    end
+
     private
 
     def validate_era!(era)

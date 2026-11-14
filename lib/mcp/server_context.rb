@@ -154,6 +154,25 @@ module MCP
       @notification_target.notify_resources_updated(uri: uri)
     end
 
+    # Closes the SSE connection carrying the current request's stream without ending the request (SEP-1699):
+    # the client reconnects with `Last-Event-ID` after the transport's `retry_interval`, and the messages
+    # the handler emits meanwhile are replayed to it. Use it to let a long-running operation go on without
+    # a connection held open for it. Returns `true` when a connection was closed and `false` when there was none to close:
+    # a transport without an event store, a client that negotiated a protocol version before 2025-11-25,
+    # a request answered as JSON, or a connection closed already.
+    def close_sse_stream
+      return false unless @related_request_id && @notification_target.respond_to?(:close_sse_stream)
+
+      @notification_target.close_sse_stream(related_request_id: @related_request_id)
+    end
+
+    # Closes the session's standalone GET stream the same way, so the client polls for server-initiated messages.
+    def close_standalone_sse_stream
+      return false unless @notification_target.respond_to?(:close_standalone_sse_stream)
+
+      @notification_target.close_standalone_sse_stream
+    end
+
     # Delegates to the session so the request is scoped to the originating client.
     # The originating request id is stamped as `related_request_id`, satisfying
     # SEP-2260's requirement that server-to-client requests be associated with
