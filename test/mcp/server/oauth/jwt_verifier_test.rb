@@ -113,6 +113,17 @@ module MCP
           assert_raises(InvalidTokenError) { jwks_verifier.verify("not.a.jwt") }
         end
 
+        def test_rejects_a_token_whose_header_is_not_an_object
+          stub_jwks
+          body = urlsafe(JSON.generate(claims))
+
+          ["[]", "[1]", "1", "1.5", "true", "null", "\"alg\""].each do |header|
+            error = assert_raises(InvalidTokenError, header) { jwks_verifier.verify("#{urlsafe(header)}.#{body}.eA") }
+
+            assert_equal("Invalid token", error.message)
+          end
+        end
+
         def test_rejects_token_without_exp
           stub_jwks
           token = encode(claims.tap { |c| c.delete("exp") })
