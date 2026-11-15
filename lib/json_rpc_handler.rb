@@ -130,6 +130,8 @@ module JsonRpcHandler
       # and a notification carries no id member at all. Refused rather than run as a notification,
       # since a sender that wrote an id meant to be answered.
       "Request ID must not be null"
+    elsif oversized_integer_id?(id)
+      "Request ID must be an integer of at most #{MAX_INTEGER_ID_BITS} bits"
     elsif !valid_id?(id, id_validation_pattern)
       if id_validation_pattern
         "Request ID must be a string matching the validation pattern, or an integer"
@@ -217,8 +219,18 @@ module JsonRpcHandler
     version == Version::V2_0
   end
 
+  # An integer id is written back into the response, and writing an integer out in decimal takes time that grows
+  # faster than its length: one of a few million digits, which fits in a request body, costs a minute of CPU.
+  # 128 bits leaves room for any counter and for a UUID carried as a number.
+  MAX_INTEGER_ID_BITS = 128
+
+  def oversized_integer_id?(id)
+    id.is_a?(Integer) && id.bit_length > MAX_INTEGER_ID_BITS
+  end
+
   def valid_id?(id, pattern = nil)
-    return true if id.nil? || id.is_a?(Integer)
+    return true if id.nil?
+    return !oversized_integer_id?(id) if id.is_a?(Integer)
     # A string that is not valid in its encoding cannot be written into the response,
     # and matching a pattern against it raises, so it is refused before the method runs.
     return false unless id.is_a?(String) && id.valid_encoding?

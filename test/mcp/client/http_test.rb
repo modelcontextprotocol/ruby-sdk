@@ -1733,6 +1733,29 @@ module MCP
         assert_requested(pong_stub)
       end
 
+      def test_a_server_request_whose_integer_id_is_beyond_128_bits_is_not_answered
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "some_tool", arguments: {} } }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = <<~BODY
+          event: message
+          data: {"jsonrpc":"2.0","id":#{2**128},"method":"ping"}
+
+          event: message
+          data: #{tool_result.to_json}
+
+        BODY
+        stub_request(:post, url).with(body: request.to_json).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        # Any pong would be a POST that no stub matches, which WebMock raises on.
+        response = client.send_request(request: request)
+
+        assert_equal({ "content" => [] }, response["result"])
+      end
+
       def test_a_registered_ping_handler_overrides_the_default_pong
         request = {
           jsonrpc: "2.0",

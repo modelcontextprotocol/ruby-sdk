@@ -1041,6 +1041,8 @@ module MCP
             return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
           end
 
+          return oversized_id_response if JsonRpcHandler.oversized_integer_id?(body[:id])
+
           # The version check precedes everything else that depends on request content,
           # so a client probing with an unknown future version always receives the `-32022` signal
           # (with the supported list to select from) rather than an incidental error.
@@ -1327,6 +1329,11 @@ module MCP
           return id if id.is_a?(Integer) || (id.is_a?(String) && id.valid_encoding?)
 
           nil
+        end
+
+        # Answered before anything echoes the id: every refusal and response below writes it back.
+        def oversized_id_response
+          invalid_request_response("Invalid Request: id must be an integer of at most #{JsonRpcHandler::MAX_INTEGER_ID_BITS} bits")
         end
 
         def listen_subscriptions_full?
@@ -1847,6 +1854,8 @@ module MCP
           unless body.is_a?(Hash)
             return invalid_request_response("Invalid Request: JSON-RPC body must be a single request object")
           end
+
+          return oversized_id_response if JsonRpcHandler.oversized_integer_id?(body[:id])
 
           # Header-primary routing sends sessionless modern traffic to `handle_modern` before this method runs,
           # so a body carrying the modern `_meta` triple (SEP-2575) arrives here in two shapes only.

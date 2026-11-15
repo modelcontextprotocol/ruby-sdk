@@ -91,7 +91,7 @@ module MCP
         def internal_error_response(parsed)
           response = { jsonrpc: JsonRpcHandler::Version::V2_0 }
           id = parsed[:id] if parsed.is_a?(Hash)
-          response[:id] = id if id.is_a?(Integer) || (id.is_a?(String) && id.valid_encoding?)
+          response[:id] = id if !id.nil? && JsonRpcHandler.valid_id?(id)
           response[:error] = { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal error" }
           response
         end

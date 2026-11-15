@@ -164,6 +164,31 @@ describe JsonRpcHandler do
       refute called
     end
 
+    it "returns an error and does not call the method when the integer request id is beyond 128 bits" do
+      called = false
+      register("add") { called = true }
+
+      handle jsonrpc: "2.0", id: 2**128, method: "add", params: { a: 1, b: 2 }
+
+      assert_rpc_error expected_error: {
+        code: -32600,
+        message: "Invalid Request",
+        data: "Request ID must be an integer of at most 128 bits",
+      }
+      assert_nil @response[:id]
+      refute called
+    end
+
+    it "accepts an integer request id of 128 bits" do
+      register("add") { |params| params[:a] + params[:b] }
+      id = 2**128 - 1
+
+      handle jsonrpc: "2.0", id: id, method: "add", params: { a: 1, b: 2 }
+
+      assert_rpc_success expected_result: 3
+      assert_equal id, @response[:id]
+    end
+
     it "accepts string id with alphanumerics, dashes, and underscores" do
       register("add") { |params| params[:a] + params[:b] }
       id = "request-123_ABC"

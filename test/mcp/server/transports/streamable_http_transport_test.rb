@@ -6531,6 +6531,27 @@ module MCP
           end
         end
 
+        test "a POST whose integer id is beyond 128 bits is refused with no id on either lifecycle" do
+          # Every refusal and response writes the id back, and writing a huge integer out is what costs the time,
+          # so the refusal comes before anything echoes it and carries no id itself.
+          @server.expects(:handle).never
+          modern = modern_body("ping", {}).sub('"id":1', "\"id\":#{2**128}")
+          legacy = { jsonrpc: "2.0", method: "initialize", id: 1, params: initialize_params }.to_json.sub('"id":1', "\"id\":#{2**128}")
+
+          responses = [
+            @transport.handle_request(modern_rack_request(modern)),
+            @transport.handle_request(create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json" }, legacy)),
+          ]
+
+          responses.each do |response|
+            assert_equal 400, response[0]
+            parsed = JSON.parse(response[2][0])
+            assert_equal JsonRpcHandler::ErrorCode::INVALID_REQUEST, parsed.dig("error", "code")
+            assert_equal "Invalid Request: id must be an integer of at most 128 bits", parsed.dig("error", "message")
+            refute parsed.key?("id")
+          end
+        end
+
         test "modern POST without the Mcp-Method header returns 400 with -32020" do
           # The header is required on every modern POST; a missing required standard header is
           # a validation failure, matching the TypeScript SDK's enforcement.
