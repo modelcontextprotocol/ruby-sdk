@@ -168,8 +168,8 @@ module MCP
         # instead of failing the token. The unverified payload is inspected first: a claim that is neither a finite number
         # nor a digit string makes the token invalid, the same answer `expiry_from_claims` gives an introspection response.
         def validate_time_claims!(token)
-          payload, = JWT.decode(token, nil, false)
-          raise InvalidTokenError, "Invalid token" unless payload.is_a?(Hash)
+          payload, header = unverified_segments(token)
+          raise InvalidTokenError, "Invalid token" unless payload.is_a?(Hash) && header.is_a?(Hash)
 
           NUMERIC_DATE_CLAIMS.each do |name|
             value = payload[name]
@@ -177,6 +177,16 @@ module MCP
 
             raise InvalidTokenError, "Malformed #{name} claim"
           end
+        end
+
+        # The gem reads members of the JOSE header before it has checked that the header is an object, so a header that is
+        # an array, a number or a boolean raises an error that is not a `JWT::DecodeError`, here or in the verifying decode
+        # depending on the gem version. Such a token is invalid like any other malformed one, not a failure of this server,
+        # so `validate_time_claims!` refuses it before the verifying decode sees it.
+        def unverified_segments(token)
+          JWT.decode(token, nil, false)
+        rescue TypeError, NoMethodError
+          raise InvalidTokenError, "Invalid token"
         end
 
         # `none` is never acceptable, and HMAC must not share an allowlist with asymmetric algorithms: an attacker who picks `alg`
