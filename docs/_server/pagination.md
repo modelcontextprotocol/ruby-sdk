@@ -11,7 +11,7 @@ for list operations that may return large result sets. Pagination uses string cu
 treated as opaque by clients: the server decides page size, and the client follows `nextCursor` until the server omits it.
 
 Pagination applies to `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list`,
-including lists produced by a custom `resources_list_handler`.
+including lists produced by a custom `resources_list_handler` or `tools_list_handler`.
 
 ## Enabling Pagination
 

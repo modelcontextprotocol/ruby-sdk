@@ -4789,6 +4789,88 @@ module MCP
       refute second_result.key?(:nextCursor)
     end
 
+    test "#tools_list_handler replaces the advertised tool collection" do
+      other = Tool.define(name: "other_tool", title: "Other", description: "Other")
+      @server.tools_list_handler { |_params| [other] }
+
+      response = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+
+      assert_equal(["other_tool"], response[:result][:tools].map { |tool| tool[:name] })
+    end
+
+    test "#tools_list_handler receives server_context when it opts in" do
+      public_tool = Tool.define(name: "public_tool", title: "Public", description: "Public")
+      admin_tool = Tool.define(name: "admin_tool", title: "Admin", description: "Admin")
+      @server.tools_list_handler do |_params, server_context:|
+        server_context[:admin] ? [public_tool, admin_tool] : [public_tool]
+      end
+
+      @server.server_context = { admin: false }
+      member = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      @server.server_context = { admin: true }
+      admin = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 2 })
+
+      assert_equal(["public_tool"], member[:result][:tools].map { |tool| tool[:name] })
+      assert_equal(["public_tool", "admin_tool"], admin[:result][:tools].map { |tool| tool[:name] })
+    end
+
+    test "#tools_list_handler paginates and stamps cache hints on the returned collection" do
+      first = Tool.define(name: "first_tool", title: "First", description: "First")
+      second = Tool.define(name: "second_tool", title: "Second", description: "Second")
+      server = Server.new(name: "tools_list_handler_test", tools: [], page_size: 1, ttl_ms: 60_000)
+      server.tools_list_handler { |_params| [first, second] }
+
+      response = server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+
+      assert_equal(["first_tool"], response[:result][:tools].map { |tool| tool[:name] })
+      assert_equal("1", response[:result][:nextCursor])
+      assert_equal(60_000, response[:result][:ttlMs])
+    end
+
+    test "#tools_list_handler refuses a tools/call for a registered tool it leaves out" do
+      hidden = Tool.define(name: "hidden_tool", title: "Hidden", description: "Hidden") do
+        Tool::Response.new([{ type: "text", text: "ran" }])
+      end
+      server = Server.new(name: "tools_list_handler_test", tools: [hidden])
+      server.tools_list_handler { |_params| [] }
+
+      response = server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "hidden_tool", arguments: {} } })
+
+      assert_nil(response[:result])
+      assert_equal(-32602, response[:error][:code])
+      assert_includes(response[:error][:data], "Tool not found: hidden_tool")
+    end
+
+    test "#tools_list_handler lets tools/call run a tool that is not registered on the server" do
+      unregistered = Tool.define(name: "unregistered_tool", title: "Unregistered", description: "Unregistered") do
+        Tool::Response.new([{ type: "text", text: "ran" }])
+      end
+      server = Server.new(name: "tools_list_handler_test", tools: [])
+      server.tools_list_handler { |_params| [unregistered] }
+
+      response = server.handle({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "unregistered_tool", arguments: {} } })
+
+      assert_equal("ran", response[:result][:content][0][:text])
+    end
+
+    test "#tools_list_handler receives server_context on tools/call when it opts in" do
+      admin_tool = Tool.define(name: "admin_tool", title: "Admin", description: "Admin") do
+        Tool::Response.new([{ type: "text", text: "ran" }])
+      end
+      @server.tools_list_handler do |_params, server_context:|
+        server_context[:admin] ? [admin_tool] : []
+      end
+      request = { jsonrpc: "2.0", method: "tools/call", id: 1, params: { name: "admin_tool", arguments: {} } }
+
+      @server.server_context = { admin: false }
+      member = @server.handle(request)
+      @server.server_context = { admin: true }
+      admin = @server.handle(request)
+
+      assert_equal(-32602, member[:error][:code])
+      assert_equal("ran", admin[:result][:content][0][:text])
+    end
+
     test "#handle tools/list returns all tools when page_size is not set" do
       response = @server.handle({ jsonrpc: "2.0", method: "tools/list", id: 1 })
       result = response[:result]
