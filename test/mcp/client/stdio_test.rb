@@ -334,6 +334,14 @@ module MCP
         assert(transport.send(:answerable_ping?, ping.merge("id" => "p")))
       end
 
+      def test_a_ping_whose_integer_id_is_beyond_128_bits_is_not_answered
+        transport = Stdio.new(command: "ruby", args: ["server.rb"])
+        ping = { "jsonrpc" => "2.0", "id" => 2**128, "method" => "ping" }
+
+        refute(transport.send(:answerable_ping?, ping))
+        assert(transport.send(:answerable_ping?, ping.merge("id" => 2**128 - 1)))
+      end
+
       def test_a_ping_whose_id_parses_to_an_infinite_float_is_not_answered_and_the_request_completes
         written = []
         server = lambda do |requests, frames|

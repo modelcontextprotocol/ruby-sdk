@@ -217,8 +217,9 @@ module MCP
             elsif parsed["method"] && parsed.key?("id") && JsonRpcHandler.valid_version?(parsed["jsonrpc"])
               # A server-to-client request (e.g. `elicitation/create`) delivered on the stream while
               # the original request is still pending. One that is not JSON-RPC 2.0 is dropped unanswered,
-              # as the TypeScript client drops it at schema validation.
-              @on_request&.call(parsed)
+              # as the TypeScript client drops it at schema validation, and so is one whose integer id is
+              # too large to write back at a reasonable cost.
+              @on_request&.call(parsed) unless JsonRpcHandler.oversized_integer_id?(parsed["id"])
             end
           end
         end
