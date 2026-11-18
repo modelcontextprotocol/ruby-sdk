@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-19
+
+This release lets the Streamable HTTP transport resume the SSE streams of the handshake lifecycle (SEP-1699): given an `event_store:`,
+it gives each event an id, and a client that reconnects with `Last-Event-ID` receives the events it missed, including the remaining
+notifications and the response of a request still running. A handler can close its connection with `server_context.close_sse_stream`
+so a long operation does not hold one open. The SDK defines the store contract, and `examples/in_memory_event_store.rb` is one to copy.
+
+### Added
+
+- Resume SSE streams from `Last-Event-ID` in the Streamable HTTP transport (#681)
+- Accept every `Origin` with `allowed_origins: :any` and keep the `Host` check (#685)
+
+### Fixed
+
+- Select the advertised authorization server by the stored issuer (#680)
+- Validate the issuer of machine-to-machine providers as an issuer URL (#682)
+- Accept names under `localhost` for the URLs Protected Resource Metadata publishes (#683)
+- Answer 401 to a JWT whose header is not an object (#686)
+- Validate required params for `resources/read` (#687)
+- Refuse integer request ids beyond 128 bits (#688)
+
 ## [1.10.0] - 2026-11-11
 
 This release validates the `Mcp-Param-*` headers of a tool call against its body (SEP-2243) and adds an optional `issuer:` to
