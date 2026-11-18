@@ -5961,6 +5961,55 @@ module MCP
           assert_equal 403, status
         end
 
+        test "handle_request allows every Origin with allowed_origins: :any" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: :any)
+
+          ["https://anywhere.example.com", "null", "chrome-extension://abcdefgh"].each do |origin|
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => origin },
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+            )
+
+            status, = transport.handle_request(request)
+            assert_equal(200, status, origin)
+          end
+        ensure
+          transport&.close
+        end
+
+        test "rejects a Symbol other than :any for allowed_origins" do
+          error = assert_raises(ArgumentError) { StreamableHTTPTransport.new(@server, allowed_origins: :all) }
+
+          assert_equal(
+            "allowed_origins must be an Array of Origin values or :any (got :all); " \
+              ":any turns Origin validation off, for a server that requires a bearer token on every request",
+            error.message,
+          )
+        end
+
+        test "handle_request keeps the Host check with allowed_origins: :any" do
+          transport = StreamableHTTPTransport.new(@server, allowed_origins: :any)
+
+          request = create_rack_request(
+            "POST",
+            "/",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_HOST" => "evil.example.com",
+              "HTTP_ORIGIN" => "http://evil.example.com",
+            },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+
+          status, _headers, body = transport.handle_request(request)
+          assert_equal(403, status)
+          assert_equal("Forbidden: Invalid Host header", JSON.parse(body.first)["error"]["message"])
+        ensure
+          transport&.close
+        end
+
         test "handle_request allows a same-origin browser request" do
           request = create_rack_request(
             "POST",
@@ -6183,6 +6232,31 @@ module MCP
           response = transport.handle_request(attacker)
 
           assert_equal(403, response[0])
+        ensure
+          transport.close
+        end
+
+        test "keeps a session bound to the Origin of its initialize with allowed_origins: :any" do
+          transport = StreamableHTTPTransport.new(@server, enable_json_response: true, allowed_origins: :any)
+          init = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_ORIGIN" => "https://app.example.com" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = transport.handle_request(init)[1]["mcp-session-id"]
+
+          statuses = ["https://app.example.com", "https://other.example.com"].map do |origin|
+            request = create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id, "HTTP_ORIGIN" => origin },
+              { jsonrpc: "2.0", method: "ping", id: "1" }.to_json,
+            )
+            transport.handle_request(request)[0]
+          end
+
+          assert_equal([200, 403], statuses)
         ensure
           transport.close
         end

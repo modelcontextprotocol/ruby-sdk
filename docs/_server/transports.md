@@ -104,6 +104,26 @@ The following examples show two common integration styles in Rails.
 > to disable the check entirely (e.g., when an upstream proxy or middleware already validates `Host`/`Origin`).
 > The check runs before any lifecycle dispatch, so it protects requests of
 > the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) as well.
+>
+> A server that browser-based clients on any origin may call passes `allowed_origins: :any`,
+> which turns `Origin` validation off while `Host` validation stays on:
+>
+> ```ruby
+> transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+>   server,
+>   allowed_hosts: ["mcp.example.com"],
+>   allowed_origins: :any,
+>   token_verifier: verifier, # every request must carry a bearer token
+> )
+> ```
+>
+> Use it only when every request must carry a credential the browser does not attach on its own,
+> such as a bearer token in the `Authorization` header. A cookie, HTTP Basic authentication and a client certificate
+> are attached by the browser, and a server without authentication trusts whoever reaches it on localhost or an internal network:
+> with any of those, a page on any site could send requests with the user's authority.
+> The transport sends no CORS response headers and answers a preflight `OPTIONS` with 405,
+> so browser-based clients also need a CORS middleware such as `rack-cors` in front of it;
+> [Authorization](/server/authorization/) shows a setup.
 
 ### Rails (mount)
 
