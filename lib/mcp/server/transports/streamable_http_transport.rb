@@ -431,6 +431,9 @@ module MCP
         # How long `close` waits in all for the closing results of the open `subscriptions/listen` streams
         # before closing the streams still open without one.
         LISTEN_TEARDOWN_TIMEOUT = 5
+        # The reason the requests still in flight in a session are cancelled with when the session goes away: terminated by
+        # the client's DELETE, expired, torn down with its broken GET stream, or removed by `close`.
+        SESSION_TERMINATED_REASON = "Session terminated"
 
         # Loopback hosts always accepted by DNS rebinding protection. A locally bound MCP server (the canonical pattern) is
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
@@ -570,10 +573,7 @@ module MCP
             @sessions.each_key.filter_map { |session_id| cleanup_session_unsafe(session_id) }
           end
 
-          removed_sessions.each do |session|
-            close_stream_safely(session[:get_sse_stream])
-            close_post_request_streams(session)
-          end
+          release_sessions(removed_sessions)
         end
 
         # Sessions a server-wide log broadcast is offered to, each applying its own level or the server default.
@@ -642,26 +642,26 @@ module MCP
           # (e.g. `resources/updated`, `elicitation/complete`) still flow via GET SSE.
           return false if @enable_json_response && related_request_id
 
-          streams_to_close = []
+          removed_sessions = []
           live = @mutex.synchronize do
             next false unless (session = @sessions[session_id])
 
             if session_expired?(session)
-              cleanup_and_collect_stream(session_id, streams_to_close)
+              cleanup_and_collect_session(session_id, removed_sessions)
               next false
             end
 
             true
           end
 
-          close_streams(streams_to_close)
+          release_sessions(removed_sessions)
           return false unless live
 
           store_and_write(session_id, related_request_id, notification.to_json)
         end
 
         def deliver_broadcast_notification(notification)
-          streams_to_close = []
+          removed_sessions = []
 
           # Snapshot the sessions under the lock, then write to each outside it. A session whose GET stream is
           # closed at the moment still takes the notification when it has opened that stream before and an event
@@ -681,13 +681,13 @@ module MCP
             end
 
             expired_session_ids.each do |session_id|
-              cleanup_and_collect_stream(session_id, streams_to_close)
+              cleanup_and_collect_session(session_id, removed_sessions)
             end
 
             collected
           end
 
-          close_streams(streams_to_close)
+          release_sessions(removed_sessions)
 
           json = notification.to_json
           targets.count do |session_id|
@@ -707,6 +707,7 @@ module MCP
         # from its last event id (SEP-1699), and the events it misses meanwhile are stored for it.
         def drop_broken_stream(session_id, stream, related_request_id)
           streams_to_close = []
+          removed_sessions = []
 
           @mutex.synchronize do
             session = @sessions[session_id]
@@ -722,12 +723,13 @@ module MCP
               if @event_store
                 streams_to_close << detach_get_stream(session)
               else
-                cleanup_and_collect_stream(session_id, streams_to_close)
+                cleanup_and_collect_session(session_id, removed_sessions)
               end
             end
           end
 
           close_streams(streams_to_close)
+          release_sessions(removed_sessions)
         end
 
         def close_streams(streams)
@@ -945,10 +947,7 @@ module MCP
             end
           end
 
-          removed_sessions.each do |session|
-            close_stream_safely(session[:get_sse_stream])
-            close_post_request_streams(session)
-          end
+          release_sessions(removed_sessions)
         end
 
         # One `write` per frame, so the frames of concurrent writers cannot interleave in the middle of each other.
@@ -2020,24 +2019,21 @@ module MCP
           success_response
         end
 
-        # Removes the session, closes its streams outside the lock, and returns the removed session, or nil when
+        # Removes the session, releases it outside the lock, and returns the removed session, or nil when
         # there was none to remove.
         def cleanup_session(session_id)
           session = @mutex.synchronize do
             cleanup_session_unsafe(session_id)
           end
 
-          if session
-            close_stream_safely(session[:get_sse_stream])
-            close_post_request_streams(session)
-          end
+          release_session(session) if session
 
           session
         end
 
-        # Removes a session from `@sessions` and returns it. Does not close the stream.
-        # Callers must close the stream outside the mutex to avoid holding the lock during
-        # potentially blocking I/O.
+        # Removes a session from `@sessions` and returns it. Does not close the stream or cancel the in-flight requests.
+        # Callers must `release_session` it outside the mutex to avoid holding the lock during
+        # potentially blocking I/O and the requests' cancellation hooks.
         def cleanup_session_unsafe(session_id)
           session = @sessions.delete(session_id)
 
@@ -2051,11 +2047,25 @@ module MCP
           session
         end
 
-        def cleanup_and_collect_stream(session_id, streams_to_close)
+        # Removes a session under `@mutex` and adds it to `removed_sessions`, for the caller to release once outside the lock.
+        def cleanup_and_collect_session(session_id, removed_sessions)
           return unless (removed = cleanup_session_unsafe(session_id))
 
-          streams_to_close << removed[:get_sse_stream]
-          removed[:post_request_streams]&.each_value { |stream| streams_to_close << stream }
+          removed_sessions << removed
+        end
+
+        # Ends what a removed session still has running: closes its streams and cancels its in-flight requests, whose handlers
+        # observe the termination through `server_context.cancelled?` and whose responses are suppressed as for
+        # `notifications/cancelled`. Runs outside `@mutex`: a close can block, and a cancellation fires the request's
+        # `on_cancel` hooks synchronously, which may call back into the transport.
+        def release_session(session)
+          close_stream_safely(session[:get_sse_stream])
+          close_post_request_streams(session)
+          session[:server_session]&.cancel_all_incoming(reason: SESSION_TERMINATED_REASON)
+        end
+
+        def release_sessions(sessions)
+          sessions.each { |session| release_session(session) }
         end
 
         # A close can block on the same full buffers a write does (a TLS stream writes its closing alert, a buffered one flushes),
@@ -2371,7 +2381,7 @@ module MCP
               # so the cap rejects only when genuinely full rather than up to a reaper interval after sessions expired.
               if @max_sessions && @sessions.size >= @max_sessions
                 @sessions.each_key.select { |id| session_expired?(@sessions[id]) }.each do |id|
-                  cleanup_and_collect_stream(id, reclaimed)
+                  cleanup_and_collect_session(id, reclaimed)
                 end
               end
 
@@ -2400,7 +2410,7 @@ module MCP
               true
             end
 
-            reclaimed.each { |stream| close_stream_safely(stream) }
+            release_sessions(reclaimed)
             return too_many_sessions_response unless inserted
           end
 
@@ -2596,13 +2606,7 @@ module MCP
             nil
           end
 
-          if removed
-            close_stream_safely(removed[:get_sse_stream])
-
-            removed[:post_request_streams]&.each_value do |stream|
-              close_stream_safely(stream)
-            end
-          end
+          release_session(removed) if removed
 
           response
         end
@@ -2657,10 +2661,7 @@ module MCP
             true
           end
 
-          if removed
-            close_stream_safely(removed[:get_sse_stream])
-            close_post_request_streams(removed)
-          end
+          release_session(removed) if removed
 
           active
         end
