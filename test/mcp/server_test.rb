@@ -1493,6 +1493,68 @@ module MCP
       end
     end
 
+    test "#handle refuses params that are not an object for the methods that read named params" do
+      runs = []
+      tool = Tool.define(name: "counting_tool") do |**|
+        runs << :tool
+        Tool::Response.new([{ type: "text", text: "ran" }])
+      end
+      prompt = Prompt.define(name: "counting_prompt") do |_args, **|
+        runs << :prompt
+        Prompt::Result.new(messages: [])
+      end
+      server = Server.new(name: "test_server", tools: [tool], prompts: [prompt], capabilities: { tools: {}, prompts: {}, logging: {} })
+      reported = []
+      server.configuration.exception_reporter = ->(error, _context) { reported << error.class }
+
+      ["tools/call", "prompts/get", "logging/setLevel"].each do |method|
+        [{ jsonrpc: "2.0", id: 1, method: method }, { jsonrpc: "2.0", id: 1, method: method, params: ["counting_tool"] }].each do |request|
+          response = server.handle(request)
+
+          assert_equal(-32602, response.dig(:error, :code), request.inspect)
+          assert_equal "Invalid params", response.dig(:error, :message)
+        end
+      end
+      assert_empty runs
+      assert_equal [Server::RequestHandlerError], reported.uniq
+    end
+
+    test "#handle tools/call and prompts/get still take absent and null arguments as none" do
+      tool = Tool.define(name: "no_arguments") { |**| Tool::Response.new([{ type: "text", text: "ran" }]) }
+      prompt = Prompt.define(name: "no_arguments") { |_args, **| Prompt::Result.new(messages: []) }
+      server = Server.new(name: "test_server", tools: [tool], prompts: [prompt])
+
+      [{ name: "no_arguments" }, { name: "no_arguments", arguments: nil }].each do |params|
+        assert_equal "ran", server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: params }).dig(:result, :content, 0, :text)
+        assert_equal [], server.handle({ jsonrpc: "2.0", id: 1, method: "prompts/get", params: params }).dig(:result, :messages)
+      end
+    end
+
+    test "#handle completion/complete refuses a ref or an argument that is not an object" do
+      prompt = Prompt.define(name: "test_prompt") { |_args, **| Prompt::Result.new(messages: []) }
+      server = Server.new(name: "test_server", prompts: [prompt], capabilities: { prompts: {}, completions: {} })
+      handler_called = false
+      server.completion_handler do |_params|
+        handler_called = true
+        { completion: { values: [] } }
+      end
+      well_formed = { ref: { type: "ref/prompt", name: "test_prompt" }, argument: { name: "x", value: "" } }
+      assert_equal [], server.handle({ jsonrpc: "2.0", id: 1, method: "completion/complete", params: well_formed }).dig(:result, :completion, :values)
+      handler_called = false
+
+      [
+        { ref: "ref/prompt", argument: { name: "x", value: "" } },
+        { ref: ["ref/prompt"], argument: { name: "x", value: "" } },
+        { ref: { type: "ref/prompt", name: "test_prompt" }, argument: "x" },
+        { ref: { type: "ref/prompt", name: "test_prompt" }, argument: ["x"] },
+      ].each do |params|
+        response = server.handle({ jsonrpc: "2.0", id: 1, method: "completion/complete", params: params })
+
+        assert_equal(-32602, response.dig(:error, :code), params.inspect)
+      end
+      refute handler_called
+    end
+
     test "#handle prompts/get returns error if prompt arguments are invalid" do
       request = {
         jsonrpc: "2.0",
