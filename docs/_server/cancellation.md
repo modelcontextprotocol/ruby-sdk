@@ -104,6 +104,15 @@ end
 Handlers that do not declare a `server_context:` keyword continue to work unchanged -
 the opt-in detection only wraps the context when the block signature asks for it.
 
+## Requests of a Terminated Session Are Cancelled
+
+When `StreamableHTTPTransport` removes a stateful session while requests are still running in it, those requests
+are cancelled as if the client had sent `notifications/cancelled` for each of them. This happens when the client terminates
+the session with `DELETE`, when the session passes `session_idle_timeout`, when its GET stream breaks without an event store
+to resume from, and when the transport is closed. `server_context.cancelled?` turns true, `on_cancel` hooks registered on
+`server_context.cancellation` run with the reason `"Session terminated"`, and the response is suppressed, since no client
+is left to receive it.
+
 ## Nested Server-to-Client Requests Are Cancelled Automatically
 
 When a tool handler is waiting on a nested server-to-client request

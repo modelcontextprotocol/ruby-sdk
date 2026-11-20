@@ -4026,6 +4026,155 @@ module MCP
           transport.close
         end
 
+        test "terminating a session with DELETE cancels its in-flight requests and suppresses their responses" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          cancellations = []
+          started = Queue.new
+          release = Queue.new
+          define_held_tool(server, cancellations: cancellations, started: started, release: release)
+          session_id, = start_session(transport)
+
+          call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+          started.pop
+
+          delete_response = transport.handle_request(
+            create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }),
+          )
+
+          assert_equal(200, delete_response[0])
+          assert_equal([["call-1", "Session terminated"]], cancellations)
+
+          release << true
+          assert_equal(202, call.value[0])
+        ensure
+          release&.push(true)
+          call&.join
+          transport&.close
+        end
+
+        test "terminating a session cancels only the requests in flight in that session" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          cancellations = []
+          started = Queue.new
+          release = Queue.new
+          define_held_tool(server, cancellations: cancellations, started: started, release: release)
+          terminated_session_id, = start_session(transport)
+          surviving_session_id, = start_session(transport)
+
+          terminated_call = Thread.new { transport.handle_request(held_tool_call(terminated_session_id, "call-1")) }
+          surviving_call = Thread.new { transport.handle_request(held_tool_call(surviving_session_id, "call-2")) }
+          2.times { started.pop }
+
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => terminated_session_id }))
+
+          assert_equal([["call-1", "Session terminated"]], cancellations)
+
+          2.times { release << true }
+          response = surviving_call.value
+          assert_equal(200, response[0])
+          assert_equal("done", JSON.parse(response[2].first).dig("result", "content", 0, "text"))
+        ensure
+          2.times { release&.push(true) }
+          terminated_call&.join
+          surviving_call&.join
+          transport&.close
+        end
+
+        test "every other path that removes a session cancels the requests in flight in it" do
+          expire = ->(transport, session_id) { transport.instance_variable_get(:@sessions)[session_id][:last_active_at] -= 61 }
+          session_post = ->(session_id, body) do
+            create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }, body.to_json)
+          end
+          attach_get_stream = ->(transport, session_id) do
+            TestStream.new.tap { |stream| transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stream }
+          end
+
+          removals = {
+            "closing the transport" => ->(transport, _session_id) { transport.close },
+            "the reaper finding it expired" => ->(transport, session_id) do
+              expire.call(transport, session_id)
+              transport.send(:reap_expired_sessions)
+            end,
+            "a request finding it expired" => ->(transport, session_id) do
+              expire.call(transport, session_id)
+              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", id: "ping-1", method: "ping" }))
+            end,
+            "a notification finding it expired" => ->(transport, session_id) do
+              expire.call(transport, session_id)
+              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", method: "notifications/initialized" }))
+            end,
+            "a notification sent to it after it expired" => ->(transport, session_id) do
+              expire.call(transport, session_id)
+              transport.send_notification("notifications/message", { level: "info", data: "late" }, session_id: session_id)
+            end,
+            "a broadcast finding it expired" => ->(transport, session_id) do
+              attach_get_stream.call(transport, session_id)
+              expire.call(transport, session_id)
+              transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
+            end,
+            "an initialize reclaiming its expired slot" => ->(transport, session_id) do
+              expire.call(transport, session_id)
+              start_session(transport)
+            end,
+            "a failed write to its GET stream" => ->(transport, session_id) do
+              transport.send(:drop_broken_stream, session_id, attach_get_stream.call(transport, session_id), nil)
+            end,
+          }
+
+          removals.each do |removal, remove_session|
+            server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+            transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60, max_sessions: 1)
+            server.transport = transport
+            cancellations = []
+            started = Queue.new
+            release = Queue.new
+            define_held_tool(server, cancellations: cancellations, started: started, release: release)
+            session_id, = start_session(transport)
+
+            call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+            started.pop
+
+            remove_session.call(transport, session_id)
+
+            assert_equal([["call-1", "Session terminated"]], cancellations, "session removed by #{removal}")
+          ensure
+            release&.push(true)
+            call&.join
+            transport&.close
+          end
+        end
+
+        test "cancellation hooks of a terminated session's requests run outside the transport lock" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          started = Queue.new
+          release = Queue.new
+          define_held_tool(server, cancellations: [], started: started, release: release)
+          session_id, server_session = start_session(transport)
+
+          call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+          started.pop
+
+          # A hook may call back into the transport (to log, or to tell the peer about a nested request),
+          # which would raise on the non-reentrant lock if the hook ran while the session was being removed under it.
+          mutex = transport.instance_variable_get(:@mutex)
+          lock_held = []
+          server_session.lookup_in_flight("call-1").on_cancel { lock_held << mutex.owned? }
+
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+
+          assert_equal([false], lock_held)
+        ensure
+          release&.push(true)
+          call&.join
+          transport&.close
+        end
+
         test "send_request raises on error response from client" do
           # Create session.
           init_request = create_rack_request(
@@ -8711,6 +8860,28 @@ module MCP
           session_id = transport.handle_request(request)[1]["mcp-session-id"]
 
           [session_id, transport.instance_variable_get(:@sessions)[session_id][:server_session]]
+        end
+
+        # Defines `held_tool`, which records each cancellation of its request as `[request id, reason]`, pushes to `started`
+        # once running, and returns only after something is pushed to `release`, so a test can end the session mid-call.
+        def define_held_tool(server, cancellations:, started:, release:)
+          server.define_tool(name: "held_tool") do |server_context:|
+            cancellation = server_context.cancellation
+            cancellation.on_cancel { |reason| cancellations << [cancellation.request_id, reason] }
+            started << true
+            release.pop
+
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+        end
+
+        def held_tool_call(session_id, request_id)
+          create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: request_id, method: "tools/call", params: { name: "held_tool", arguments: {} } }.to_json,
+          )
         end
 
         # A `tools/call` for `victim_tool` under a caller-chosen request id, with a progress token so

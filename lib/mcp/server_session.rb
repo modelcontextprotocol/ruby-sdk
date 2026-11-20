@@ -106,6 +106,14 @@ module MCP
       cancellation&.cancel(reason: reason)
     end
 
+    # Flips the `Cancellation` of every request still in flight, for a transport ending the session they belong to:
+    # their handlers observe it as they would `notifications/cancelled`, and their responses are suppressed the same way.
+    # The cancellations run outside the registry lock, since each fires its `on_cancel` hooks synchronously.
+    def cancel_all_incoming(reason: nil)
+      cancellations = @in_flight_mutex.synchronize { @in_flight.values }
+      cancellations.each { |cancellation| cancellation.cancel(reason: reason) }
+    end
+
     # Sends `notifications/cancelled` to the peer for a previously-issued request.
     # Also unblocks any transport-level `send_request` waiting on a response for `request_id`.
     def cancel_request(request_id:, reason: nil)
