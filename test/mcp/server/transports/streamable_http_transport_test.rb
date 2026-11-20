@@ -4085,41 +4085,12 @@ module MCP
         end
 
         test "every other path that removes a session cancels the requests in flight in it" do
-          expire = ->(transport, session_id) { transport.instance_variable_get(:@sessions)[session_id][:last_active_at] -= 61 }
-          session_post = ->(session_id, body) do
-            create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }, body.to_json)
-          end
           attach_get_stream = ->(transport, session_id) do
             TestStream.new.tap { |stream| transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stream }
           end
 
           removals = {
             "closing the transport" => ->(transport, _session_id) { transport.close },
-            "the reaper finding it expired" => ->(transport, session_id) do
-              expire.call(transport, session_id)
-              transport.send(:reap_expired_sessions)
-            end,
-            "a request finding it expired" => ->(transport, session_id) do
-              expire.call(transport, session_id)
-              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", id: "ping-1", method: "ping" }))
-            end,
-            "a notification finding it expired" => ->(transport, session_id) do
-              expire.call(transport, session_id)
-              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", method: "notifications/initialized" }))
-            end,
-            "a notification sent to it after it expired" => ->(transport, session_id) do
-              expire.call(transport, session_id)
-              transport.send_notification("notifications/message", { level: "info", data: "late" }, session_id: session_id)
-            end,
-            "a broadcast finding it expired" => ->(transport, session_id) do
-              attach_get_stream.call(transport, session_id)
-              expire.call(transport, session_id)
-              transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
-            end,
-            "an initialize reclaiming its expired slot" => ->(transport, session_id) do
-              expire.call(transport, session_id)
-              start_session(transport)
-            end,
             "a failed write to its GET stream" => ->(transport, session_id) do
               transport.send(:drop_broken_stream, session_id, attach_get_stream.call(transport, session_id), nil)
             end,
@@ -4127,7 +4098,7 @@ module MCP
 
           removals.each do |removal, remove_session|
             server = Server.new(name: "test", tools: [], prompts: [], resources: [])
-            transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60, max_sessions: 1)
+            transport = StreamableHTTPTransport.new(server, enable_json_response: true)
             server.transport = transport
             cancellations = []
             started = Queue.new
@@ -4142,10 +4113,148 @@ module MCP
 
             assert_equal([["call-1", "Session terminated"]], cancellations, "session removed by #{removal}")
           ensure
-            release&.push(true)
-            call&.join
-            transport&.close
+            release.push(true)
+            call.join
+            transport.close
           end
+        end
+
+        test "a session with a request in flight does not expire, whichever path checks it" do
+          session_post = ->(session_id, body) do
+            create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }, body.to_json)
+          end
+
+          checks = {
+            "the reaper" => ->(transport, _session_id) { transport.send(:reap_expired_sessions) },
+            "a request" => ->(transport, session_id) do
+              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", id: "ping-1", method: "ping" }))
+            end,
+            "a notification" => ->(transport, session_id) do
+              transport.handle_request(session_post.call(session_id, { jsonrpc: "2.0", method: "notifications/initialized" }))
+            end,
+            "a notification sent to it" => ->(transport, session_id) do
+              transport.send_notification("notifications/message", { level: "info", data: "late" }, session_id: session_id)
+            end,
+            "a broadcast" => ->(transport, session_id) do
+              transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = TestStream.new
+              transport.send_notification(Methods::NOTIFICATIONS_TOOLS_LIST_CHANGED)
+            end,
+            "an initialize looking for a slot to reclaim" => ->(transport, _session_id) do
+              transport.handle_request(
+                create_rack_request(
+                  "POST",
+                  "/",
+                  { "CONTENT_TYPE" => "application/json" },
+                  { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+                ),
+              )
+            end,
+          }
+
+          checks.each do |check, run_check|
+            server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+            transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60, max_sessions: 1)
+            server.transport = transport
+            cancellations = []
+            started = Queue.new
+            release = Queue.new
+            define_held_tool(server, cancellations: cancellations, started: started, release: release)
+            session_id, = start_session(transport)
+
+            call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+            started.pop
+
+            # The request started longer ago than the timeout allows, and is still running.
+            transport.instance_variable_get(:@sessions)[session_id][:last_active_at] -= 61
+            checked = run_check.call(transport, session_id)
+
+            assert_empty(cancellations, "session checked by #{check}")
+            # The only slot is taken by a session that is not idle, so nothing is reclaimed for the newcomer.
+            assert_equal(503, checked[0]) if check == "an initialize looking for a slot to reclaim"
+
+            release << true
+            response = call.value
+            assert_equal(200, response[0], "session checked by #{check}")
+            assert_equal("done", JSON.parse(response[2].first).dig("result", "content", 0, "text"))
+          ensure
+            release.push(true)
+            call.join
+            transport.close
+          end
+        end
+
+        test "a session's idle time counts from the end of its last request" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60)
+          server.transport = transport
+          started = Queue.new
+          release = Queue.new
+          define_held_tool(server, cancellations: [], started: started, release: release)
+          session_id, server_session = start_session(transport)
+          sessions = transport.instance_variable_get(:@sessions)
+
+          call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+          started.pop
+          sessions[session_id][:last_active_at] -= 61
+          release << true
+          assert_equal(200, call.value[0])
+
+          transport.send(:reap_expired_sessions)
+          assert(sessions.key?(session_id), "the request has only just finished")
+
+          finished_at = server_session.instance_variable_get(:@last_request_finished_at)
+          server_session.instance_variable_set(:@last_request_finished_at, finished_at - 61)
+          sessions[session_id][:last_active_at] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          transport.send(:reap_expired_sessions)
+          assert(sessions.key?(session_id), "touched after the request finished")
+
+          sessions[session_id][:last_active_at] -= 61
+          transport.send(:reap_expired_sessions)
+          refute(sessions.key?(session_id), "idle for longer than the timeout since both")
+        ensure
+          release.push(true)
+          call.join
+          transport.close
+        end
+
+        test "a session stays while one of two overlapping requests is still in flight" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60)
+          server.transport = transport
+          started = Queue.new
+          first_release = Queue.new
+          second_release = Queue.new
+          releases = { "call-1" => first_release, "call-2" => second_release }
+          server.define_tool(name: "held_tool") do |server_context:|
+            started << true
+            releases.fetch(server_context.cancellation.request_id).pop
+
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          session_id, server_session = start_session(transport)
+          sessions = transport.instance_variable_get(:@sessions)
+
+          first = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+          second = Thread.new { transport.handle_request(held_tool_call(session_id, "call-2")) }
+          2.times { started.pop }
+          first_release << true
+          assert_equal(200, first.value[0])
+
+          # Both the last touch and the end of the first request are older than the timeout; the second request still runs.
+          sessions[session_id][:last_active_at] -= 61
+          finished_at = server_session.instance_variable_get(:@last_request_finished_at)
+          server_session.instance_variable_set(:@last_request_finished_at, finished_at - 61)
+          transport.send(:reap_expired_sessions)
+          assert(sessions.key?(session_id))
+
+          second_release << true
+          assert_equal(200, second.value[0])
+        ensure
+          first_release.push(true)
+          second_release.push(true)
+          first.join
+          second.join
+          transport.close
         end
 
         test "cancellation hooks of a terminated session's requests run outside the transport lock" do

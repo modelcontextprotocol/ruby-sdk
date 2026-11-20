@@ -29,6 +29,7 @@ module MCP
       @protocol_version = nil
       @in_flight = {}
       @in_flight_mutex = Mutex.new
+      @last_request_finished_at = nil
       @initialized = false
     end
 
@@ -85,8 +86,17 @@ module MCP
       @in_flight_mutex.synchronize do
         next if cancellation && !@in_flight[request_id].equal?(cancellation)
 
-        @in_flight.delete(request_id)
+        @last_request_finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) if @in_flight.delete(request_id)
       end
+    end
+
+    # What a transport needs to tell whether the session is idle, read in one step so the two cannot disagree:
+    # whether a request is still in flight, and the monotonic clock reading at which the last one finished
+    # (`nil` when none has).
+    #
+    # @api private
+    def in_flight_activity
+      @in_flight_mutex.synchronize { [!@in_flight.empty?, @last_request_finished_at] }
     end
 
     # Whether `request_id` is currently in flight, so a transport can refuse a colliding request
