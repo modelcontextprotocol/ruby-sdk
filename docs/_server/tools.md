@@ -437,11 +437,11 @@ class WeatherTool < MCP::Tool
 end
 ```
 
-## Tool Responses with Image, Audio, and Embedded Resources
+## Tool Responses with Image, Audio, Resource Links, and Embedded Resources
 
-Tool responses are not limited to text. The `MCP::Content` module provides `Image`, `Audio`, and `EmbeddedResource` content types,
-which serialize to the `image`, `audio`, and `resource` content blocks defined by the MCP spec. Image and audio data is passed as
-a base64-encoded string together with its MIME type:
+Tool responses are not limited to text. The `MCP::Content` module provides `Image`, `Audio`, `ResourceLink`, and `EmbeddedResource`
+content types, which serialize to the `image`, `audio`, `resource_link`, and `resource` content blocks defined by the MCP spec.
+Image and audio data is passed as a base64-encoded string together with its MIME type:
 
 ```ruby
 class ChartTool < MCP::Tool
@@ -465,6 +465,30 @@ class SpeechTool < MCP::Tool
   end
 end
 ```
+
+A resource link wraps an `MCP::Resource`, allowing a tool to point the client at a resource to read or subscribe to instead of returning
+its contents:
+
+```ruby
+class EntryPointTool < MCP::Tool
+  description "Locate the application entry point"
+
+  def self.call(server_context:)
+    resource = MCP::Resource.new(
+      uri: "file:///project/src/main.rs",
+      name: "main.rs",
+      description: "Primary application entry point",
+      mime_type: "text/x-rust",
+    )
+
+    MCP::Tool::Response.new([MCP::Content::ResourceLink.new(resource).to_h])
+  end
+end
+```
+
+The linked resource does not have to be one the server returns from `resources/list`. Returning a link does not make the resource
+readable: a `resources/read` of its URI goes through the read handler like any other request, so the handler is where the read is
+authorized. See the [resources page](/server/resources/) for serving reads.
 
 An [embedded resource](/server/resources/) wraps `MCP::Resource::TextContents` or `MCP::Resource::BlobContents`, allowing a tool to return resource contents inline:
 
