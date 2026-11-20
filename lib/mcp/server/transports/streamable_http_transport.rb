@@ -444,6 +444,8 @@ module MCP
         # The reason the requests still in flight in a session are cancelled with when the session goes away: terminated by
         # the client's DELETE, expired, torn down with its broken GET stream, or removed by `close`.
         SESSION_TERMINATED_REASON = "Session terminated"
+        # The error message a request reusing the id of one in flight in its session is refused with.
+        REQUEST_ID_CONFLICT_MESSAGE = "Conflict: Request id is already in flight for this session"
 
         # Loopback hosts always accepted by DNS rebinding protection. A locally bound MCP server (the canonical pattern) is
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
@@ -2513,28 +2515,34 @@ module MCP
             # the event store and routes a `Last-Event-ID` resume back to the request (SEP-1699).
             # It is minted whether or not a store is configured, so the registration has one shape.
             stream_id = mint_stream_id(session_id)
-            claimed = @mutex.synchronize do
+            claim = @mutex.synchronize do
               session = @sessions[session_id]
-              next false unless session && related_request_id
+              next unless session && related_request_id
 
               session[:post_request_streams] ||= {}
               session[:post_stream_entries] ||= {}
 
               # Claim the id only while it is free. `handle_regular_request` already refused the colliding request,
               # so reaching an occupied slot means a race got past that check; leaving the first stream in place keeps
-              # its messages going where they belong.
-              next false if session[:post_request_streams].key?(related_request_id) || session[:post_stream_entries].key?(related_request_id)
+              # its messages going where they belong, and the request that lost the claim is refused below without
+              # running, since it could otherwise register the id before the owner does.
+              next :taken if session[:post_request_streams].key?(related_request_id) || session[:post_stream_entries].key?(related_request_id)
 
               session[:post_request_streams][related_request_id] = stream
               session[:post_stream_entries][related_request_id] = { stream_id: stream_id, resumed: nil }
 
-              true
+              :claimed
             end
+            claimed = claim == :claimed
 
             write_priming_event(session_id, related_request_id, stream) if claimed
 
             begin
-              response = dispatch_handle_json(body_string, server_session, auth_info: auth_info)
+              response = if claim == :taken
+                request_id_conflict_message(related_request_id)
+              else
+                dispatch_handle_json(body_string, server_session, auth_info: auth_info)
+              end
 
               if response
                 # Written through the registration rather than to `stream`: the response of a request whose connection was
@@ -2831,8 +2839,13 @@ module MCP
           json_rpc_error_response(
             status: 409,
             code: JsonRpcHandler::ErrorCode::INVALID_REQUEST,
-            message: "Conflict: Request id is already in flight for this session",
+            message: REQUEST_ID_CONFLICT_MESSAGE,
           )
+        end
+
+        # The same refusal, for a request whose SSE response has already started.
+        def request_id_conflict_message(request_id)
+          { jsonrpc: "2.0", id: request_id, error: { code: JsonRpcHandler::ErrorCode::INVALID_REQUEST, message: REQUEST_ID_CONFLICT_MESSAGE } }.to_json
         end
 
         def setup_sse_stream(session_id, auth_info = nil)

@@ -3884,6 +3884,87 @@ module MCP
           assert_includes victim_stream.string, "second-frame"
         end
 
+        test "a duplicate request that passed the pre-dispatch check but lost the stream claim is not run" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          invocations = 0
+          server.define_tool(name: "victim_tool") do |server_context:|
+            invocations += 1
+            server_context.report_progress(1, message: "frame-of-run-#{invocations}")
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          session_id, server_session = start_session(transport)
+
+          # Both requests are answered before either is dispatched, so both pass the in-flight check.
+          owner = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+          duplicate = transport.handle_request(colliding_tool_call(session_id, "req-1"))
+
+          # Holds the owner after it claimed the request id's stream and before `Server` registers the id.
+          owner_claimed = Queue.new
+          resume_owner = Queue.new
+          held = false
+          server_session.define_singleton_method(:handle_json) do |*args, **kwargs|
+            unless held
+              held = true
+              owner_claimed << true
+              resume_owner.pop
+            end
+            super(*args, **kwargs)
+          end
+
+          owner_stream = TestStream.new
+          owner_thread = Thread.new { owner[2].call(owner_stream) }
+          owner_claimed.pop
+
+          duplicate_stream = TestStream.new
+          duplicate[2].call(duplicate_stream)
+
+          resume_owner << true
+          owner_thread.join
+
+          assert_equal(1, invocations)
+          assert_includes(owner_stream.string, "frame-of-run-1")
+          assert_includes(owner_stream.string, "done")
+          duplicate_error = JSON.parse(duplicate_stream.string[/^data: (.+)$/, 1])
+          assert_equal("req-1", duplicate_error["id"])
+          assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, duplicate_error.dig("error", "code"))
+        ensure
+          resume_owner&.push(true)
+          owner_thread&.join
+        end
+
+        test "requests in two sessions may carry the same id at the same time" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+
+          started = Queue.new
+          release = Queue.new
+          server.define_tool(name: "victim_tool") do |server_context:|
+            started << true
+            release.pop
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          first_session_id, = start_session(transport)
+          second_session_id, = start_session(transport)
+          first = transport.handle_request(colliding_tool_call(first_session_id, "req-1"))
+          second = transport.handle_request(colliding_tool_call(second_session_id, "req-1"))
+          streams = [TestStream.new, TestStream.new]
+          threads = [first, second].zip(streams).map { |response, stream| Thread.new { response[2].call(stream) } }
+          2.times { started.pop }
+          2.times { release << true }
+          threads.each(&:join)
+
+          streams.each { |stream| assert_includes(stream.string, "done") }
+        ensure
+          2.times { release&.push(true) }
+          threads&.each(&:join)
+        end
+
         test "a finishing request leaves a stream another request registered under the same id" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server)
