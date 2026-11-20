@@ -829,6 +829,12 @@ module MCP
           server_context: { request: request },
           exception_already_reported: ->(e) { reported_exception.equal?(e) },
         ) do |instrumentation_data|
+          # Cancelled before its handler starts, as a request is when its session ended while it was being admitted.
+          if cancellation&.cancelled?
+            instrumentation_data.merge!(cancelled: true, cancellation_reason: cancellation.reason)
+            next JsonRpcHandler::NO_RESPONSE
+          end
+
           refuse_non_object_meta!(params)
           envelope = lift_request_envelope(params, method: method, session: session)
 

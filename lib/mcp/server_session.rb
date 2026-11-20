@@ -27,6 +27,8 @@ module MCP
       @client_capabilities = nil
       @logging_message_notification = nil
       @protocol_version = nil
+      @incoming_cancelled = false
+      @incoming_cancel_reason = nil
       @in_flight = {}
       @in_flight_mutex = Mutex.new
       @initialized = false
@@ -63,18 +65,28 @@ module MCP
     # and `notifications/cancelled` back to the request that caused them, so a second live request under the same id
     # has no destination of its own. Rather than let the newcomer displace the registration, report the collision
     # and leave the first request intact; the caller turns that into an Invalid Request.
+    #
+    # Once `cancel_all_incoming` has run, the token comes back already cancelled with its reason and is not tracked:
+    # a transport can hand a request to a session it is ending, and that request must not outlive the session.
     def register_in_flight(request_id)
       return if request_id.nil?
 
       cancellation = Cancellation.new(request_id: request_id)
-      registered = @in_flight_mutex.synchronize do
-        next false if @in_flight.key?(request_id)
-
-        @in_flight[request_id] = cancellation
-        true
+      cancel_reason = nil
+      admission = @in_flight_mutex.synchronize do
+        if @incoming_cancelled
+          cancel_reason = @incoming_cancel_reason
+          :cancelled
+        elsif @in_flight.key?(request_id)
+          nil
+        else
+          @in_flight[request_id] = cancellation
+          :registered
+        end
       end
 
-      registered ? cancellation : nil
+      cancellation.cancel(reason: cancel_reason) if admission == :cancelled
+      cancellation if admission
     end
 
     # Removes an in-flight registration. Passing the `Cancellation` that `register_in_flight` returned removes
@@ -108,9 +120,14 @@ module MCP
 
     # Flips the `Cancellation` of every request still in flight, for a transport ending the session they belong to:
     # their handlers observe it as they would `notifications/cancelled`, and their responses are suppressed the same way.
-    # The cancellations run outside the registry lock, since each fires its `on_cancel` hooks synchronously.
+    # Requests registered afterwards are cancelled as they register. The cancellations run outside the registry lock,
+    # since each fires its `on_cancel` hooks synchronously.
     def cancel_all_incoming(reason: nil)
-      cancellations = @in_flight_mutex.synchronize { @in_flight.values }
+      cancellations = @in_flight_mutex.synchronize do
+        @incoming_cancelled = true
+        @incoming_cancel_reason = reason
+        @in_flight.values
+      end
       cancellations.each { |cancellation| cancellation.cancel(reason: reason) }
     end
 

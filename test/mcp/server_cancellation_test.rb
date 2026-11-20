@@ -353,6 +353,41 @@ module MCP
       assert_nil @session.lookup_in_flight("req-1")
     end
 
+    test "register_in_flight after cancel_all_incoming returns a token already cancelled with the same reason" do
+      @session.cancel_all_incoming(reason: "Session terminated")
+
+      cancellation = @session.register_in_flight("late-1")
+
+      assert cancellation.cancelled?
+      assert_equal "Session terminated", cancellation.reason
+      refute @session.in_flight?("late-1"), "a request admitted after the session ended is not tracked"
+    end
+
+    test "a request registered after cancel_all_incoming does not run its handler or get a response" do
+      invocations = 0
+      recorded_data = nil
+      @server.configuration.instrumentation_callback = ->(data) { recorded_data = data }
+      @server.define_tool(name: "effect") do |server_context:|
+        invocations += 1
+        Tool::Response.new([{ type: "text", text: "done" }])
+      end
+      @session.cancel_all_incoming(reason: "Session terminated")
+
+      response = @session.handle(jsonrpc: "2.0", id: "late-1", method: Methods::TOOLS_CALL, params: { name: "effect", arguments: {} })
+
+      assert_nil response
+      assert_equal 0, invocations
+      assert recorded_data[:cancelled]
+      assert_equal "Session terminated", recorded_data[:cancellation_reason]
+    end
+
+    test "cancel_all_incoming on one session leaves registration on another session open" do
+      other = ServerSession.new(server: @server, transport: @mock_transport, session_id: "sess-2")
+      @session.cancel_all_incoming(reason: "Session terminated")
+
+      refute other.register_in_flight("req-1").cancelled?
+    end
+
     test "in_flight? reports whether an id is registered" do
       refute @session.in_flight?("req-1")
 
