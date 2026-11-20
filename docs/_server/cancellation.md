@@ -68,7 +68,8 @@ end
 
 When a handler observes cancellation (either by returning early with `cancelled?` or
 by raising `MCP::CancelledError` via `raise_if_cancelled!`), the server drops the response and
-no JSON-RPC result is sent to the client.
+no JSON-RPC result is sent to the client. Any other error a handler raises once its request is cancelled
+still reaches `exception_reporter`, but no JSON-RPC error is sent for it either.
 
 The same pattern works for other handler types:
 

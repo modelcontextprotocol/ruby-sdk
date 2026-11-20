@@ -135,6 +135,128 @@ module MCP
       assert_nil response, "CancelledError propagating from a nested call must suppress the JSON-RPC response"
     end
 
+    test "tool raising an ordinary error after cancellation suppresses the JSON-RPC response" do
+      started = Queue.new
+      release = Queue.new
+
+      @server.define_tool(name: "fails_after_cancel") do |server_context:|
+        started << true
+        release.pop
+        raise "connection reset while cleaning up"
+      end
+
+      call_thread = Thread.new do
+        @session.handle(jsonrpc: "2.0", id: 7, method: Methods::TOOLS_CALL, params: { name: "fails_after_cancel", arguments: {} })
+      end
+      started.pop
+
+      @session.handle(jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: 7, reason: "user aborted" })
+      release << true
+
+      assert_nil call_thread.value, "a cancelled request must not emit a JSON-RPC error response"
+    end
+
+    test "handler raising RequestHandlerError after cancellation suppresses the JSON-RPC response" do
+      started = Queue.new
+      release = Queue.new
+
+      @server.define_custom_method(method_name: "custom/fails_after_cancel") do |_params, server_context:|
+        started << true
+        release.pop
+        raise Server::RequestHandlerError.new("upstream unavailable", {}, error_type: :internal_error)
+      end
+
+      call_thread = Thread.new do
+        @session.handle(jsonrpc: "2.0", id: 8, method: "custom/fails_after_cancel", params: {})
+      end
+      started.pop
+
+      @session.handle(jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: 8, reason: "user aborted" })
+      release << true
+
+      assert_nil call_thread.value, "a cancelled request must not emit a JSON-RPC error response"
+    end
+
+    test "custom method raising an ordinary error after cancellation suppresses the JSON-RPC response" do
+      started = Queue.new
+      release = Queue.new
+
+      @server.define_custom_method(method_name: "custom/raises_after_cancel") do |_params, server_context:|
+        started << true
+        release.pop
+        raise "connection reset while cleaning up"
+      end
+
+      call_thread = Thread.new do
+        @session.handle(jsonrpc: "2.0", id: 12, method: "custom/raises_after_cancel", params: {})
+      end
+      started.pop
+
+      @session.handle(jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: 12, reason: "user aborted" })
+      release << true
+
+      assert_nil call_thread.value, "a cancelled request must not emit a JSON-RPC error response"
+    end
+
+    test "tool failing require_scopes! after cancellation suppresses the JSON-RPC response" do
+      started = Queue.new
+      release = Queue.new
+
+      @server.define_tool(name: "scoped_after_cancel") do |server_context:|
+        started << true
+        release.pop
+        server_context.require_scopes!("files:write")
+      end
+
+      call_thread = Thread.new do
+        @session.handle(jsonrpc: "2.0", id: 11, method: Methods::TOOLS_CALL, params: { name: "scoped_after_cancel", arguments: {} })
+      end
+      started.pop
+
+      @session.handle(jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: 11, reason: "user aborted" })
+      release << true
+
+      assert_nil call_thread.value, "a cancelled request must not emit a JSON-RPC error response"
+    end
+
+    test "error raised after cancellation is still reported and is recorded as cancelled" do
+      reported = []
+      recorded_data = nil
+      @server.configuration.exception_reporter = ->(exception, _context) { reported << exception }
+      @server.configuration.instrumentation_callback = ->(data) { recorded_data = data }
+      started = Queue.new
+      release = Queue.new
+
+      @server.define_tool(name: "fails_after_cancel") do |server_context:|
+        started << true
+        release.pop
+        raise "connection reset while cleaning up"
+      end
+
+      call_thread = Thread.new do
+        @session.handle(jsonrpc: "2.0", id: 9, method: Methods::TOOLS_CALL, params: { name: "fails_after_cancel", arguments: {} })
+      end
+      started.pop
+
+      @session.handle(jsonrpc: "2.0", method: Methods::NOTIFICATIONS_CANCELLED, params: { requestId: 9, reason: "user aborted" })
+      release << true
+      call_thread.value
+
+      assert_equal ["connection reset while cleaning up"], reported.map(&:message)
+      assert recorded_data[:cancelled]
+      assert_equal "user aborted", recorded_data[:cancellation_reason]
+    end
+
+    test "uncancelled tool raising an ordinary error still gets an error response" do
+      @server.define_tool(name: "fails") do |server_context:|
+        raise "boom"
+      end
+
+      response = @session.handle(jsonrpc: "2.0", id: 10, method: Methods::TOOLS_CALL, params: { name: "fails", arguments: {} })
+
+      assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, response.dig(:error, :code)
+    end
+
     test "cancellation with unknown request id is silently ignored" do
       response = @session.handle(
         jsonrpc: "2.0",

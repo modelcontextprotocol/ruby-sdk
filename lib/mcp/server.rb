@@ -924,17 +924,23 @@ module MCP
           # HTTP-level 403 challenges remain the transport `required_scopes` gate's job.
           report_exception(e, { request: request })
           instrumentation_data.merge!(error: :insufficient_scope)
+          next cancelled_response(cancellation, instrumentation_data) if cancellation&.cancelled?
+
           converted = RequestHandlerError.new(e.message, request, error_type: :invalid_request, original_error: e)
           reported_exception = converted
           raise converted
         rescue RequestHandlerError => e
           report_exception(e.original_error || e, { request: request })
           instrumentation_data.merge!(error: e.error_type)
+          next cancelled_response(cancellation, instrumentation_data) if cancellation&.cancelled?
+
           reported_exception = e
           raise e
         rescue => e
           report_exception(e, { request: request })
           instrumentation_data.merge!(error: :internal_error)
+          next cancelled_response(cancellation, instrumentation_data) if cancellation&.cancelled?
+
           wrapped = RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
           reported_exception = wrapped
           raise wrapped
@@ -2042,6 +2048,12 @@ module MCP
 
     def report_exception(exception, server_context = {})
       configuration.exception_reporter.call(exception, server_context)
+    end
+
+    # A cancelled request gets no response, so an error it raises once cancelled is reported but not answered.
+    def cancelled_response(cancellation, instrumentation_data)
+      instrumentation_data.merge!(cancelled: true, cancellation_reason: cancellation.reason)
+      JsonRpcHandler::NO_RESPONSE
     end
 
     def index_resources_by_uri(resources)
