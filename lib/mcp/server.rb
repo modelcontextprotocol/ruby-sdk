@@ -312,10 +312,14 @@ module MCP
     # @param auth_info [Server::OAuth::AccessToken, nil] The verified access token
     #   for the current request, passed by the transport layer and exposed to
     #   handlers as `server_context.auth_info`.
+    # @param tool_call_check [#call, nil] For a transport that has to compare a `tools/call` with the schema of
+    #   its tool (the custom header check of the streamable HTTP transport): called with the tool the call resolved to
+    #   and the request params, after the tool is found and before its arguments are examined. A message it returns
+    #   refuses the call with `-32020` Header mismatch, and the tool does not run. Not part of the public API.
     # @return [Hash, nil] The JSON-RPC response, or `nil` for notifications.
-    def handle(request, session: nil, auth_info: nil)
+    def handle(request, session: nil, auth_info: nil, tool_call_check: nil)
       JsonRpcHandler.handle(request, id_validation_pattern: nil) do |method, request_id|
-        handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info)
+        handle_request(request, method, session: session, related_request_id: request_id, auth_info: auth_info, tool_call_check: tool_call_check)
       end
     end
 
@@ -740,7 +744,7 @@ module MCP
       end
     end
 
-    def handle_request(request, method, session: nil, related_request_id: nil, auth_info: nil)
+    def handle_request(request, method, session: nil, related_request_id: nil, auth_info: nil, tool_call_check: nil)
       # A well-formed notification carries no JSON-RPC id and receives no response.
       # If a client erroneously sends a notification-only method with an id, the message
       # is framed as a request; since notification methods have no request handler,
@@ -858,7 +862,7 @@ module MCP
 
             subscription_result(handler_result)
           when Methods::TOOLS_CALL
-            call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
+            call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info, tool_call_check: tool_call_check)
           when Methods::PROMPTS_GET
             get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::COMPLETION_COMPLETE
@@ -1469,7 +1473,7 @@ module MCP
       invoke_tools_list_handler(request, server_context).find { |tool| tool.name_value == request[:name] }
     end
 
-    def call_tool(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
+    def call_tool(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil, tool_call_check: nil)
       tool_name = request[:name]
 
       tool = resolve_tool(request, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
@@ -1477,6 +1481,21 @@ module MCP
         instrumentation_data.merge!(tool_name: tool_name, error: :tool_not_found)
 
         raise RequestHandlerError.new("Tool not found: #{tool_name}", request, error_type: :invalid_params)
+      end
+
+      # The transport's check runs here, on the tool this very call resolved to, rather than on a lookup of its own:
+      # with a `tools_list_handler`, a second resolution could see another context and answer for a schema the caller
+      # was not served, or for a tool the caller cannot see. It comes after the lookup, so a tool that is not found
+      # answers the same whatever the request carries, and before the arguments are examined or the tool runs.
+      if tool_call_check && (mismatch = tool_call_check.call(tool, request))
+        instrumentation_data.merge!(tool_name: tool_name)
+
+        raise RequestHandlerError.new(
+          "Header mismatch: #{mismatch}",
+          request,
+          error_type: :invalid_request,
+          error_code: ErrorCodes::HEADER_MISMATCH,
+        )
       end
 
       arguments = request[:arguments]

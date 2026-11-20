@@ -208,14 +208,141 @@ module MCP
           assert_equal "Zone", tool.dig("inputSchema", "properties", "options", "properties", "zone", "x-mcp-header")
         end
 
+        test "a registered tool the tools_list_handler leaves out answers as an unknown tool does" do
+          @server.tools_list_handler { |_params| [] }
+
+          [{}, { "HTTP_MCP_PARAM_REGION" => "us-east1" }].each do |headers|
+            hidden = call_tool({ region: "us-west1" }, headers)
+            unknown = call_tool({ region: "us-west1" }, headers, name: "nope")
+
+            assert_equal 400, hidden[0]
+            assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, JSON.parse(hidden[2][0]).dig("error", "code")
+            assert_equal unknown[2][0].sub("nope", "regional"), hidden[2][0]
+          end
+        end
+
+        test "a tool the tools_list_handler returns under a registered name is checked on the schema it returns" do
+          replacement = Tool.define(name: "regional", input_schema: { properties: { region: { type: "string" } } }) do |region: nil, **|
+            Tool::Response.new([{ type: "text", text: "replacement #{region}" }])
+          end
+          @server.tools_list_handler { |_params| [replacement] }
+
+          # The schema this caller is served declares no header, so a call without one is what `tools/list` describes.
+          response = call_tool({ region: "us-west1" }, {})
+
+          assert_equal "replacement us-west1", result_text(response)
+        end
+
+        test "a tool only the tools_list_handler returns has its custom headers checked, and does not run on a mismatch" do
+          runs = []
+          handler_only = Tool.define(
+            name: "handler_only",
+            input_schema: { properties: { region: { type: "string", "x-mcp-header": "Region" } } },
+          ) do |region: nil, **|
+            runs << region
+            Tool::Response.new([{ type: "text", text: "handler_only #{region}" }])
+          end
+          @server.tools_list_handler { |_params| [handler_only] }
+
+          disagreeing = call_tool({ region: "us-west1" }, { "HTTP_MCP_PARAM_REGION" => "us-east1" }, name: "handler_only")
+          missing = call_tool({ region: "us-west1" }, {}, name: "handler_only")
+
+          assert_header_mismatch disagreeing, "Mcp-Param-Region header does not match the `region` argument"
+          assert_header_mismatch missing, "Mcp-Param-Region header is missing but the request body carries a `region` argument"
+          assert_empty runs
+
+          agreeing = call_tool({ region: "us-west1" }, { "HTTP_MCP_PARAM_REGION" => "us-west1" }, name: "handler_only")
+
+          assert_equal "handler_only us-west1", result_text(agreeing)
+          assert_equal ["us-west1"], runs
+        end
+
+        test "the header check uses the tool resolved for the caller's token and declared capabilities" do
+          registered = @server.tools.fetch("regional")
+          contexts = []
+          @server.tools_list_handler do |_params, server_context:|
+            contexts << [server_context.auth_info&.subject, server_context.client_capabilities]
+            server_context.auth_info&.subject == "admin" && server_context.client_capabilities&.key?(:elicitation) ? [registered] : []
+          end
+          admin = { OAuth::ENV_KEY => OAuth::AccessToken.new(token: "t", subject: "admin") }
+
+          visible = call_tool({ region: "us-west1" }, admin, capabilities: { elicitation: {} })
+          without_capability = call_tool({ region: "us-west1" }, admin)
+          without_token = call_tool({ region: "us-west1" }, {}, capabilities: { elicitation: {} })
+
+          assert_header_mismatch visible, "Mcp-Param-Region header is missing but the request body carries a `region` argument"
+          [without_capability, without_token].each do |response|
+            assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, JSON.parse(response[2][0]).dig("error", "code")
+          end
+          # One invocation per call, each with the context the call is dispatched in.
+          assert_equal [["admin", { elicitation: {} }], ["admin", {}], [nil, { elicitation: {} }]], contexts
+        end
+
+        test "a tools_list_handler that raises answers Internal error whatever headers the request carries" do
+          @server.tools_list_handler { |_params| raise "boom" }
+
+          [{}, { "HTTP_MCP_PARAM_REGION" => "us-east1" }].each do |headers|
+            response = call_tool({ region: "us-west1" }, headers)
+
+            assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, JSON.parse(response[2][0]).dig("error", "code")
+            assert_equal 7, JSON.parse(response[2][0])["id"]
+          end
+        end
+
+        test "an error the dispatcher raises before it looks the tool up comes ahead of a header mismatch" do
+          body = { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "regional", arguments: { region: "us-west1" }, _meta: "x" } }.to_json
+          response = @transport.handle_request(create_rack_request(
+            "POST",
+            {
+              "CONTENT_TYPE" => "application/json",
+              "HTTP_MCP_PROTOCOL_VERSION" => "2026-07-28",
+              "HTTP_MCP_METHOD" => "tools/call",
+              "HTTP_MCP_NAME" => "regional",
+              "HTTP_MCP_PARAM_REGION" => "us-east1",
+            },
+            body,
+          ))
+
+          assert_equal 400, response[0]
+          assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, JSON.parse(response[2][0]).dig("error", "code")
+        end
+
+        test "a header mismatch reaches instrumentation and the exception reporter as a refused tools/call" do
+          reported = []
+          instrumented = []
+          @server.configuration.exception_reporter = ->(error, _context) { reported << [error.class, error.message] }
+          @server.configuration.around_request = ->(data, &request) do
+            request.call
+          ensure
+            instrumented << data.slice(:method, :tool_name, :error)
+          end
+
+          response = call_tool({ region: "us-west1" }, { "HTTP_MCP_PARAM_REGION" => "us-east1" })
+
+          assert_header_mismatch response, "Mcp-Param-Region header does not match the `region` argument"
+          assert_equal [[Server::RequestHandlerError, "Header mismatch: Mcp-Param-Region header does not match the `region` argument"]], reported
+          assert_equal [{ method: "tools/call", tool_name: "regional", error: :invalid_request }], instrumented
+        end
+
+        test "Server#handle called without the transport has no custom headers to check" do
+          response = @server.handle({
+            jsonrpc: "2.0",
+            id: 7,
+            method: "tools/call",
+            params: { name: "regional", arguments: { region: "us-west1" }, _meta: envelope },
+          })
+
+          assert_equal '["us-west1", nil, nil, nil]', response.dig(:result, :content, 0, :text)
+        end
+
         private
 
-        def call_tool(arguments, headers, name: "regional")
+        def call_tool(arguments, headers, name: "regional", capabilities: {})
           body = {
             jsonrpc: "2.0",
             id: 7,
             method: "tools/call",
-            params: { name: name, arguments: arguments, _meta: envelope },
+            params: { name: name, arguments: arguments, _meta: envelope.merge("io.modelcontextprotocol/clientCapabilities": capabilities) },
           }.to_json
           base = {
             "CONTENT_TYPE" => "application/json",
