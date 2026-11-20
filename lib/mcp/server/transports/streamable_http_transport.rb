@@ -142,7 +142,7 @@ module MCP
         #   object instead of an SSE stream.
         # @param session_idle_timeout [Numeric, nil] seconds before an idle session is reaped; defaults
         #   to `DEFAULT_SESSION_IDLE_TIMEOUT` (1800) in stateful mode, and an explicit `nil` disables
-        #   expiry. Not supported in stateless mode.
+        #   expiry. A session is not idle while one of its requests is running. Not supported in stateless mode.
         # @param max_sessions [Integer, nil] cap on the concurrent session count in stateful mode; a new
         #   `initialize` past the cap is rejected with HTTP 503, and `nil` disables the cap.
         # @param allowed_origins [Array<String>, :any, nil] extra `Origin` values accepted in addition to
@@ -2960,10 +2960,18 @@ module MCP
           raise # Re-raise to exit the keepalive loop
         end
 
+        # A session is idle only while none of its requests is running, and its idle time counts from the later of
+        # the last activity that touched it and the end of its last request. `last_active_at` alone is the start of
+        # the latest request, so a request longer than the timeout would lose its session, and with it its response,
+        # while the client is still waiting for it.
         def session_expired?(session)
           return false unless @session_idle_timeout
 
-          Process.clock_gettime(Process::CLOCK_MONOTONIC) - session[:last_active_at] > @session_idle_timeout
+          busy, last_request_finished_at = session[:server_session]&.in_flight_activity
+          return false if busy
+
+          idle_since = [session[:last_active_at], last_request_finished_at].compact.max
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) - idle_since > @session_idle_timeout
         end
 
         # Stream ids carry the session id, so a `Last-Event-ID` is matched to the session presenting it with

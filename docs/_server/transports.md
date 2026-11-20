@@ -315,9 +315,17 @@ with at most 1024 JSON values in its `params`; a larger one is rejected with HTT
 The byte bound can be raised or removed with `nil`, in which case `max_request_bytes` still caps the body; the value bound always applies,
 since a session keeps the parsed data and many small values parse into far more objects than their size suggests.
 Together they bound both the serialized input and the number of parsed values each of the `max_sessions` sessions can retain.
-A session's idle timer is reset by activity that touches it (a GET, or a regular-request POST), and expired sessions are collected by
-a background reaper roughly once a minute, so cleanup lags inactivity by up to that interval. At the cap, the transport first reclaims
-any already-expired slots and then, if still full, rejects a new `initialize` with HTTP 503 (it does not evict an existing session).
+A session's idle timer is reset by activity that touches it (a GET, or a regular-request POST) and does not run while one of
+its requests is still being handled: it starts again when that request ends, so a tool call longer than the timeout keeps
+its session and its response. A notification, which has no response to wait for, does not hold the timer,
+and neither does an open GET stream: opening it resets the timer once, so a client that only listens keeps its session
+by sending a request, such as a `ping`, within the timeout.
+The timeout does not bound a request itself: a handler that never returns holds its session, and its slot under `max_sessions`,
+for as long as it runs, so a limit on how long a handler may run belongs in the handler,
+as a deadline it checks the way it checks `server_context.cancelled?`.
+Expired sessions are collected by a background reaper roughly once a minute, so cleanup lags inactivity by up to that interval.
+At the cap, the transport first reclaims any already-expired slots (a session with a request still being handled is
+never one of them) and then, if still full, rejects a new `initialize` with HTTP 503 (it does not evict an existing session).
 
 ```ruby
 # Tune the limits
