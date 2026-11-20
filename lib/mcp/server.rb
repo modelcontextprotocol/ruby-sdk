@@ -253,6 +253,7 @@ module MCP
       ensure_no_skill_file_collision!(resources.map(&:uri))
       @resource_index = index_resources_by_uri(resources)
       @resources_list_handler = nil
+      @tools_list_handler = nil
       @server_context = server_context
       self.page_size = page_size
       self.ttl_ms = ttl_ms
@@ -474,6 +475,28 @@ module MCP
     #   server configuration, or environment variables instead.
     def roots_list_changed_handler(&block)
       @handlers[Methods::NOTIFICATIONS_ROOTS_LIST_CHANGED] = block
+    end
+
+    # Sets a custom handler for the tools visible to a request, letting them depend on request context such as
+    # the authenticated principal or granted scope. The block returns the tool collection for the request;
+    # the framework paginates it for `tools/list` and stamps the same cache hints it applies to the registered tools,
+    # so the block returns only the array, not the paginated result.
+    # A block that declares a `server_context:` keyword receives an `MCP::ServerContext`. When no handler is set,
+    # the registered tools are used unchanged.
+    #
+    # The returned collection is both what `tools/list` advertises and what `tools/call` resolves against:
+    # a tool the block leaves out is refused as not found, and a tool it returns is callable
+    # whether or not it is registered on the server.
+    #
+    # The block is invoked once per `tools/list` page and once per `tools/call`, so it should be cheap and
+    # must return a stable ordering across the pages of one logical query; the cursor is a positional offset
+    # into the returned collection.
+    #
+    # @yield [params, server_context:] The `tools/list` or `tools/call` request params,
+    #   and an `MCP::ServerContext` when declared.
+    # @yieldreturn [Array<MCP::Tool>] The tools visible to the request.
+    def tools_list_handler(&block)
+      @tools_list_handler = block
     end
 
     # Sets a custom handler for `resources/list` requests, letting the visible list depend on request context such as
@@ -1407,16 +1430,49 @@ module MCP
       {}
     end
 
-    def list_tools(request)
-      page = paginate(@tools.values, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
+    def list_tools(request, server_context: nil)
+      tools = if @tools_list_handler
+        invoke_tools_list_handler(request, server_context)
+      else
+        @tools.values
+      end
+
+      page = paginate(tools, cursor: cursor_from(request), page_size: @page_size, request: request, &:to_h)
 
       apply_cache_metadata({ tools: page[:items], nextCursor: page[:next_cursor] }.compact)
+    end
+
+    # Calls the `tools_list_handler` block, forwarding `server_context:` only when the block opts in
+    # by declaring the keyword (the same rule `dispatch_optional_context_handler` applies).
+    def invoke_tools_list_handler(request, server_context)
+      if handler_declares_server_context?(@tools_list_handler)
+        @tools_list_handler.call(request, server_context: server_context)
+      else
+        @tools_list_handler.call(request)
+      end
+    end
+
+    def resolve_tool(request, session:, related_request_id:, cancellation:, envelope:, auth_info:)
+      return tools[request[:name]] unless @tools_list_handler
+
+      server_context = if handler_declares_server_context?(@tools_list_handler)
+        build_server_context(
+          request: request,
+          session: session,
+          related_request_id: related_request_id,
+          cancellation: cancellation,
+          envelope: envelope,
+          auth_info: auth_info,
+        )
+      end
+
+      invoke_tools_list_handler(request, server_context).find { |tool| tool.name_value == request[:name] }
     end
 
     def call_tool(request, instrumentation_data:, session: nil, related_request_id: nil, cancellation: nil, envelope: nil, auth_info: nil)
       tool_name = request[:name]
 
-      tool = tools[tool_name]
+      tool = resolve_tool(request, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
       unless tool
         instrumentation_data.merge!(tool_name: tool_name, error: :tool_not_found)
 

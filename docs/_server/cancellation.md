@@ -27,8 +27,9 @@ is never cancellable per the spec.
 ## Handlers that Check for Cancellation
 
 Any handler that opts in to `server_context:` - tools (`Tool.call`), prompt templates,
-`resources_read_handler`, `resources_list_handler`, `completion_handler`, `resources_subscribe_handler`,
-`resources_unsubscribe_handler`, and [`define_custom_method`](/server/custom-methods/) blocks - receives
+`resources_read_handler`, `resources_list_handler`, `tools_list_handler`, `completion_handler`,
+`resources_subscribe_handler`, `resources_unsubscribe_handler`, and
+[`define_custom_method`](/server/custom-methods/) blocks - receives
 an `MCP::ServerContext` wired to the in-flight request's cancellation token.
 Handlers check `cancelled?` in their work loop, or call `raise_if_cancelled!` to raise
 `MCP::CancelledError` at a safe point:

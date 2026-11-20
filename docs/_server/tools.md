@@ -89,6 +89,27 @@ end
 The [`server_context`](/server/server-context/) parameter is the `server_context` passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
+To make the visible *tools* depend on the request, register a `tools_list_handler`. The block returns the tool collection for the request,
+so the visible tools can vary by the authenticated principal or the granted scope. The framework paginates the returned array
+and stamps the same cache hints it applies to the registered tools, so the block returns only the array.
+A block that declares `server_context:` receives it:
+
+```ruby
+server.tools_list_handler do |params, server_context:|
+  server_context[:admin] ? all_tools : member_tools
+end
+```
+
+The returned collection is both what `tools/list` advertises and what `tools/call` resolves against: a tool the block leaves out
+is refused as not found, and a tool it returns is callable whether or not it is registered on the server.
+The block is invoked once per `tools/list` page and once per `tools/call`, with that request's params, so it should be cheap
+and must return a stable ordering across the pages of one query; the cursor is a positional offset into the returned collection.
+When no handler is set, the registered tools are used unchanged.
+
+{: .note }
+> The [custom header](#custom-headers-from-tool-parameters) check runs in the transport against the registered tools,
+> so it is skipped for a tool that only the `tools_list_handler` returns.
+
 Icons for tools are documented on the [Icons](/server/icons/) page.
 
 ## Tool argument keys
