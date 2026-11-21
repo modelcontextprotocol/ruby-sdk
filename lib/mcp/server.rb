@@ -503,6 +503,28 @@ module MCP
       @tools_list_handler = block
     end
 
+    # The tool a `tools/call` naming `name` resolves to when that can be told before the request is dispatched:
+    # `nil` for a name that is not registered, and always with a `tools_list_handler`, whose answer belongs to
+    # the dispatch that asks for it.
+    #
+    # @api private
+    def tool_known_ahead_of_dispatch(name)
+      tools[name] unless @tools_list_handler
+    end
+
+    # Whether a request for `method` reaches a handler, by the two checks the dispatch makes first: a handler is registered,
+    # and the capability the method belongs to is declared.
+    #
+    # @api private
+    def implements_method?(method)
+      return false unless @handlers[method]
+
+      Methods.ensure_capability!(method, effective_capabilities)
+      true
+    rescue Methods::MissingRequiredCapabilityError
+      false
+    end
+
     # Sets a custom handler for `resources/list` requests, letting the visible list depend on request context such as
     # the authenticated principal or granted scope. The block returns the resource collection to serve;
     # the framework paginates it and stamps SEP-2549 cache hints exactly as it does for the constructor-provided resources,

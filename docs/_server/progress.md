@@ -54,7 +54,8 @@ string tokens are supported.
 > On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle), progress notifications emitted during a request ride
 > the request's own SSE response stream. The bundled transport buffers them and flushes after
 > the handler returns, so they preserve order but arrive together with the final response rather
-> than in real time.
+> than in real time. Construct the transport with `stream_request_notifications: true` to deliver them
+> as they are emitted; see [Streaming Request Notifications](/server/transports/#streaming-request-notifications).
 
 ## Client Side
 
