@@ -1398,6 +1398,18 @@ module MCP
       assert_instrumentation_data({ method: "tools/call", tool_name: "unknown_tool", error: :invalid_params })
     end
 
+    test "#handle tools/call returns invalid params when arguments is not an object" do
+      ["text", [1], 5, false].each do |arguments|
+        request = { jsonrpc: "2.0", method: "tools/call", params: { name: "test_tool", arguments: arguments }, id: 1 }
+
+        response = @server.handle(request)
+        assert_nil response[:result]
+        assert_equal(-32602, response[:error][:code])
+        assert_includes response[:error][:data], "Invalid arguments: expected an object"
+        assert_instrumentation_data({ method: "tools/call", tool_name: "test_tool", error: :invalid_params })
+      end
+    end
+
     test "#handle_json returns JSON-RPC error for unknown tool" do
       request = JSON.generate({
         jsonrpc: "2.0",
@@ -1468,6 +1480,17 @@ module MCP
       assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
       assert_equal("Prompt not found unknown_prompt", response[:error][:data])
       assert_instrumentation_data({ method: "prompts/get", error: :prompt_not_found })
+    end
+
+    test "#handle prompts/get returns invalid params when arguments is not an object" do
+      ["text", [1], false].each do |arguments|
+        request = { jsonrpc: "2.0", method: "prompts/get", id: 1, params: { name: "test_prompt", arguments: arguments } }
+
+        response = @server.handle(request)
+        assert_equal JsonRpcHandler::ErrorCode::INVALID_PARAMS, response.dig(:error, :code)
+        assert_includes response[:error][:data], "Invalid arguments: expected an object"
+        assert_instrumentation_data({ method: "prompts/get", prompt_name: "test_prompt", error: :invalid_params })
+      end
     end
 
     test "#handle prompts/get returns error if prompt arguments are invalid" do

@@ -1479,7 +1479,15 @@ module MCP
         raise RequestHandlerError.new("Tool not found: #{tool_name}", request, error_type: :invalid_params)
       end
 
-      arguments = request[:arguments] || {}
+      arguments = request[:arguments]
+      unless arguments.nil? || arguments.is_a?(Hash)
+        instrumentation_data.merge!(tool_name: tool_name, error: :invalid_params)
+
+        raise RequestHandlerError.new("Invalid arguments: expected an object", request, error_type: :invalid_params)
+      end
+
+      arguments ||= {}
+
       instrumentation_data.merge!(tool_name: tool_name, tool_arguments: arguments)
 
       if tool.input_schema&.missing_required_arguments?(arguments)
@@ -1568,6 +1576,12 @@ module MCP
       instrumentation_data.merge!(prompt_name: prompt_name)
 
       prompt_args = request[:arguments]
+      unless prompt_args.nil? || prompt_args.is_a?(Hash)
+        instrumentation_data.merge!(error: :invalid_params)
+
+        raise RequestHandlerError.new("Invalid arguments: expected an object", request, error_type: :invalid_params)
+      end
+
       prompt.validate_arguments!(prompt_args)
 
       server_context = build_server_context(
