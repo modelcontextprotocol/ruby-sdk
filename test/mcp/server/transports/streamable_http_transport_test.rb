@@ -4054,6 +4054,33 @@ module MCP
           transport&.close
         end
 
+        test "a request whose session is terminated with DELETE gets no error response when it then raises" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          started = Queue.new
+          release = Queue.new
+          server.define_tool(name: "held_tool") do |server_context:|
+            started << true
+            release.pop
+            raise "connection reset while cleaning up"
+          end
+          session_id, = start_session(transport)
+
+          call = Thread.new { transport.handle_request(held_tool_call(session_id, "call-1")) }
+          started.pop
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          release << true
+
+          response = call.value
+          assert_equal(202, response[0])
+          assert_empty(response[2])
+        ensure
+          release&.push(true)
+          call&.join
+          transport&.close
+        end
+
         test "terminating a session cancels only the requests in flight in that session" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server, enable_json_response: true)
