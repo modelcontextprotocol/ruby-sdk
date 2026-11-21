@@ -106,9 +106,9 @@ The block is invoked once per `tools/list` page and once per `tools/call`, with 
 and must return a stable ordering across the pages of one query; the cursor is a positional offset into the returned collection.
 When no handler is set, the registered tools are used unchanged.
 
-{: .note }
-> The [custom header](#custom-headers-from-tool-parameters) check runs in the transport against the registered tools,
-> so it is skipped for a tool that only the `tools_list_handler` returns.
+The [custom header](#custom-headers-from-tool-parameters) check uses the tool that same invocation resolved:
+a `tools/call` is checked against the schema the block returns for its tool, and a tool the block leaves out is not found,
+whatever headers the request carries.
 
 Icons for tools are documented on the [Icons](/server/icons/) page.
 
