@@ -188,6 +188,14 @@ module MCP
         #   the method then answers 404 with JSON-RPC `-32601` like any unimplemented method,
         #   and `Server#discover` stops advertising the `listChanged`/`subscribe` capability flags,
         #   keeping the advertisement and the actual behavior in agreement. Defaults to `true`.
+        # @param stream_request_notifications [Boolean] whether a 2026-07-28 request that asks for progress
+        #   (`_meta.progressToken` on a `tools/call`, `prompts/get` or `resources/read`) gets the notifications of its handler
+        #   as they are emitted, on an SSE response held open until the result, instead of all at once after the handler returns.
+        #   The handler then runs while the host writes the response body, so the host has to serve a streaming body,
+        #   and an error of such a request is answered on the stream, under HTTP 200. A `tools/call` is streamed only when
+        #   its tool is known ahead of the handler, which leaves out a server with a `tools_list_handler`.
+        #   Keepalive comment frames are written every `listen_keepalive_interval` seconds. Defaults to `false`;
+        #   cannot be combined with `serve_subscriptions_listen: false`.
         # @param server_to_client_request_timeout [Numeric] seconds a server-to-client request waits for its
         #   response before the transport stops waiting and raises `MCP::Server::RequestTimeoutError`.
         #   Defaults to `DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT` (600); individual calls override it with `timeout:`.
@@ -243,6 +251,7 @@ module MCP
           max_resource_subscription_bytes: DEFAULT_MAX_RESOURCE_SUBSCRIPTION_BYTES,
           listen_keepalive_interval: DEFAULT_LISTEN_KEEPALIVE_INTERVAL,
           serve_subscriptions_listen: true,
+          stream_request_notifications: false,
           server_to_client_request_timeout: DEFAULT_SERVER_TO_CLIENT_REQUEST_TIMEOUT,
           stream_write_timeout: DEFAULT_STREAM_WRITE_TIMEOUT,
           token_verifier: nil,
@@ -290,6 +299,9 @@ module MCP
 
           # Maps a modern request's ephemeral session id to the Array collecting the notifications its handler emits;
           # `handle_modern` registers the sink and flushes it as SSE frames ahead of the final response (SEP-2575).
+          # For a request served with `stream_request_notifications:` the sink is instead the open response stream,
+          # `{ stream: stream_object, session: ServerSession, write_mutex: Mutex, keepalive_wakeup: ConditionVariable }`,
+          # and each notification is written to it as it is emitted.
           @modern_request_sinks = {}
 
           # Resolve the idle timeout: an explicit value (including `nil` to opt out) wins; otherwise apply the secure default,
@@ -346,6 +358,15 @@ module MCP
 
           @listen_keepalive_interval = listen_keepalive_interval
           @serve_subscriptions_listen = serve_subscriptions_listen
+
+          # `serve_subscriptions_listen: false` is how a host says it buffers responses, and a buffered response
+          # cannot carry a notification before its handler has returned.
+          if stream_request_notifications && !serve_subscriptions_listen
+            raise ArgumentError, "stream_request_notifications needs a host that serves streaming responses, " \
+                                 "so it cannot be combined with serve_subscriptions_listen: false"
+          end
+
+          @stream_request_notifications = stream_request_notifications
 
           unless server_to_client_request_timeout.is_a?(Numeric) && server_to_client_request_timeout.positive?
             raise ArgumentError, "server_to_client_request_timeout must be a positive number"
@@ -620,16 +641,24 @@ module MCP
           # non-delivery (`false`), never handed to the legacy paths below. It holds each notification as JSON,
           # generated here so that one that cannot be generated is dropped on its own instead of failing
           # the whole response when the sink is flushed.
+          #
+          # A sink that is the open response stream (`stream_request_notifications:`) is written to at once and is not
+          # counted: each write waits for the peer, within `stream_write_timeout:`, so nothing accumulates here.
           sink = @mutex.synchronize { session_id && @modern_request_sinks[session_id] }
           if sink
-            return false if sink.size >= MAX_MODERN_REQUEST_NOTIFICATIONS
+            return false if sink.is_a?(Array) && sink.size >= MAX_MODERN_REQUEST_NOTIFICATIONS
 
             begin
-              sink << notification.to_json
+              notification_json = notification.to_json
             rescue JSON::GeneratorError => e
               MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Failed to generate notification" })
               return false
             end
+
+            return write_to_request_stream(sink, notification_json) unless sink.is_a?(Array)
+
+            sink << notification_json
+
             return true
           end
 
@@ -1098,9 +1127,14 @@ module MCP
           end
 
           session = modern_session
+          auth_info = request.env[OAuth::ENV_KEY]
+          if stream_modern_request?(body, request)
+            return streamed_modern_response(body, body_string, session, auth_info, tool_call_check)
+          end
+
           notifications = @mutex.synchronize { @modern_request_sinks[session.session_id] = [] }
           begin
-            response = @server.handle(body, session: session, auth_info: request.env[OAuth::ENV_KEY], tool_call_check: tool_call_check)
+            response = @server.handle(body, session: session, auth_info: auth_info, tool_call_check: tool_call_check)
           ensure
             @mutex.synchronize { @modern_request_sinks.delete(session.session_id) }
           end
@@ -1110,21 +1144,13 @@ module MCP
           # `nil` covers notifications and cancellation-suppressed responses; ack with 202 like the legacy notification path.
           return handle_accepted if response.nil?
 
-          # A response that cannot be generated answers its request with Internal error, as `JsonRpcHandler.handle_json`
-          # does on the legacy paths, instead of failing the whole exchange with a 500.
-          response_json = begin
-            response.to_json
-          rescue JSON::GeneratorError => e
-            MCP.configuration.exception_reporter.call(e, { error: "Failed to generate response" })
-            response = JsonRpcHandler.encodable_response(response)
-            response.to_json
-          end
+          response, response_json = modern_response_json(response)
 
           # Notifications a handler emitted during the request ride the request's own response stream as SSE frames ahead of
           # the final response (SEP-2575); a request that emitted none keeps the single JSON exchange and its HTTP status ladder.
-          # Delivery is buffered: frames flush after the handler returns, preserving order but not real-time interleaving
-          # (the TypeScript and Python SDKs stream live), and the sink grows with the handler's notification count.
-          # Live streaming can follow without changing the wire shape.
+          # Delivery is buffered: frames flush after the handler returns, preserving order but not real-time interleaving,
+          # and the sink grows with the handler's notification count. `stream_request_notifications:` delivers them as
+          # they are emitted instead, for the requests `stream_modern_request?` selects.
           if notifications.empty?
             [modern_http_status(response), { "content-type" => "application/json" }, [response_json]]
           else
@@ -1139,6 +1165,193 @@ module MCP
             code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR,
             message: "Internal server error",
           )
+        end
+
+        # A response that cannot be generated answers its request with Internal error, as `JsonRpcHandler.handle_json`
+        # does on the legacy paths, instead of failing the whole exchange with a 500. Returns the response that was
+        # generated along with its JSON.
+        def modern_response_json(response)
+          [response, response.to_json]
+        rescue JSON::GeneratorError => e
+          MCP.configuration.exception_reporter.call(e, { error: "Failed to generate response" })
+          response = JsonRpcHandler.encodable_response(response)
+
+          [response, response.to_json]
+        end
+
+        # The methods whose handlers report progress.
+        STREAMED_MODERN_METHODS = [Methods::TOOLS_CALL, Methods::PROMPTS_GET, Methods::RESOURCES_READ].freeze
+        private_constant :STREAMED_MODERN_METHODS
+
+        # Whether this request is answered on an open SSE stream (`stream_request_notifications:`): one that asks for progress,
+        # of a method whose handler can report it. Opening the stream commits HTTP 200 before the handler runs,
+        # so every other request keeps the buffered exchange and the status its answer maps to.
+        #
+        # The answers the spec ties to a status of their own are therefore ruled out here, ahead of the stream,
+        # wherever they can be told without running the request: a method the server does not implement (404),
+        # an envelope that is missing or malformed (400), and for a `tools/call` the header mismatch of SEP-2243 (400).
+        # The headers are checked only on a tool that is known without running the request: with a `tools_list_handler`
+        # the tool is the one the block returns for this very dispatch, which nothing ahead of the dispatch can stand in for.
+        # A tool that is not found, a disagreement, or an error while looking leaves the request to the buffered exchange,
+        # which answers it as it always has. What only the handler can decide, such as a client capability it finds missing,
+        # is answered on the stream.
+        def stream_modern_request?(body, request)
+          return false unless @stream_request_notifications
+          return false if body[:id].nil? || !STREAMED_MODERN_METHODS.include?(body[:method])
+
+          params = body[:params]
+          meta = params[:_meta] if params.is_a?(Hash)
+          progress_token = meta[:progressToken] if meta.is_a?(Hash)
+          return false unless progress_token.is_a?(String) || progress_token.is_a?(Integer)
+          return false unless @server.implements_method?(body[:method])
+          return false unless RequestEnvelope.modern?(params)
+
+          RequestEnvelope.parse!(params, request: params)
+          return true unless body[:method] == Methods::TOOLS_CALL
+
+          tool = @server.tool_known_ahead_of_dispatch(params[:name])
+
+          !tool.nil? && mcp_param_header_mismatch(tool, params, request).nil?
+        rescue StandardError
+          false
+        end
+
+        # The Rack streaming body of a request served with `stream_request_notifications:`. As `ListenStreamBody`,
+        # it responds to `call` and not to `each`, and `first` turns the buffered-host mistake into guidance.
+        class RequestStreamBody
+          def initialize(&block)
+            @block = block
+          end
+
+          def call(stream)
+            @block.call(stream)
+          end
+
+          def first
+            raise <<~MESSAGE
+              The request was answered with a streaming SSE body, which cannot be buffered into a JSON response. \
+              A host that cannot hold an SSE response open should construct the transport without `stream_request_notifications: true`.
+              See the Rails (controller) section at https://ruby.sdk.modelcontextprotocol.io/server/transports/ for the hosting patterns.
+            MESSAGE
+          end
+        end
+        private_constant :RequestStreamBody
+
+        # Answers a request on an SSE stream that stays open while its handler runs. The handler runs inside the body,
+        # on the thread the host writes the response from, not on one of the transport's own: an application keeps
+        # its thread-bound state, and nothing outlives the response.
+        #
+        # The stream is the request's notification sink for as long as the handler runs, and the response is its last frame.
+        # A request whose response is suppressed (it was cancelled) ends the stream without one.
+        def streamed_modern_response(body, body_string, session, auth_info, tool_call_check)
+          response_body = RequestStreamBody.new do |stream|
+            sink = { stream: stream, session: session, write_mutex: Mutex.new, keepalive_wakeup: ConditionVariable.new }
+
+            begin
+              @mutex.synchronize { @modern_request_sinks[session.session_id] = sink }
+
+              start_request_stream_keepalive_thread(session.session_id, sink)
+
+              response = @server.handle(body, session: session, auth_info: auth_info, tool_call_check: tool_call_check)
+
+              finish_request_stream(sink, response)
+            rescue StandardError => e
+              MCP.configuration.exception_reporter.call(e, { request: body_string })
+
+              finish_request_stream(sink, {
+                jsonrpc: "2.0",
+                id: echoable_id(body[:id]),
+                error: { code: JsonRpcHandler::ErrorCode::INTERNAL_ERROR, message: "Internal server error" },
+              })
+            ensure
+              @mutex.synchronize do
+                @modern_request_sinks.delete(session.session_id)
+                sink[:keepalive_wakeup].signal
+              end
+              sink[:write_mutex].synchronize { sink[:closed] = true }
+
+              close_stream_safely(stream)
+            end
+          end
+
+          [200, SSE_HEADERS.dup, response_body]
+        end
+
+        # Writes one frame to the response stream of a streamed request, under its write mutex so that it cannot land
+        # inside a keepalive or after the response. Returns whether the frame was written.
+        #
+        # A write that fails or stalls past `stream_write_timeout:` means the client is no longer reading. On this
+        # lifecycle closing the response stream is how a client cancels its request, so the request is cancelled:
+        # its handler observes it as it would `notifications/cancelled`, and nothing more is written.
+        def write_to_request_stream(sink, data)
+          guarded_request_stream_write(sink) { push_to_stream(sink[:stream], data, subscription: sink) }
+        end
+
+        # The stream is marked closed before the write mutex is released, so a writer waiting on that mutex cannot put
+        # its frame after one that failed part way. The cancellation runs outside the mutex: it calls the hooks of
+        # the handler, which may themselves try to notify.
+        def guarded_request_stream_write(sink)
+          outcome = sink[:write_mutex].synchronize do
+            next :skipped if sink[:closed]
+
+            begin
+              yield
+
+              :written
+            rescue *STREAM_WRITE_ERRORS
+              sink[:closed] = true
+
+              :failed
+            end
+          end
+
+          sink[:session].cancel_all_incoming(reason: "The response stream was closed") if outcome == :failed
+
+          outcome == :written
+        end
+
+        # The response is written without the deadline of the frames above, as the response of any request is:
+        # it may be large, and it holds up no other stream.
+        def finish_request_stream(sink, response)
+          return if response.nil?
+
+          _response, response_json = modern_response_json(response)
+
+          sink[:write_mutex].synchronize do
+            next if sink[:closed]
+
+            sink[:closed] = true
+
+            send_to_stream(sink[:stream], response_json)
+          end
+        rescue *STREAM_WRITE_ERRORS
+          # The client went away before its response; there is no one left to answer.
+        end
+
+        # Writes keepalive comment frames to the response stream of a streamed request while its handler is quiet, so
+        # an intermediary does not time the response out and a client that went away is noticed, and its request cancelled,
+        # without waiting for the next notification. Ends with the request: `streamed_modern_response` removes the sink and
+        # signals the wait.
+        def start_request_stream_keepalive_thread(session_id, sink)
+          return unless @listen_keepalive_interval
+
+          Thread.new do
+            loop do
+              registered = @mutex.synchronize do
+                next false unless @modern_request_sinks[session_id].equal?(sink)
+
+                sink[:keepalive_wakeup].wait(@mutex, @listen_keepalive_interval)
+                @modern_request_sinks[session_id].equal?(sink)
+              end
+
+              break unless registered
+
+              # A stream that is closed gets no more frames, so there is nothing left to keep alive.
+              break unless guarded_request_stream_write(sink) { push_ping_to_stream(sink[:stream], subscription: sink) }
+            end
+          rescue StandardError => e
+            MCP.configuration.exception_reporter.call(e, { session_id: session_id, error: "Request stream keepalive failed" })
+          end
         end
 
         # Enforces the SEP-2575 header/body match rules (`-32020`, HTTP 400): the `MCP-Protocol-Version` header
