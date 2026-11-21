@@ -315,6 +315,57 @@ module MCP
       assert_empty transport.sent
     end
 
+    test "a re-run handler sees the access token of the request, as its first run did" do
+      token = Server::OAuth::AccessToken.new(token: "t", subject: "alice", scopes: ["mcp:tools"])
+      subjects = []
+      tool = Tool.define(name: "greeter") do |server_context:|
+        subjects << server_context.auth_info&.subject
+        server_context.require_scopes!("mcp:tools")
+        if server_context.input_response("who")
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+          )
+        end
+      end
+      session = legacy_session(tools: [tool], transport: AnsweringTransport.new)
+
+      response = session.handle(tool_call_request, auth_info: token)
+
+      assert_equal "done", response.dig(:result, :content, 0, :text)
+      assert_equal ["alice", "alice"], subjects
+    end
+
+    test "re-run prompt and resource handlers see the access token of the request" do
+      token = Server::OAuth::AccessToken.new(token: "t", subject: "alice")
+      subjects = []
+      ask = ->(server_context) do
+        subjects << server_context.auth_info&.subject
+        next if server_context.input_response("who")
+
+        Server::InputRequiredResult.new(
+          input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+        )
+      end
+      prompt = Prompt.define(name: "asker") do |_args, server_context:|
+        ask.call(server_context) || Prompt::Result.new(messages: [])
+      end
+      server = Server.new(name: "shim_test", prompts: [prompt], input_required_legacy_shim: true)
+      server.resources_read_handler do |params, server_context:|
+        ask.call(server_context) || [{ uri: params[:uri], text: "read" }]
+      end
+      session = ServerSession.new(server: server, transport: AnsweringTransport.new, session_id: "legacy")
+      session.store_client_info(client: { name: "legacy" }, capabilities: { elicitation: { form: {} } })
+
+      prompt_response = session.handle({ jsonrpc: "2.0", id: 1, method: Methods::PROMPTS_GET, params: { name: "asker" } }, auth_info: token)
+      read_response = session.handle({ jsonrpc: "2.0", id: 2, method: Methods::RESOURCES_READ, params: { uri: "file:///a" } }, auth_info: token)
+
+      assert_equal [], prompt_response.dig(:result, :messages)
+      assert_equal "read", read_response.dig(:result, :contents, 0, :text)
+      assert_equal ["alice"] * 4, subjects
+    end
+
     private
 
     def legacy_session(tools:, transport:, capabilities: { elicitation: { form: {} } },
