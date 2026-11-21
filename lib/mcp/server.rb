@@ -868,12 +868,15 @@ module MCP
 
             subscription_result(handler_result)
           when Methods::TOOLS_CALL
+            validate_object_params!(params)
             call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info, tool_call_check: tool_call_check)
           when Methods::PROMPTS_GET
+            validate_object_params!(params)
             get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::COMPLETION_COMPLETE
             complete(params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
           when Methods::LOGGING_SET_LEVEL
+            validate_object_params!(params)
             configure_logging_level(params, session: session)
           else
             dispatch_optional_context_handler(@handlers[method], params, session: session, related_request_id: related_request_id, cancellation: cancellation, envelope: envelope, auth_info: auth_info)
@@ -1348,6 +1351,15 @@ module MCP
 
       meta = handler_result[:_meta] || handler_result["_meta"]
       meta.is_a?(Hash) ? { _meta: meta } : {}
+    end
+
+    # `tools/call`, `prompts/get` and `logging/setLevel` read named members of `params`. JSON-RPC also allows
+    # an array there, and a request may leave `params` out, so neither is refused before it gets here;
+    # without this check the first read raised and the client was answered Internal error for its own mistake.
+    def validate_object_params!(params)
+      return if params.is_a?(Hash)
+
+      raise RequestHandlerError.new("Invalid params", params, error_type: :invalid_params)
     end
 
     def validate_initialize_params!(params)
@@ -2205,12 +2217,12 @@ module MCP
       end
 
       ref = params[:ref]
-      if ref.nil? || ref[:type].nil?
+      if !ref.is_a?(Hash) || ref[:type].nil?
         raise RequestHandlerError.new("Missing or invalid ref", params, error_type: :invalid_params)
       end
 
       argument = params[:argument]
-      if argument.nil? || argument[:name].nil? || !argument.key?(:value)
+      if !argument.is_a?(Hash) || argument[:name].nil? || !argument.key?(:value)
         raise RequestHandlerError.new("Missing argument name or value", params, error_type: :invalid_params)
       end
 
