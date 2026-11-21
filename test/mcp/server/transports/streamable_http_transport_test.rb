@@ -4111,6 +4111,62 @@ module MCP
           transport&.close
         end
 
+        test "an SSE request whose session is terminated before its body runs does not run its tool" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          invocations = 0
+          server.define_tool(name: "effect") do |server_context:|
+            invocations += 1
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          session_id, = start_session(transport)
+
+          status, _, body = transport.handle_request(effect_tool_call(session_id, "call-1"))
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          stream = TestStream.new
+          body.call(stream)
+
+          assert_equal(200, status)
+          assert_equal(0, invocations)
+          assert_empty(stream.string)
+        ensure
+          transport&.close
+        end
+
+        test "a JSON request whose session is terminated before it registers does not run its tool" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          invocations = 0
+          server.define_tool(name: "effect") do |server_context:|
+            invocations += 1
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          session_id, server_session = start_session(transport)
+          looked_up = Queue.new
+          resume = Queue.new
+          # Holds the request after the transport has looked its session up and before `Server` registers it,
+          # which is where a `DELETE` from another connection can land.
+          server_session.define_singleton_method(:handle_json) do |*args, **kwargs|
+            looked_up << true
+            resume.pop
+            super(*args, **kwargs)
+          end
+
+          call = Thread.new { transport.handle_request(effect_tool_call(session_id, "call-1")) }
+          looked_up.pop
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          resume << true
+
+          assert_equal(202, call.value[0])
+          assert_equal(0, invocations)
+        ensure
+          resume&.push(true)
+          call&.join
+          transport&.close
+        end
+
         test "every other path that removes a session cancels the requests in flight in it" do
           attach_get_stream = ->(transport, session_id) do
             TestStream.new.tap { |stream| transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stream }
@@ -9009,6 +9065,15 @@ module MCP
 
             Tool::Response.new([{ type: "text", text: "done" }])
           end
+        end
+
+        def effect_tool_call(session_id, request_id)
+          create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: request_id, method: "tools/call", params: { name: "effect", arguments: {} } }.to_json,
+          )
         end
 
         def held_tool_call(session_id, request_id)

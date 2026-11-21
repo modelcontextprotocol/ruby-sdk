@@ -115,6 +115,8 @@ A session that passes `session_idle_timeout` has no request running, since a run
 `server_context.cancelled?` turns true, `on_cancel` hooks registered on
 `server_context.cancellation` run with the reason `"Session terminated"`, and the response is suppressed, since no client
 is left to receive it.
+A request that reaches the session as it ends, after the transport looked the session up but before the request started,
+is not run at all.
 
 ## Nested Server-to-Client Requests Are Cancelled Automatically
 
