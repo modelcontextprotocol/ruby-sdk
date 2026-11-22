@@ -898,6 +898,7 @@ module MCP
                 session: session,
                 related_request_id: related_request_id,
                 cancellation: cancellation,
+                auth_info: auth_info,
               )
             else
               serialize_input_required_result(result, instrumentation_data: instrumentation_data, envelope: envelope, request: params, method: method)
@@ -1087,7 +1088,7 @@ module MCP
     # re-runs with `inputResponses`/`requestState` merged into the original params - the same deterministic replay
     # contract the modern client driver follows. The `requestState` round-trips in-process as the raw value
     # the handler wrote; `RequestStateSecurity` sealing is wire hardening and does not apply.
-    def run_legacy_input_required_shim(result, instrumentation_data:, method:, params:, session:, related_request_id:, cancellation:)
+    def run_legacy_input_required_shim(result, instrumentation_data:, method:, params:, session:, related_request_id:, cancellation:, auth_info:)
       rounds = 0
 
       loop do
@@ -1123,6 +1124,7 @@ module MCP
           session: session,
           related_request_id: related_request_id,
           cancellation: cancellation,
+          auth_info: auth_info,
         )
         return result unless result.is_a?(InputRequiredResult)
 
@@ -1152,15 +1154,16 @@ module MCP
     end
 
     # Re-runs the handler of one of the three MRTR-capable methods for
-    # the legacy shim. Legacy wire, so no envelope is threaded.
-    def redispatch_mrtr_method(method, params, instrumentation_data:, session:, related_request_id:, cancellation:)
+    # the legacy shim. Legacy wire, so no envelope is threaded. The access token is threaded: every round belongs to
+    # the one authenticated request, so the handler sees the same `auth_info` on each.
+    def redispatch_mrtr_method(method, params, instrumentation_data:, session:, related_request_id:, cancellation:, auth_info:)
       case method
       when Methods::TOOLS_CALL
-        call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        call_tool(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, auth_info: auth_info)
       when Methods::PROMPTS_GET
-        get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        get_prompt(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, auth_info: auth_info)
       when Methods::RESOURCES_READ
-        contents = read_resource_contents(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation)
+        contents = read_resource_contents(params, instrumentation_data: instrumentation_data, session: session, related_request_id: related_request_id, cancellation: cancellation, auth_info: auth_info)
         contents.is_a?(InputRequiredResult) ? contents : build_read_resource_result(contents)
       else
         raise RequestHandlerError.new(
