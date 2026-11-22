@@ -185,8 +185,8 @@ module MCP
       Methods::SKILLS_GET,
     ].freeze
 
-    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :resource_templates, :server_context, :configuration, :transport, :logging_message_notification
-    attr_reader :icons, :resources, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security, :capabilities
+    attr_accessor :description, :name, :title, :version, :website_url, :instructions, :tools, :prompts, :server_context, :configuration, :transport, :logging_message_notification
+    attr_reader :icons, :resources, :resource_templates, :page_size, :client_capabilities, :ttl_ms, :cache_scope, :request_state_security, :capabilities
     # The skills registered with `skills:` as a frozen Array (an empty one when only `skills_handlers` configured
     # the extension), or nil when the server serves no skills.
     attr_reader :skills
@@ -250,6 +250,8 @@ module MCP
       @skills_list_handler = nil
       @skills_get_handler = nil
       @skills_methods_registered = false
+      ensure_required_members!(resources, :uri, :name)
+      ensure_required_members!(resource_templates, :uriTemplate, :name)
       ensure_no_skill_file_collision!(resources.map(&:uri))
       @resource_index = index_resources_by_uri(resources)
       @resources_list_handler = nil
@@ -362,6 +364,7 @@ module MCP
         mime_type: mime_type, annotations: annotations, size: size, meta: meta,
         &block
       )
+      ensure_required_members!([resource], :uri, :name)
       ensure_no_skill_file_collision!([resource.uri])
       @resources << resource
       @resource_index[resource.uri] = resource
@@ -375,12 +378,19 @@ module MCP
         mime_type: mime_type, annotations: annotations, meta: meta,
         &block
       )
+      ensure_required_members!([resource_template], :uriTemplate, :name)
       @resource_templates << resource_template
 
       validate!
     end
 
+    def resource_templates=(resource_templates)
+      ensure_required_members!(resource_templates, :uriTemplate, :name)
+      @resource_templates = resource_templates
+    end
+
     def resources=(resources)
+      ensure_required_members!(resources, :uri, :name)
       ensure_no_skill_file_collision!(resources.map(&:uri))
       @resources = resources
       @resource_index = index_resources_by_uri(resources)
@@ -2100,6 +2110,23 @@ module MCP
 
     def index_resources_by_uri(resources)
       resources.to_h { |resource| [resource.uri, resource] }
+    end
+
+    # A resource or a resource template serializes without the members it was not given, so one registered without
+    # a member the spec requires would be listed without it, in a result a client has every reason to reject whole.
+    # Refused where it is registered instead, and named by what it does have.
+    def ensure_required_members!(definitions, *members)
+      definitions.each do |definition|
+        serialized = definition.to_h
+        missing = members.select { |member| serialized[member].nil? }
+        next if missing.empty?
+
+        kind = members.include?(:uriTemplate) ? "resource template" : "resource"
+        known = serialized.slice(*members).values.first
+        verb = missing.size == 1 ? "is" : "are"
+
+        raise ArgumentError, "A #{kind} must have #{members.join(" and ")}#{" (#{known})" if known}: #{missing.join(", ")} #{verb} missing."
+      end
     end
 
     def error_tool_response(text)
