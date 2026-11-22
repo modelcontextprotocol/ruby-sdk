@@ -1946,8 +1946,8 @@ module MCP
               # dispatching it against the shared `Server`. Mirrors the response and regular-request
               # branches; without it a custom notification handler could run without a live session.
               return session_not_found_response if !@stateless && !session_active?(session_id)
+              return session_not_found_response unless dispatch_notification(body_string, session_id, auth_info: request.env[OAuth::ENV_KEY])
 
-              dispatch_notification(body_string, session_id, auth_info: request.env[OAuth::ENV_KEY])
               handle_accepted
             elsif response?(body)
               return session_not_found_response if !@stateless && !session_exists?(session_id)
@@ -2335,20 +2335,22 @@ module MCP
 
         # Dispatches a client-originated notification (e.g. `notifications/cancelled`,
         # `notifications/initialized`) through the server so it can update session state.
+        # Returns false, without dispatching, when the session was removed after the caller checked it,
+        # and true otherwise, including when the dispatch raised.
         def dispatch_notification(body_string, session_id, auth_info: nil)
           server_session = nil
           if @stateless
             server_session = ephemeral_session
           elsif session_id
-            @mutex.synchronize do
-              session = @sessions[session_id]
-              server_session = session[:server_session] if session
-            end
+            server_session = @mutex.synchronize { @sessions[session_id]&.dig(:server_session) }
+            return false unless server_session
           end
 
           dispatch_handle_json(body_string, server_session, auth_info: auth_info)
+          true
         rescue => e
           MCP.configuration.exception_reporter.call(e, { error: "Failed to dispatch notification" })
+          true
         end
 
         def response?(body)
@@ -2476,10 +2478,11 @@ module MCP
             error_response = validate_and_touch_session(session_id)
             return error_response if error_response
 
-            @mutex.synchronize do
-              session = @sessions[session_id]
-              server_session = session[:server_session] if session
-            end
+            server_session = @mutex.synchronize { @sessions[session_id]&.dig(:server_session) }
+            # The session may have been removed since the check above, by a `DELETE` from another connection or by `close`.
+            # The request is refused as one naming an unknown session: dispatched without one, it would run against
+            # the shared `Server`, outside the session whose termination cancels it.
+            return session_not_found_response unless server_session
           end
 
           # `Server` refuses a duplicate id as well, but only once the request reaches it. The SSE branch below

@@ -4248,6 +4248,66 @@ module MCP
           transport&.close
         end
 
+        [false, true].each do |json_response|
+          test "a request whose session is terminated after its session check is refused, not run (json_response: #{json_response})" do
+            server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+            transport = StreamableHTTPTransport.new(server, enable_json_response: json_response)
+            server.transport = transport
+            invocations = 0
+            server.define_tool(name: "effect") do |server_context:|
+              invocations += 1
+              Tool::Response.new([{ type: "text", text: "done" }])
+            end
+            session_id, = start_session(transport)
+            checked, resume = hold_after_session_check(transport, :validate_and_touch_session)
+
+            call = Thread.new { transport.handle_request(effect_tool_call(session_id, "call-1")) }
+            checked.pop
+            transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+            resume << true
+            status, _, body = call.value
+
+            assert_equal(404, status)
+            assert_equal(0, invocations)
+            assert_equal("Session not found", JSON.parse(body.first).dig("error", "message"))
+          ensure
+            resume&.push(true)
+            call&.join
+            transport&.close
+          end
+        end
+
+        test "a notification whose session is terminated after its session check is refused, not run" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          deliveries = 0
+          server.define_custom_method(method_name: "notifications/custom") do |_params|
+            deliveries += 1
+            nil
+          end
+          session_id, = start_session(transport)
+          checked, resume = hold_after_session_check(transport, :session_active?)
+
+          notification = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", method: "notifications/custom", params: {} }.to_json,
+          )
+          call = Thread.new { transport.handle_request(notification) }
+          checked.pop
+          transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id }))
+          resume << true
+
+          assert_equal(404, call.value[0])
+          assert_equal(0, deliveries)
+        ensure
+          resume&.push(true)
+          call&.join
+          transport&.close
+        end
+
         test "every other path that removes a session cancels the requests in flight in it" do
           attach_get_stream = ->(transport, session_id) do
             TestStream.new.tap { |stream| transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stream }
@@ -9146,6 +9206,26 @@ module MCP
 
             Tool::Response.new([{ type: "text", text: "done" }])
           end
+        end
+
+        # Holds the first request through the transport's `check` (a session check that passes) once it has passed, which is
+        # where a `DELETE` from another connection can land before the request looks its session up.
+        # Returns the queue the held request pushes to and the one that releases it.
+        def hold_after_session_check(transport, check)
+          checked = Queue.new
+          resume = Queue.new
+          held = false
+          transport.define_singleton_method(check) do |*args, **kwargs|
+            result = super(*args, **kwargs)
+            unless held
+              held = true
+              checked << true
+              resume.pop
+            end
+            result
+          end
+
+          [checked, resume]
         end
 
         def effect_tool_call(session_id, request_id)
