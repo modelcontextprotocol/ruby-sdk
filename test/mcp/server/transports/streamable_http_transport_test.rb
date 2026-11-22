@@ -34,6 +34,24 @@ module MCP
           end
         end
 
+        # A stream whose `close` blocks until released, as a socket close can while it flushes to a stalled peer.
+        # Pushes to `closing` once its close has started.
+        class StalledCloseStream < TestStream
+          attr_reader :closing, :release
+
+          def initialize
+            super
+            @closing = Queue.new
+            @release = Queue.new
+          end
+
+          def close
+            @closing << true
+            @release.pop
+            super
+          end
+        end
+
         setup do
           @server = Server.new(
             name: "test_server",
@@ -4445,6 +4463,76 @@ module MCP
         ensure
           release&.push(true)
           call&.join
+          transport&.close
+        end
+
+        test "a request reaching a session while its termination is held up closing a stalled stream does not run its tool" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          invocations = 0
+          server.define_tool(name: "effect") do |server_context:|
+            invocations += 1
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          session_id, = start_session(transport)
+          stalled = StalledCloseStream.new
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stalled
+
+          _, _, body = transport.handle_request(effect_tool_call(session_id, "call-1"))
+          delete = Thread.new { transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id })) }
+          stalled.closing.pop
+          stream = TestStream.new
+          body.call(stream)
+
+          assert_equal(0, invocations)
+          assert_empty(stream.string)
+        ensure
+          stalled&.release&.push(true)
+          delete&.join
+          transport&.close
+        end
+
+        test "a request waiting on a server-to-client request when its session is terminated ends cancelled" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          raised = []
+          server.define_tool(name: "asker") do |server_context:|
+            server_context.create_form_elicitation(message: "Who?", requested_schema: { type: "object", properties: {} })
+            Tool::Response.new([{ type: "text", text: "answered" }])
+          rescue => e
+            raised << [e.class, server_context.cancelled?]
+            raise
+          end
+          recorded = nil
+          server.configuration.instrumentation_callback = ->(data) { recorded = data if data[:method] == "tools/call" }
+          session_id, server_session = start_session(transport)
+          server_session.store_client_info(client: { name: "test" }, capabilities: { elicitation: { form: {} } })
+          stalled = StalledCloseStream.new
+          transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = stalled
+
+          _, _, body = transport.handle_request(
+            create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+              { jsonrpc: "2.0", id: "call-1", method: "tools/call", params: { name: "asker", arguments: {} } }.to_json,
+            ),
+          )
+          call = Thread.new { body.call(TestStream.new) }
+          sleep(0.01) until transport.instance_variable_get(:@pending_responses).any?
+          delete = Thread.new { transport.handle_request(create_rack_request("DELETE", "/", { "HTTP_MCP_SESSION_ID" => session_id })) }
+          stalled.closing.pop
+          call.join
+
+          assert_equal([[CancelledError, true]], raised)
+          assert(recorded[:cancelled])
+          assert_equal("Session terminated", recorded[:cancellation_reason])
+        ensure
+          stalled&.release&.push(true)
+          call&.join
+          delete&.join
           transport&.close
         end
 

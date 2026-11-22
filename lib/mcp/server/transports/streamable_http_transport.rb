@@ -2041,17 +2041,16 @@ module MCP
           session
         end
 
-        # Removes a session from `@sessions` and returns it. Does not close the stream or cancel the in-flight requests.
-        # Callers must `release_session` it outside the mutex to avoid holding the lock during
-        # potentially blocking I/O and the requests' cancellation hooks.
+        # Removes a session from `@sessions` and returns it. Does not close the stream, cancel the in-flight requests, or wake
+        # the threads waiting on the session's server-to-client requests: it collects those waits for `release_session`,
+        # which callers must run outside the mutex to avoid holding the lock during potentially blocking I/O and
+        # the requests' cancellation hooks. No wait is added once the session is gone, since `send_request` registers one
+        # only for a session it finds under the lock.
         def cleanup_session_unsafe(session_id)
-          session = @sessions.delete(session_id)
+          return unless (session = @sessions.delete(session_id))
 
-          # Unblock threads waiting on pending responses for this session.
-          @pending_responses.each_value do |pending_response|
-            if pending_response[:session_id] == session_id
-              pending_response[:queue].push(:session_closed)
-            end
+          session[:pending_response_queues] = @pending_responses.each_value.filter_map do |pending_response|
+            pending_response[:queue] if pending_response[:session_id] == session_id
           end
 
           session
@@ -2064,14 +2063,22 @@ module MCP
           removed_sessions << removed
         end
 
-        # Ends what a removed session still has running: closes its streams and cancels its in-flight requests, whose handlers
-        # observe the termination through `server_context.cancelled?` and whose responses are suppressed as for
-        # `notifications/cancelled`. Runs outside `@mutex`: a close can block, and a cancellation fires the request's
-        # `on_cancel` hooks synchronously, which may call back into the transport.
+        # Ends what a removed session still has running: cancels its in-flight requests, whose handlers observe
+        # the termination through `server_context.cancelled?` and whose responses are suppressed as for `notifications/cancelled`,
+        # wakes the threads still waiting on its server-to-client requests, and closes its streams. Runs outside `@mutex`:
+        # a close can block, and a cancellation fires the request's `on_cancel` hooks synchronously, which may call back into
+        # the transport.
+        #
+        # The cancellation comes first. A close can block for up to `stream_write_timeout:` on a stalled peer, and until
+        # the cancellation runs, a request the session still receives is admitted and run as usual. Waking the waits first
+        # would likewise tell a request waiting on a nested request only that the session closed, before its own token is
+        # cancelled. Cancelling first wakes that wait through the request's cancellation hook, so the request ends cancelled;
+        # `:session_closed` then wakes the waits that belong to no request of the session.
         def release_session(session)
+          session[:server_session]&.cancel_all_incoming(reason: SESSION_TERMINATED_REASON)
+          session[:pending_response_queues]&.each { |queue| queue.push(:session_closed) }
           close_stream_safely(session[:get_sse_stream])
           close_post_request_streams(session)
-          session[:server_session]&.cancel_all_incoming(reason: SESSION_TERMINATED_REASON)
         end
 
         def release_sessions(sessions)
