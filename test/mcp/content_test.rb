@@ -143,6 +143,73 @@ module MCP
       end
     end
 
+    class ResourceLinkTest < ActiveSupport::TestCase
+      test "#to_h returns correct format per MCP spec" do
+        resource = Resource.new(
+          uri: "file:///project/src/main.rs",
+          name: "main.rs",
+          description: "Primary application entry point",
+          mime_type: "text/x-rust",
+        )
+
+        result = ResourceLink.new(resource).to_h
+
+        assert_equal(
+          {
+            uri: "file:///project/src/main.rs",
+            name: "main.rs",
+            description: "Primary application entry point",
+            mimeType: "text/x-rust",
+            type: "resource_link",
+          },
+          result,
+        )
+      end
+
+      test "#to_h carries the optional fields of the resource" do
+        resource = Resource.new(
+          uri: "file:///project/src/main.rs",
+          name: "main.rs",
+          title: "Main",
+          icons: [Icon.new(mime_type: "image/png", sizes: ["48x48"], src: "https://example.com/icon.png", theme: "light")],
+          annotations: Annotations.new(audience: ["user"], priority: 0.5, last_modified: "2025-01-12T15:00:58Z"),
+          size: 0,
+          meta: { "example" => "value" },
+        )
+
+        result = ResourceLink.new(resource).to_h
+
+        assert_equal(
+          {
+            uri: "file:///project/src/main.rs",
+            name: "main.rs",
+            title: "Main",
+            icons: [{ mimeType: "image/png", sizes: ["48x48"], src: "https://example.com/icon.png", theme: "light" }],
+            annotations: { audience: ["user"], priority: 0.5, lastModified: "2025-01-12T15:00:58Z" },
+            size: 0,
+            _meta: { "example" => "value" },
+            type: "resource_link",
+          },
+          result,
+        )
+      end
+
+      test "#to_h with a class-based resource" do
+        resource_class = Class.new(Resource) do
+          uri "file:///docs/user_guide.md"
+          resource_name "user_guide"
+          mime_type "text/markdown"
+        end
+
+        result = ResourceLink.new(resource_class).to_h
+
+        assert_equal(
+          { uri: "file:///docs/user_guide.md", name: "user_guide", mimeType: "text/markdown", type: "resource_link" },
+          result,
+        )
+      end
+    end
+
     class TextTest < ActiveSupport::TestCase
       test "#to_h returns correct format per MCP spec" do
         text = Text.new("hello")

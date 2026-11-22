@@ -46,6 +46,18 @@ module MCP
       end
     end
 
+    class ResourceLink
+      attr_reader :resource
+
+      def initialize(resource)
+        @resource = resource
+      end
+
+      def to_h
+        resource.to_h.merge(type: "resource_link")
+      end
+    end
+
     class EmbeddedResource
       attr_reader :resource, :annotations, :meta
 
