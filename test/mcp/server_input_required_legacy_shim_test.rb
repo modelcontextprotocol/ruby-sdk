@@ -47,6 +47,23 @@ module MCP
       end
     end
 
+    # Answers like `AnsweringTransport`, then cancels the originating request once `cancel_after` fulfilment requests
+    # have been answered, as a client's `notifications/cancelled` arriving right after its answer does.
+    class CancellingTransport < AnsweringTransport
+      attr_writer :session
+
+      def initialize(cancel_after: 1)
+        super()
+        @cancel_after = cancel_after
+      end
+
+      def send_request(method, params = nil, related_request_id: nil)
+        answer = super
+        @session.cancel_incoming(request_id: related_request_id, reason: "user aborted") if @sent.size == @cancel_after
+        answer
+      end
+    end
+
     setup do
       @greeting_tool = Tool.define(name: "greeter") do |server_context:|
         answer = server_context.input_response("who")
@@ -236,6 +253,99 @@ module MCP
       session.handle(tool_call_request(name: "url_asker"))
 
       assert_equal "mine", transport.sent.first[:params][:elicitationId]
+    end
+
+    test "a request cancelled once its fulfilment request is answered does not re-run its handler or answer" do
+      runs = 0
+      tool = Tool.define(name: "counted") do |server_context:|
+        runs += 1
+        if server_context.input_response("who")
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+          )
+        end
+      end
+      server = Server.new(name: "shim_test", tools: [tool])
+      recorded = nil
+      server.configuration.instrumentation_callback = ->(data) { recorded = data }
+      transport = CancellingTransport.new
+      session = ServerSession.new(server: server, transport: transport, session_id: "legacy")
+      session.store_client_info(client: { name: "legacy" }, capabilities: { elicitation: { form: {} } })
+      transport.session = session
+
+      response = session.handle(tool_call_request(name: "counted"))
+
+      assert_nil response
+      assert_equal 1, runs
+      assert recorded[:cancelled]
+      assert_equal "user aborted", recorded[:cancellation_reason]
+    end
+
+    test "a request cancelled between the fulfilment requests of a round sends no further one" do
+      tool = Tool.define(name: "two_questions") do |server_context:|
+        if server_context.input_responses
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: {
+              "first" => { method: Methods::ELICITATION_CREATE, params: { message: "1?" } },
+              "second" => { method: Methods::ELICITATION_CREATE, params: { message: "2?" } },
+            },
+          )
+        end
+      end
+      transport = CancellingTransport.new(cancel_after: 1)
+      session = legacy_session(tools: [tool], transport: transport)
+      transport.session = session
+
+      response = session.handle(tool_call_request(name: "two_questions"))
+
+      assert_nil response
+      assert_equal [{ message: "1?" }], transport.sent.map { |sent| sent[:params] }
+    end
+
+    test "a request cancelled while its handler re-runs gets no response, for each shimmed method" do
+      session = nil
+      cancel_self = ->(request_id) { session.cancel_incoming(request_id: request_id, reason: "user aborted") }
+      tool = Tool.define(name: "greeter") do |server_context:|
+        if server_context.input_response("who")
+          cancel_self.call(1)
+          Tool::Response.new([{ type: "text", text: "done" }])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+          )
+        end
+      end
+      prompt = Prompt.define(name: "greeting_prompt") do |_args, server_context:|
+        if server_context.input_response("who")
+          cancel_self.call(10)
+          Prompt::Result.new(messages: [Prompt::Message.new(role: "user", content: Content::Text.new("hi"))])
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+          )
+        end
+      end
+      server = Server.new(name: "shim_test", tools: [tool], prompts: [prompt], resources: [])
+      server.resources_read_handler do |params|
+        if params[:inputResponses]
+          cancel_self.call(11)
+          [{ uri: params[:uri], mimeType: "text/plain", text: "read" }]
+        else
+          Server::InputRequiredResult.new(
+            input_requests: { "who" => { method: Methods::ELICITATION_CREATE, params: { message: "Who?" } } },
+          )
+        end
+      end
+      session = ServerSession.new(server: server, transport: AnsweringTransport.new, session_id: "legacy")
+      session.store_client_info(client: { name: "legacy" }, capabilities: { elicitation: { form: {} } })
+
+      assert_nil session.handle(tool_call_request)
+      assert_nil session.handle({ jsonrpc: "2.0", id: 10, method: Methods::PROMPTS_GET, params: { name: "greeting_prompt" } })
+      assert_nil session.handle({ jsonrpc: "2.0", id: 11, method: Methods::RESOURCES_READ, params: { uri: "file:///a.txt" } })
     end
 
     test "a client answering a fulfilment leg with an error fails the original request" do
