@@ -1118,7 +1118,12 @@ module MCP
           )
         end
 
+        # `handle_request` checks for cancellation only before the shim starts, so the shim checks again before each leg,
+        # before re-running the handler, and before returning its result: a client's `notifications/cancelled` can arrive
+        # after it answered a leg or while the handler re-runs. `CancelledError` reaches the rescue a cancelled nested
+        # request does, which suppresses the response.
         responses = (result.input_requests || {}).each_with_object({}) do |(key, entry), collected|
+          cancellation&.raise_if_cancelled!
           collected[key] = session.fulfill_input_request(
             entry[:method],
             legacy_leg_params(entry),
@@ -1130,6 +1135,7 @@ module MCP
         retry_params[:inputResponses] = responses unless responses.empty?
         retry_params[:requestState] = result.request_state if result.request_state
 
+        cancellation&.raise_if_cancelled!
         result = redispatch_mrtr_method(
           method,
           retry_params,
@@ -1139,6 +1145,7 @@ module MCP
           cancellation: cancellation,
           auth_info: auth_info,
         )
+        cancellation&.raise_if_cancelled!
         return result unless result.is_a?(InputRequiredResult)
 
         rounds += 1
