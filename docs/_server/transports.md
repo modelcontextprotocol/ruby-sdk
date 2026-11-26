@@ -240,6 +240,44 @@ This mode is suitable for simple tool servers that do not need server-initiated 
 > Requests of the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) of MCP 2026-07-28 ignore `enable_json_response:`
 > and are served as SSE-framed single exchanges, so request-scoped notifications still reach the client.
 
+### Streaming Request Notifications
+
+On the [modern lifecycle](/server/discover/#the-stateless-modern-lifecycle) of MCP 2026-07-28, the notifications a handler emits ride
+the response of its own request. By default the transport collects them (up to 1,000 per request) and sends them together with
+the result once the handler returns. Set `stream_request_notifications: true` to deliver them as they are emitted instead,
+so a client sees the progress of a long-running call while it runs:
+
+```ruby
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(server, stream_request_notifications: true)
+```
+
+A request is streamed when it carries a `progressToken` in `_meta` and its method is `tools/call`, `prompts/get` or `resources/read`.
+Its response is an SSE stream that stays open until the result, which is the last event; every other request is served as before.
+While the handler is quiet, a keepalive comment frame is written every `listen_keepalive_interval` seconds.
+Each notification and keepalive waits for the client, for at most `stream_write_timeout` seconds,
+and the notifications of a streamed request are not counted.
+A client that closes the stream cancels its request: the handler sees `server_context.cancelled?` at the next write that fails,
+so with `listen_keepalive_interval: nil` a handler that emits nothing is not told.
+As on every stream of the modern lifecycle, events carry no id and the stream cannot be resumed.
+
+The handler of a streamed request runs while the host writes the response body, on the thread that writes it,
+so the host has to serve Rack streaming bodies, as it does for `subscriptions/listen`, and nothing in front of the transport may buffer the body
+(`Rack::Deflater`, for example, or the [controller pattern](#rails-controller), with which the option cannot be combined:
+it raises `ArgumentError` together with `serve_subscriptions_listen: false`).
+By then the `call` of every middleware in front of the transport has returned, so request state that a middleware clears
+when its `call` returns is gone when the handler runs; state released when the body is closed, as the Rails executor does, is still there.
+
+{: .important }
+> Opening the stream commits HTTP 200 before the handler runs. The transport first rules out the answers that the spec ties to
+> another status and that can be told ahead of the handler (a request that is not valid JSON-RPC, an unimplemented method, a malformed `_meta` envelope,
+> a [custom header](/server/tools/) that disagrees with the body), and serves those requests as before.
+> Any other error of a streamed request, such as invalid arguments or an unknown prompt or resource,
+> is the last event of the stream, under HTTP 200. That includes one the spec asks HTTP 400 for:
+> a client capability the handler finds missing (`-32021`, raised by `server_context.require_client_capability!`)
+> is known only once the handler runs, so a streamed request carries it on the stream.
+> A `tools/call` is streamed only when its tool can be looked up ahead of the handler:
+> a server with a `tools_list_handler` decides that per request, so its `tools/call` requests are served as before.
+
 ### Resumable SSE Streams
 
 Per MCP 2025-11-25 (SEP-1699), a client whose SSE stream is disconnected can reconnect with a GET carrying
