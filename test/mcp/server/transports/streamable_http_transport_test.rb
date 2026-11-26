@@ -4596,6 +4596,55 @@ module MCP
           transport&.close
         end
 
+        test "sessions ending together are all cancelled before the streams of any of them are closed" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          cancellations = Queue.new
+          started = Queue.new
+          release = Queue.new
+          define_held_tool(server, cancellations: cancellations, started: started, release: release)
+          first_session_id, = start_session(transport)
+          second_session_id, = start_session(transport)
+          stalled = StalledCloseStream.new
+          transport.instance_variable_get(:@sessions)[first_session_id][:get_sse_stream] = stalled
+
+          _, _, body = transport.handle_request(held_tool_call(second_session_id, "call-1"))
+          call = Thread.new { body.call(TestStream.new) }
+          closing = nil
+          # The deadline turns a step that never comes, such as a cancellation waiting for the first session's close,
+          # into a failure instead of a hang.
+          cancelled = Timeout.timeout(2) do
+            started.pop
+            closing = Thread.new { transport.close }
+            stalled.closing.pop
+            cancellations.pop
+          end
+
+          assert_equal(["call-1", "Session terminated"], cancelled)
+          assert_predicate(closing, :alive?)
+        ensure
+          stalled&.release&.push(true)
+          release&.push(true)
+          [call, closing].compact.each { |thread| thread.join(2) || thread.kill }
+        end
+
+        test "the streams of sessions ending together are closed even when ending their requests fails" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server)
+          server.transport = transport
+          first_session_id, first_session = start_session(transport)
+          second_session_id, = start_session(transport)
+          sessions = transport.instance_variable_get(:@sessions)
+          streams = [first_session_id, second_session_id].map { |session_id| sessions[session_id][:get_sse_stream] = TestStream.new }
+          first_session.stubs(:cancel_all_incoming).raises(RuntimeError, "boom")
+
+          error = assert_raises(RuntimeError) { transport.close }
+
+          assert_equal("boom", error.message)
+          assert(streams.all? { |stream| stream.instance_variable_get(:@closed) })
+        end
+
         test "send_request raises on error response from client" do
           # Create session.
           init_request = create_rack_request(
