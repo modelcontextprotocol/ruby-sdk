@@ -14,6 +14,26 @@ module MCP
         assert_raises(ArgumentError) { RequestStateSecurity.new(key: KEY, ttl: 0) }
       end
 
+      test "rejects a ttl that is not finite" do
+        assert_raises(ArgumentError) { RequestStateSecurity.new(key: KEY, ttl: Float::INFINITY) }
+        assert_raises(ArgumentError) { RequestStateSecurity.new(key: KEY, ttl: Float::NAN) }
+      end
+
+      test "unseals a token sealed with a fractional ttl until it expires" do
+        [30.5, 60.0, Rational(5, 2)].each do |ttl|
+          security = RequestStateSecurity.new(key: KEY, ttl: ttl)
+          sealed = security.seal("state", method: "tools/call", target: "t", arguments_digest: "d")
+
+          assert_equal "state", security.unseal(sealed, method: "tools/call", target: "t", arguments_digest: "d")
+
+          travel ttl + 2 do
+            assert_raises(RequestStateSecurity::InvalidStateError) do
+              security.unseal(sealed, method: "tools/call", target: "t", arguments_digest: "d")
+            end
+          end
+        end
+      end
+
       test "seals and unseals a state bound to the originating request" do
         security = RequestStateSecurity.new(key: KEY, audience: "my_server")
         sealed = security.seal("plain-state", method: "tools/call", target: "my_tool", arguments_digest: "digest")
