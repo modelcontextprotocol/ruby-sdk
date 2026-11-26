@@ -435,6 +435,70 @@ module MCP
           end
         end
 
+        test "send_request raises a client error whose error member is not an object" do
+          reader, writer = IO.pipe
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = reader
+            $stdout = output
+            @transport.instance_variable_set(:@open, true)
+
+            Thread.new do
+              sleep(0.05) # Wait for request to be written to `StringIO`.
+              request = JSON.parse(output.string.lines.first, symbolize_names: true)
+              writer.puts({ jsonrpc: "2.0", id: request[:id], error: [1, 2] }.to_json)
+              writer.flush
+            end
+
+            error = assert_raises(StandardError) do
+              @transport.send_request("sampling/createMessage", { messages: [] })
+            end
+
+            assert_instance_of(StandardError, error)
+            assert_equal("Client returned an error for sampling/createMessage request (code: ): ", error.message)
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+            writer.close
+            reader.close
+          end
+        end
+
+        test "send_request answers a non-object frame and keeps waiting for its response" do
+          reader, writer = IO.pipe
+          output = StringIO.new
+          original_stdin = $stdin
+          original_stdout = $stdout
+
+          begin
+            $stdin = reader
+            $stdout = output
+            @transport.instance_variable_set(:@open, true)
+
+            Thread.new do
+              sleep(0.05) # Wait for request to be written to `StringIO`.
+              request = JSON.parse(output.string.lines.first, symbolize_names: true)
+              writer.puts("[]")
+              writer.puts({ jsonrpc: "2.0", id: request[:id], result: { content: "test response" } }.to_json)
+              writer.flush
+            end
+
+            result = @transport.send_request("test/method")
+
+            assert_equal({ content: "test response" }, result)
+            reply = JSON.parse(output.string.lines[1], symbolize_names: true)
+            assert_equal(JsonRpcHandler::ErrorCode::INVALID_REQUEST, reply.dig(:error, :code))
+          ensure
+            $stdin = original_stdin
+            $stdout = original_stdout
+            writer.close
+            reader.close
+          end
+        end
+
         test "send_request reports a client reply whose JSON key is not valid UTF-8 as a parse failure" do
           reader, writer = IO.pipe
 

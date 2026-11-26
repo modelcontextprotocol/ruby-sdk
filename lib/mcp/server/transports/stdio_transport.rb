@@ -155,9 +155,11 @@ module MCP
               raise
             end
 
-            if parsed[:id] == request_id && !parsed.key?(:method)
-              if parsed[:error]
-                raise StandardError, "Client returned an error for #{method} request (code: #{parsed[:error][:code]}): #{parsed[:error][:message]}"
+            # A frame that is not an object is not the response; it is answered like any other frame, as `open` does.
+            if parsed.is_a?(Hash) && parsed[:id] == request_id && !parsed.key?(:method)
+              if (error = parsed[:error])
+                error = {} unless error.is_a?(Hash)
+                raise StandardError, "Client returned an error for #{method} request (code: #{error[:code]}): #{error[:message]}"
               end
 
               return parsed[:result]
