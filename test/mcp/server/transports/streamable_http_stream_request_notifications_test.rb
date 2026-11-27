@@ -427,6 +427,80 @@ module MCP
           transport.close
         end
 
+        test "a response the client does not read ends the request after stream_write_timeout" do
+          transport = StreamableHTTPTransport.new(@server, stream_request_notifications: true, listen_keepalive_interval: 0.02, stream_write_timeout: 0.05)
+          @server.define_tool(name: "unread") { Tool::Response.new([{ type: "text", text: "ok" }]) }
+
+          _status, _headers, body = post_tools_call("unread", transport: transport)
+          stream = FrameStream.new(block_writes_after: 0)
+          threads_before = Thread.list
+          handler = Thread.new { body.call(stream) }
+
+          assert handler.join(2), "the request is still waiting for a client that does not read"
+          assert_empty stream.written
+          assert_predicate stream, :closed?
+          assert_empty transport.instance_variable_get(:@modern_request_sinks)
+          assert_empty wait_for_threads_to_end(Thread.list - threads_before - [handler])
+        ensure
+          handler&.kill
+          transport.close
+        end
+
+        test "a response the client stops reading part way is cut there, and nothing is written after it" do
+          text = "x" * (4 * 64 * 1024)
+          @server.define_tool(name: "large") { Tool::Response.new([{ type: "text", text: text }]) }
+          stalled_flush = Class.new(FrameStream) do
+            def flush
+              sleep
+            end
+          end
+          streams = {
+            "a write that stalls after two pieces" => [FrameStream.new(block_writes_after: 2), 2],
+            "a flush that stalls" => [stalled_flush.new, 5],
+          }
+
+          streams.each do |label, (stream, pieces)|
+            transport = StreamableHTTPTransport.new(@server, stream_request_notifications: true, listen_keepalive_interval: 0.02, stream_write_timeout: 0.05)
+            _status, _headers, body = post_tools_call("large", transport: transport)
+            threads_before = Thread.list
+            handler = Thread.new { body.call(stream) }
+
+            assert handler.join(2), label
+            assert_equal pieces, stream.written.size, label
+            assert_predicate stream, :closed?, label
+            assert_empty transport.instance_variable_get(:@modern_request_sinks), label
+            # Whether or not the keepalive reached the write mutex while the response was being written, it ends without writing.
+            assert_empty wait_for_threads_to_end(Thread.list - threads_before - [handler]), label
+            assert(stream.written.none? { |piece| piece.start_with?(": ping ") }, label)
+          ensure
+            handler&.kill
+            transport&.close
+          end
+        end
+
+        test "a large response reaches a client that takes longer than stream_write_timeout to read all of it" do
+          transport = StreamableHTTPTransport.new(@server, stream_request_notifications: true, listen_keepalive_interval: nil, stream_write_timeout: 0.1)
+          # Three bytes a character, so pieces end inside one.
+          text = "\u3042" * (2 * 64 * 1024)
+          @server.define_tool(name: "large") { Tool::Response.new([{ type: "text", text: text }]) }
+          slow_stream = Class.new(FrameStream) do
+            def write(data)
+              sleep(0.03)
+              super
+            end
+          end
+
+          _status, _headers, body = post_tools_call("large", transport: transport)
+          stream = slow_stream.new
+          body.call(stream)
+
+          assert_operator stream.written.size, :>=, 5
+          assert(stream.written.all? { |piece| piece.bytesize <= 64 * 1024 })
+          assert_equal text, data_of(stream.written.join).dig("result", "content", 0, "text")
+        ensure
+          transport.close
+        end
+
         test "keepalive comment frames are written while the handler is quiet and stop with the request" do
           # Without a write deadline, so the only thread the request may start is its keepalive.
           transport = StreamableHTTPTransport.new(@server, stream_request_notifications: true, listen_keepalive_interval: 0.02, stream_write_timeout: nil)
