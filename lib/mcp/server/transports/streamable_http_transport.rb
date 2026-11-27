@@ -2297,17 +2297,26 @@ module MCP
         # cancelled. Cancelling first wakes that wait through the request's cancellation hook, so the request ends cancelled;
         # `:session_closed` then wakes the waits that belong to no request of the session.
         def release_session(session)
-          end_session_requests(session)
-          close_session_streams(session)
+          release_sessions([session])
         end
 
         # Sessions that end together (`close`, the reaper) are all cancelled before the streams of any of them are closed:
         # released one after the other, each session would wait for the closes of those ahead of it, as its own cancellation
-        # once waited for its own. The streams are closed whatever the first pass does, so that an error there leaves none of them open.
+        # once waited for its own.
+        #
+        # A cancellation runs application hooks and can raise (a hook that fails, reported by an exception reporter that fails as well).
+        # The sessions are removed from the registry by then, so nothing would come back for what is left:
+        # every session is still cancelled and every stream closed, and the first error is raised once that is done.
         def release_sessions(sessions)
+          first_error = nil
+
           sessions.each do |session|
             end_session_requests(session)
+          rescue StandardError => e
+            first_error ||= e
           end
+
+          raise first_error if first_error
         ensure
           sessions.each do |session|
             close_session_streams(session)
@@ -2316,6 +2325,7 @@ module MCP
 
         def end_session_requests(session)
           session[:server_session]&.cancel_all_incoming(reason: SESSION_TERMINATED_REASON)
+        ensure
           session[:pending_response_queues]&.each { |queue| queue.push(:session_closed) }
         end
 

@@ -4425,6 +4425,113 @@ module MCP
           end
         end
 
+        test "a session is released in full when cancelling one of its requests raises" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          cancellations = []
+          started = Queue.new
+          release = Queue.new
+
+          server.define_tool(name: "failing_hook") do |server_context:|
+            server_context.cancellation.on_cancel { raise "hook failed" }
+            started << true
+            release.pop
+
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+
+          define_held_tool(server, cancellations: cancellations, started: started, release: release)
+
+          session_id, = start_session(transport)
+          stream = TestStream.new
+          session = transport.instance_variable_get(:@sessions)[session_id]
+          session[:get_sse_stream] = stream
+          waiting = Queue.new
+          transport.instance_variable_get(:@pending_responses)["server-request-1"] = { queue: waiting, session_id: session_id }
+          session_request = ->(method, body = nil) do
+            create_rack_request(method, "/", { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }, body&.to_json)
+          end
+
+          # The request whose hook fails registers first, so it is the first one cancelled.
+          calls = [
+            Thread.new do
+              transport.handle_request(session_request.call("POST", { jsonrpc: "2.0", id: "call-1", method: "tools/call", params: { name: "failing_hook", arguments: {} } }))
+            end,
+          ]
+          started.pop
+          calls << Thread.new { transport.handle_request(held_tool_call(session_id, "call-2")) }
+          started.pop
+
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(_error, _context) { raise "reporter failed" }
+          error = assert_raises(RuntimeError) { transport.handle_request(session_request.call("DELETE")) }
+          MCP.configuration.exception_reporter = original_reporter
+
+          assert_equal "reporter failed", error.message
+          assert_equal [["call-2", StreamableHTTPTransport::SESSION_TERMINATED_REASON]], cancellations
+          assert_equal :session_closed, waiting.pop(true)
+          assert_raises(IOError) { stream.write("after the session ended") }
+          refute transport.instance_variable_get(:@sessions).key?(session_id)
+        ensure
+          MCP.configuration.exception_reporter = original_reporter if original_reporter
+          2.times { release&.push(true) }
+          calls&.each(&:join)
+          transport&.close
+        end
+
+        test "sessions that end together are all released when cancelling a request of the first raises" do
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [])
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true)
+          server.transport = transport
+          cancellations = []
+          started = Queue.new
+          release = Queue.new
+          server.define_tool(name: "failing_hook") do |server_context:|
+            server_context.cancellation.on_cancel { raise "hook failed" }
+            started << true
+            release.pop
+
+            Tool::Response.new([{ type: "text", text: "done" }])
+          end
+          define_held_tool(server, cancellations: cancellations, started: started, release: release)
+          first_session_id, = start_session(transport)
+          second_session_id, = start_session(transport)
+          streams = [first_session_id, second_session_id].map do |session_id|
+            transport.instance_variable_get(:@sessions)[session_id][:get_sse_stream] = TestStream.new
+          end
+
+          # The session whose hook fails was created first, so it is the first one released.
+          calls = [
+            Thread.new do
+              transport.handle_request(create_rack_request(
+                "POST",
+                "/",
+                { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => first_session_id },
+                { jsonrpc: "2.0", id: "call-1", method: "tools/call", params: { name: "failing_hook", arguments: {} } }.to_json,
+              ))
+            end,
+          ]
+          started.pop
+          calls << Thread.new { transport.handle_request(held_tool_call(second_session_id, "call-2")) }
+          started.pop
+
+          original_reporter = MCP.configuration.exception_reporter
+          MCP.configuration.exception_reporter = ->(_error, _context) { raise "reporter failed" }
+          error = assert_raises(RuntimeError) { transport.close }
+          MCP.configuration.exception_reporter = original_reporter
+
+          assert_equal "reporter failed", error.message
+          assert_equal [["call-2", StreamableHTTPTransport::SESSION_TERMINATED_REASON]], cancellations
+          streams.each { |stream| assert_raises(IOError) { stream.write("after the sessions ended") } }
+          assert_empty transport.instance_variable_get(:@sessions)
+        ensure
+          MCP.configuration.exception_reporter = original_reporter if original_reporter
+          2.times { release&.push(true) }
+          calls&.each(&:join)
+          transport&.close
+        end
+
         test "a session's idle time counts from the end of its last request" do
           server = Server.new(name: "test", tools: [], prompts: [], resources: [])
           transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60)
