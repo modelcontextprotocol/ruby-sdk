@@ -456,6 +456,34 @@ module MCP
       assert_includes @mock_transport.cancelled_request_ids, "req-9"
     end
 
+    test "a request that around_request stops before its handler is no longer in flight" do
+      ran = []
+      @server.define_tool(name: "guarded") do
+        ran << :tool
+        Tool::Response.new([{ type: "text", text: "ok" }])
+      end
+      hooks = {
+        "raises" => ->(_data, &_request_handler) { raise "refused by the hook" },
+        "returns without calling the handler" => ->(_data, &_request_handler) { { content: [] } },
+        "raises after the handler ran" => ->(_data, &request_handler) do
+          request_handler.call
+          raise "failed after the handler"
+        end,
+      }
+
+      hooks.each_with_index do |(label, hook), index|
+        @server.configuration.around_request = hook
+        request_id = "guarded-#{index}"
+
+        @session.handle(jsonrpc: "2.0", id: request_id, method: Methods::TOOLS_CALL, params: { name: "guarded", arguments: {} })
+
+        assert_nil @session.lookup_in_flight(request_id), label
+        assert_equal [false, @session.in_flight_activity.last], @session.in_flight_activity, label
+        refute_nil @session.in_flight_activity.last, label
+      end
+      assert_equal [:tool], ran
+    end
+
     test "register_in_flight refuses an id that is already in flight" do
       first = @session.register_in_flight("req-1")
 
