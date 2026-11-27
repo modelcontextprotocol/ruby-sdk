@@ -792,7 +792,8 @@ module MCP
 
       # Per SEP-2243, mirror the JSON-RPC method and target name/uri into HTTP headers so intermediaries
       # can route and inspect requests without parsing the body. `Mcp-Name` comes from `params.name`
-      # (tools, prompts) or, when absent, `params.uri` (resources).
+      # (tools, prompts) or, when absent, `params.uri` (resources). A `resources/read` is named by its `uri`
+      # whatever else its `params` carry, since that is the member the server checks the header against.
       #
       # https://modelcontextprotocol.io/specification/draft/basic/transports/streamable-http#request-metadata
       def request_metadata_headers(method, params)
@@ -800,7 +801,7 @@ module MCP
 
         metadata_headers = { METHOD_HEADER => method }
         if params.is_a?(Hash)
-          name = params[:name] || params["name"]
+          name = params[:name] || params["name"] unless method == MCP::Methods::RESOURCES_READ
           name = params[:uri] || params["uri"] unless name.is_a?(String)
           metadata_headers[NAME_HEADER] = encode_header_value(name) if name.is_a?(String)
 

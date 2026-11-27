@@ -472,8 +472,15 @@ module MCP
         # protected out of the box; non-loopback deployments widen the list via `allowed_hosts:`.
         DEFAULT_LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"].freeze
 
-        # JSON-RPC methods whose target name is mirrored into the `Mcp-Name` header (SEP-2575).
-        NAME_BEARING_METHODS = [Methods::TOOLS_CALL, Methods::RESOURCES_READ, Methods::PROMPTS_GET].freeze
+        # JSON-RPC methods whose target is mirrored into the `Mcp-Name` header (SEP-2575), with the `params` member
+        # that names it. The member is fixed per method: a `resources/read` is named by its `uri` whatever else
+        # its `params` carry, so a `name` added to them cannot stand in for the URI the header is checked against.
+        NAME_MEMBER_BY_METHOD = {
+          Methods::TOOLS_CALL => :name,
+          Methods::RESOURCES_READ => :uri,
+          Methods::PROMPTS_GET => :name,
+        }.freeze
+        NAME_BEARING_METHODS = NAME_MEMBER_BY_METHOD.keys.freeze
 
         # Maps broadcast notification methods to the `SubscriptionFilter` field that opts in to them on
         # a `subscriptions/listen` stream (SEP-2575). `notifications/resources/updated` is matched by URI
@@ -1359,9 +1366,8 @@ module MCP
         end
 
         # Enforces the SEP-2575 header/body match rules (`-32020`, HTTP 400): the `MCP-Protocol-Version` header
-        # MUST match the `_meta`-carried version, and the `Mcp-Method` / `Mcp-Name` mirror headers MUST match
-        # the body when sent. Absent mirror headers are tolerated for interoperability while other SDK serving stacks
-        # converge on enforcement.
+        # MUST match the `_meta`-carried version, and the `Mcp-Method` / `Mcp-Name` mirror headers MUST be present
+        # and match the body.
         def validate_modern_headers(request, body, header_version)
           params = body[:params]
           meta_version = params.is_a?(Hash) && params[:_meta].is_a?(Hash) ? params.dig(:_meta, :"io.modelcontextprotocol/protocolVersion") : nil
@@ -1391,8 +1397,9 @@ module MCP
             )
           end
 
-          if NAME_BEARING_METHODS.include?(body[:method])
-            body_name = params.is_a?(Hash) ? params[:name] || params[:uri] : nil
+          name_member = NAME_MEMBER_BY_METHOD[body[:method]]
+          if name_member
+            body_name = params.is_a?(Hash) ? params[name_member] : nil
             name_header = request.env["HTTP_MCP_NAME"]
             if body_name
               if name_header.to_s.empty?

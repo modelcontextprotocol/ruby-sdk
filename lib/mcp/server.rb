@@ -1101,7 +1101,7 @@ module MCP
         serialized = serialized.merge(requestState: @request_state_security.seal(
           serialized[:requestState],
           method: method,
-          target: mrtr_target(request),
+          target: mrtr_target(request, method: method),
           arguments_digest: mrtr_arguments_digest(request),
         ))
       end
@@ -1229,7 +1229,7 @@ module MCP
       plaintext = @request_state_security.unseal(
         sealed,
         method: method,
-        target: mrtr_target(params),
+        target: mrtr_target(params, method: method),
         arguments_digest: mrtr_arguments_digest(params),
       )
       key = params.key?("requestState") ? "requestState" : :requestState
@@ -1244,10 +1244,14 @@ module MCP
       )
     end
 
-    def mrtr_target(params)
+    # What a sealed state is bound to besides the method and the arguments: the resource URI of a `resources/read`,
+    # the tool or prompt name otherwise. The member is fixed per method, so a `name` added to the `params` of
+    # a `resources/read` cannot stand in for the URI and carry a state over to another resource.
+    def mrtr_target(params, method:)
       return "" unless params.is_a?(Hash)
 
-      params[:name] || params["name"] || params[:uri] || params["uri"] || ""
+      member = method == Methods::RESOURCES_READ ? "uri" : "name"
+      params[member.to_sym] || params[member] || ""
     end
 
     # Digest of the originating arguments, binding a sealed state to retries of
