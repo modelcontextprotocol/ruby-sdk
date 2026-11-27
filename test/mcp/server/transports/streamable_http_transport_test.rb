@@ -4361,6 +4361,48 @@ module MCP
           end
         end
 
+        test "a session whose request around_request refused expires like any other" do
+          configuration = MCP::Configuration.new
+          configuration.around_request = ->(data, &request_handler) do
+            raise "refused by the hook" if data[:method] == Methods::TOOLS_CALL
+
+            request_handler.call
+          end
+          server = Server.new(name: "test", tools: [], prompts: [], resources: [], configuration: configuration)
+          transport = StreamableHTTPTransport.new(server, enable_json_response: true, session_idle_timeout: 60, max_sessions: 1)
+          server.transport = transport
+          initialize_request = -> do
+            create_rack_request(
+              "POST",
+              "/",
+              { "CONTENT_TYPE" => "application/json" },
+              { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+            )
+          end
+
+          session_id = transport.handle_request(initialize_request.call)[1]["mcp-session-id"]
+          refused = transport.handle_request(create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id },
+            { jsonrpc: "2.0", id: "call-1", method: "tools/call", params: { name: "any", arguments: {} } }.to_json,
+          ))
+          server_session = transport.instance_variable_get(:@sessions)[session_id][:server_session]
+
+          assert_equal JsonRpcHandler::ErrorCode::INTERNAL_ERROR, JSON.parse(refused[2][0]).dig("error", "code")
+          assert_nil server_session.lookup_in_flight("call-1")
+
+          # The session was last active, and its last request finished, longer ago than the timeout allows.
+          transport.instance_variable_get(:@sessions)[session_id][:last_active_at] -= 61
+          server_session.instance_variable_set(:@last_request_finished_at, server_session.in_flight_activity.last - 61)
+          transport.send(:reap_expired_sessions)
+
+          refute transport.instance_variable_get(:@sessions).key?(session_id)
+          assert_equal 200, transport.handle_request(initialize_request.call)[0]
+        ensure
+          transport&.close
+        end
+
         test "a session with a request in flight does not expire, whichever path checks it" do
           session_post = ->(session_id, body) do
             create_rack_request("POST", "/", { "CONTENT_TYPE" => "application/json", "HTTP_MCP_SESSION_ID" => session_id }, body.to_json)

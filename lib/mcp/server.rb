@@ -858,7 +858,7 @@ module MCP
         end
       end
 
-      ->(params) {
+      ->(params) do
         reported_exception = nil
         instrument_call(
           method,
@@ -990,13 +990,15 @@ module MCP
           wrapped = RequestHandlerError.new("Internal error handling #{method} request", request, original_error: e)
           reported_exception = wrapped
           raise wrapped
-        ensure
-          # `cancellation` is non-nil exactly when this request claimed the id above, so this also keeps `initialize`
-          # (which never registers) from evicting an in-flight registration under a reused id when the duplicate-`initialize`
-          # refusal raises out of the handler.
-          session&.unregister_in_flight(related_request_id, cancellation: cancellation) if related_request_id && cancellation
         end
-      }
+      ensure
+        # Outside the instrumented block, which `configuration.around_request` may never run.
+        #
+        # `cancellation` is non-nil exactly when this request claimed the id above, so this also keeps `initialize`
+        # (which never registers) from evicting an in-flight registration under a reused id when the duplicate-`initialize`
+        # refusal raises out of the handler.
+        session&.unregister_in_flight(related_request_id, cancellation: cancellation) if related_request_id && cancellation
+      end
     end
 
     # Whether this request belongs to the modern lifecycle, used to refuse the RPCs SEP-2575 removed from it.
