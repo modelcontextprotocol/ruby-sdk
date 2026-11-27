@@ -131,14 +131,24 @@ module MCP
     # Flips the `Cancellation` of every request still in flight, for a transport ending the session they belong to:
     # their handlers observe it as they would `notifications/cancelled`, and their responses are suppressed the same way.
     # Requests registered afterwards are cancelled as they register. The cancellations run outside the registry lock,
-    # since each fires its `on_cancel` hooks synchronously.
+    # since each fires its `on_cancel` hooks synchronously. One that raises does not keep the rest from being cancelled:
+    # the first error is raised once all of them are.
     def cancel_all_incoming(reason: nil)
       cancellations = @in_flight_mutex.synchronize do
         @incoming_cancelled = true
         @incoming_cancel_reason = reason
         @in_flight.values
       end
-      cancellations.each { |cancellation| cancellation.cancel(reason: reason) }
+
+      first_error = nil
+
+      cancellations.each do |cancellation|
+        cancellation.cancel(reason: reason)
+      rescue StandardError => e
+        first_error ||= e
+      end
+
+      raise first_error if first_error
     end
 
     # Sends `notifications/cancelled` to the peer for a previously-issued request.
