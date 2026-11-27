@@ -256,6 +256,8 @@ Its response is an SSE stream that stays open until the result, which is the las
 While the handler is quiet, a keepalive comment frame is written every `listen_keepalive_interval` seconds.
 Each notification and keepalive waits for the client, for at most `stream_write_timeout` seconds,
 and the notifications of a streamed request are not counted.
+The result is written in pieces of 64 KiB, each with the same wait: a large result reaches a client that takes each piece in that time,
+however long the whole takes, and a client that does not is dropped.
 A client that closes the stream cancels its request: the handler sees `server_context.cancelled?` at the next write that fails,
 so with `listen_keepalive_interval: nil` a handler that emits nothing is not told.
 As on every stream of the modern lifecycle, events carry no id and the stream cannot be resumed.

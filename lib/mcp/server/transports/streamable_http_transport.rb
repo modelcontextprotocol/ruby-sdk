@@ -446,6 +446,10 @@ module MCP
         # one that still has not taken the frame after this long is dropped whether it stopped reading or is only that slow.
         DEFAULT_STREAM_WRITE_TIMEOUT = 10
 
+        # How much of the response of a streamed request is written under one `stream_write_timeout:` deadline.
+        RESPONSE_FRAME_PIECE_BYTES = 64 * 1024
+        private_constant :RESPONSE_FRAME_PIECE_BYTES
+
         # The first protocol version whose clients parse an SSE event with empty data, which the priming event of
         # SEP-1699 resumability is. A session that negotiated an earlier version gets no priming event and is never
         # asked to resume, since it would have no event id to come back with; its other events still carry ids.
@@ -1000,11 +1004,14 @@ module MCP
 
         # One `write` per frame, so the frames of concurrent writers cannot interleave in the middle of each other.
         def send_to_stream(stream, data, event_id: nil)
-          message = data.is_a?(String) ? data : data.to_json
-          frame = event_id ? "id: #{event_id}\ndata: #{message}\n\n" : "data: #{message}\n\n"
-
-          stream.write(frame)
+          stream.write(sse_frame(data, event_id: event_id))
           stream.flush
+        end
+
+        def sse_frame(data, event_id: nil)
+          message = data.is_a?(String) ? data : data.to_json
+
+          event_id ? "id: #{event_id}\ndata: #{message}\n\n" : "data: #{message}\n\n"
         end
 
         # The priming event of SEP-1699: an id for the client to resume from, the `retry` field when configured, and
@@ -1321,22 +1328,35 @@ module MCP
           outcome == :written
         end
 
-        # The response is written without the deadline of the frames above, as the response of any request is:
-        # it may be large, and it holds up no other stream.
+        # The response may be large, so it is not held to one deadline as the frames above are: it is written in pieces,
+        # each given `stream_write_timeout:` seconds. A client that takes each piece in that time receives all of it,
+        # however long the whole takes, and one that does not is dropped. Nothing else would end this stream: it belongs
+        # to no session, so until the write returns it holds the thread that serves the request and the keepalive waiting
+        # on the mutex.
         def finish_request_stream(sink, response)
           return if response.nil?
 
           _response, response_json = modern_response_json(response)
+          frame = sse_frame(response_json)
 
           sink[:write_mutex].synchronize do
             next if sink[:closed]
 
             sink[:closed] = true
 
-            send_to_stream(sink[:stream], response_json)
+            stream = sink[:stream]
+            offset = 0
+
+            while offset < frame.bytesize
+              piece = frame.byteslice(offset, RESPONSE_FRAME_PIECE_BYTES)
+              within_stream_write_timeout(stream, sink) { stream.write(piece) }
+              offset += piece.bytesize
+            end
+
+            within_stream_write_timeout(stream, sink) { stream.flush }
           end
         rescue *STREAM_WRITE_ERRORS
-          # The client went away before its response; there is no one left to answer.
+          # The client went away before its response, or stopped reading it; there is no one left to answer.
         end
 
         # Writes keepalive comment frames to the response stream of a streamed request while its handler is quiet, so
