@@ -100,7 +100,11 @@ module MCP
 
         def test_rejects_hs256_key_confusion
           stub_jwks
-          forged = JWT.encode(claims, @rsa_key.public_key.to_pem, "HS256")
+          # Signed by hand, since jwt 3.3.2 and later refuse to sign with a public key as the HMAC secret.
+          header = { alg: "HS256", typ: "JWT", kid: @jwk[:kid] }
+          signing_input = [header, claims].map { |part| urlsafe(JSON.generate(part)) }.join(".")
+          signature = OpenSSL::HMAC.digest("SHA256", @rsa_key.public_key.to_pem, signing_input)
+          forged = "#{signing_input}.#{urlsafe(signature)}"
 
           error = assert_raises(InvalidTokenError) { jwks_verifier.verify(forged) }
 
