@@ -89,6 +89,27 @@ end
 The [`server_context`](/server/server-context/) parameter is the `server_context` passed into the server and can be used to pass per request information,
 e.g. around authentication state.
 
+To make the visible *tools* depend on the request, register a `tools_list_handler`. The block returns the tool collection for the request,
+so the visible tools can vary by the authenticated principal or the granted scope. The framework paginates the returned array
+and stamps the same cache hints it applies to the registered tools, so the block returns only the array.
+A block that declares `server_context:` receives it:
+
+```ruby
+server.tools_list_handler do |params, server_context:|
+  server_context[:admin] ? all_tools : member_tools
+end
+```
+
+The returned collection is both what `tools/list` advertises and what `tools/call` resolves against: a tool the block leaves out
+is refused as not found, and a tool it returns is callable whether or not it is registered on the server.
+The block is invoked once per `tools/list` page and once per `tools/call`, with that request's params, so it should be cheap
+and must return a stable ordering across the pages of one query; the cursor is a positional offset into the returned collection.
+When no handler is set, the registered tools are used unchanged.
+
+The [custom header](#custom-headers-from-tool-parameters) check uses the tool that same invocation resolved:
+a `tools/call` is checked against the schema the block returns for its tool, and a tool the block leaves out is not found,
+whatever headers the request carries.
+
 Icons for tools are documented on the [Icons](/server/icons/) page.
 
 ## Tool argument keys
@@ -416,11 +437,11 @@ class WeatherTool < MCP::Tool
 end
 ```
 
-## Tool Responses with Image, Audio, and Embedded Resources
+## Tool Responses with Image, Audio, Resource Links, and Embedded Resources
 
-Tool responses are not limited to text. The `MCP::Content` module provides `Image`, `Audio`, and `EmbeddedResource` content types,
-which serialize to the `image`, `audio`, and `resource` content blocks defined by the MCP spec. Image and audio data is passed as
-a base64-encoded string together with its MIME type:
+Tool responses are not limited to text. The `MCP::Content` module provides `Image`, `Audio`, `ResourceLink`, and `EmbeddedResource`
+content types, which serialize to the `image`, `audio`, `resource_link`, and `resource` content blocks defined by the MCP spec.
+Image and audio data is passed as a base64-encoded string together with its MIME type:
 
 ```ruby
 class ChartTool < MCP::Tool
@@ -444,6 +465,30 @@ class SpeechTool < MCP::Tool
   end
 end
 ```
+
+A resource link wraps an `MCP::Resource`, allowing a tool to point the client at a resource to read or subscribe to instead of returning
+its contents:
+
+```ruby
+class EntryPointTool < MCP::Tool
+  description "Locate the application entry point"
+
+  def self.call(server_context:)
+    resource = MCP::Resource.new(
+      uri: "file:///project/src/main.rs",
+      name: "main.rs",
+      description: "Primary application entry point",
+      mime_type: "text/x-rust",
+    )
+
+    MCP::Tool::Response.new([MCP::Content::ResourceLink.new(resource).to_h])
+  end
+end
+```
+
+The linked resource does not have to be one the server returns from `resources/list`. Returning a link does not make the resource
+readable: a `resources/read` of its URI goes through the read handler like any other request, so the handler is where the read is
+authorized. See the [resources page](/server/resources/) for serving reads.
 
 An [embedded resource](/server/resources/) wraps `MCP::Resource::TextContents` or `MCP::Resource::BlobContents`, allowing a tool to return resource contents inline:
 

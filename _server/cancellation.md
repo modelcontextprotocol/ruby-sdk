@@ -27,8 +27,9 @@ is never cancellable per the spec.
 ## Handlers that Check for Cancellation
 
 Any handler that opts in to `server_context:` - tools (`Tool.call`), prompt templates,
-`resources_read_handler`, `resources_list_handler`, `completion_handler`, `resources_subscribe_handler`,
-`resources_unsubscribe_handler`, and [`define_custom_method`](/server/custom-methods/) blocks - receives
+`resources_read_handler`, `resources_list_handler`, `tools_list_handler`, `completion_handler`,
+`resources_subscribe_handler`, `resources_unsubscribe_handler`, and
+[`define_custom_method`](/server/custom-methods/) blocks - receives
 an `MCP::ServerContext` wired to the in-flight request's cancellation token.
 Handlers check `cancelled?` in their work loop, or call `raise_if_cancelled!` to raise
 `MCP::CancelledError` at a safe point:
@@ -67,7 +68,8 @@ end
 
 When a handler observes cancellation (either by returning early with `cancelled?` or
 by raising `MCP::CancelledError` via `raise_if_cancelled!`), the server drops the response and
-no JSON-RPC result is sent to the client.
+no JSON-RPC result is sent to the client. Any other error a handler raises once its request is cancelled
+still reaches `exception_reporter`, but no JSON-RPC error is sent for it either.
 
 The same pattern works for other handler types:
 
@@ -103,6 +105,18 @@ end
 
 Handlers that do not declare a `server_context:` keyword continue to work unchanged -
 the opt-in detection only wraps the context when the block signature asks for it.
+
+## Requests of a Terminated Session Are Cancelled
+
+When `StreamableHTTPTransport` removes a stateful session while requests are still running in it, those requests
+are cancelled as if the client had sent `notifications/cancelled` for each of them. This happens when the client terminates
+the session with `DELETE`, when its GET stream breaks without an event store to resume from, and when the transport is closed.
+A session that passes `session_idle_timeout` has no request running, since a running request keeps its session from expiring.
+`server_context.cancelled?` turns true, `on_cancel` hooks registered on
+`server_context.cancellation` run with the reason `"Session terminated"`, and the response is suppressed, since no client
+is left to receive it.
+A request that reaches the session as it ends, after the transport looked the session up but before the request started,
+is not run at all.
 
 ## Nested Server-to-Client Requests Are Cancelled Automatically
 
