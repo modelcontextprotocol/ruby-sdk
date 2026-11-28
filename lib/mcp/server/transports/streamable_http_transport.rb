@@ -2640,7 +2640,9 @@ module MCP
           @mutex.synchronize do
             if (pending_response = @pending_responses[request_id]) && pending_response[:session_id] == session_id
               if body.key?(:error)
-                error = body[:error]
+                # A malformed `error` member still answers the request as an error, rather than raising here and leaving
+                # its `send_request` to wait out its timeout.
+                error = body[:error].is_a?(Hash) ? body[:error] : {}
                 pending_response[:queue].push(error: { code: error[:code], message: error[:message] })
               else
                 pending_response[:queue].push(body[:result])

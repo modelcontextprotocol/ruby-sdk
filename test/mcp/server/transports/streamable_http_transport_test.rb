@@ -4853,6 +4853,54 @@ module MCP
           assert_equal("Client returned an error for sampling/createMessage request (code: -1): User rejected", error.message)
         end
 
+        test "send_request raises on a client error response whose error member is not an object" do
+          init_request = create_rack_request(
+            "POST",
+            "/",
+            { "CONTENT_TYPE" => "application/json" },
+            { jsonrpc: "2.0", method: "initialize", id: "init", params: initialize_params }.to_json,
+          )
+          session_id = @transport.handle_request(init_request)[1]["mcp-session-id"]
+
+          io = StringIO.new
+          get_request = create_rack_request("GET", "/", { "HTTP_MCP_SESSION_ID" => session_id })
+          response = @transport.handle_request(get_request)
+          response[2].call(io) if response[2].is_a?(Proc)
+
+          sleep(0.1) # Give the stream time to set up.
+
+          ["bad", nil, [], 123].each_with_index do |malformed_error, index|
+            error_queue = Queue.new
+            Thread.new do
+              @transport.send_request("sampling/createMessage", { messages: [] }, session_id: session_id, timeout: 2)
+            rescue => e
+              error_queue.push(e)
+            end
+
+            sleep(0.1) # Wait for the request to be sent.
+
+            io.rewind
+            data_lines = io.read.lines.select { |line| line.start_with?("data: ") }
+            request_id = JSON.parse(data_lines[index].sub("data: ", ""))["id"]
+
+            error_response = create_rack_request(
+              "POST",
+              "/",
+              {
+                "CONTENT_TYPE" => "application/json",
+                "HTTP_MCP_SESSION_ID" => session_id,
+              },
+              { jsonrpc: "2.0", id: request_id, error: malformed_error }.to_json,
+            )
+            status, = @transport.handle_request(error_response)
+
+            assert_equal(202, status, "error: #{malformed_error.inspect}")
+            error = error_queue.pop
+            assert_instance_of(StandardError, error, "error: #{malformed_error.inspect}")
+            assert_equal("Client returned an error for sampling/createMessage request (code: ): ", error.message)
+          end
+        end
+
         test "send_request unblocks when session is cleaned up" do
           # Create session.
           init_request = create_rack_request(
