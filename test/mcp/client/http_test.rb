@@ -1775,6 +1775,73 @@ module MCP
         assert_equal({ "content" => [] }, response["result"])
       end
 
+      def test_a_server_request_whose_id_cannot_be_written_back_is_not_answered
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "some_tool", arguments: {} } }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+
+        # `1e400` parses as an infinite Float, which JSON cannot write back.
+        ["1e400", "-1e400"].each do |id|
+          ["ping", "elicitation/create"].each do |method|
+            sse_body = <<~BODY
+              event: message
+              data: {"jsonrpc":"2.0","id":#{id},"method":"#{method}","params":{}}
+
+              event: message
+              data: #{tool_result.to_json}
+
+            BODY
+            stub_request(:post, url).with(body: request.to_json).to_return(
+              status: 200,
+              headers: { "Content-Type" => "text/event-stream" },
+              body: sse_body,
+            )
+
+            # Any answer would be a POST that no stub matches, which WebMock raises on.
+            response = client.send_request(request: request)
+
+            assert_equal({ "content" => [] }, response["result"], "id: #{id}, method: #{method}")
+          end
+        end
+      end
+
+      def test_send_request_skips_a_response_carrying_another_request_id
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "some_tool", arguments: {} } }
+        other_result = { jsonrpc: "2.0", id: "other_id", result: { content: [{ type: "text", text: "other" }] } }
+        tool_result = { jsonrpc: "2.0", id: "test_id", result: { content: [] } }
+        sse_body = <<~BODY
+          event: message
+          data: #{other_result.to_json}
+
+          event: message
+          data: #{tool_result.to_json}
+
+        BODY
+        stub_request(:post, url).with(body: request.to_json).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: sse_body,
+        )
+
+        response = client.send_request(request: request)
+
+        assert_equal("test_id", response["id"])
+        assert_equal({ "content" => [] }, response["result"])
+      end
+
+      def test_send_request_takes_an_error_response_carrying_no_id
+        request = { jsonrpc: "2.0", id: "test_id", method: "tools/call", params: { name: "some_tool", arguments: {} } }
+        error_response = { jsonrpc: "2.0", id: nil, error: { code: -32600, message: "Invalid Request" } }
+        stub_request(:post, url).with(body: request.to_json).to_return(
+          status: 200,
+          headers: { "Content-Type" => "text/event-stream" },
+          body: "event: message\ndata: #{error_response.to_json}\n\n",
+        )
+
+        response = client.send_request(request: request)
+
+        assert_equal({ "code" => -32600, "message" => "Invalid Request" }, response["error"])
+      end
+
       def test_a_registered_ping_handler_overrides_the_default_pong
         request = {
           jsonrpc: "2.0",
@@ -3321,7 +3388,7 @@ module MCP
         answers = {
           "application/json" => { result: { protocolVersion: "2025-11-25" } }.to_json,
           # The `initialize` stream is read to its end instead of being aborted at the response.
-          "text/event-stream" => %(data: {"id":"1","result":{"protocolVersion":"2025-11-25"}}\n\n),
+          "text/event-stream" => %(data: {"result":{"protocolVersion":"2025-11-25"}}\n\n),
         }
         answers.each do |content_type, body|
           stub_request(:post, url).with { |req|

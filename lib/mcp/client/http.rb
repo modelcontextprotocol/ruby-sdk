@@ -123,10 +123,11 @@ module MCP
         attr_reader :buffer, :response, :response_headers, :last_event_id, :retry_ms
         attr_accessor :abortable
 
-        def initialize(abortable:, max_message_bytes: MAX_MESSAGE_BYTES, on_request: nil)
+        def initialize(abortable:, max_message_bytes: MAX_MESSAGE_BYTES, on_request: nil, request_id: nil)
           @abortable = abortable
           @max_message_bytes = max_message_bytes
           @on_request = on_request
+          @request_id = request_id
           @buffer = +""
           @parser = nil
           @response = nil
@@ -213,15 +214,25 @@ module MCP
             next unless parsed.is_a?(Hash)
 
             if parsed.key?("result") || parsed.key?("error")
+              # A response carrying the id of another request does not answer this one. One carrying no id
+              # still does: it is how a server refuses a request whose id it could not read.
+              next if @request_id && !parsed["id"].nil? && parsed["id"] != @request_id
+
               @response ||= parsed
             elsif parsed["method"] && parsed.key?("id") && JsonRpcHandler.valid_version?(parsed["jsonrpc"])
               # A server-to-client request (e.g. `elicitation/create`) delivered on the stream while
               # the original request is still pending. One that is not JSON-RPC 2.0 is dropped unanswered,
-              # as the TypeScript client drops it at schema validation, and so is one whose integer id is
-              # too large to write back at a reasonable cost.
-              @on_request&.call(parsed) unless JsonRpcHandler.oversized_integer_id?(parsed["id"])
+              # as the TypeScript client drops it at schema validation, and so is one whose id cannot be written back.
+              @on_request&.call(parsed) unless unwritable_id?(parsed["id"])
             end
           end
+        end
+
+        # An id the answer could not carry, as `Client::Stdio` skips a ping with one: a number such as `1e400`,
+        # which the parser reads as an infinite Float that JSON cannot represent, or an integer too large to write back
+        # at a reasonable cost.
+        def unwritable_id?(id)
+          JsonRpcHandler.oversized_integer_id?(id) || (id.is_a?(Float) && !id.finite?)
         end
 
         # Bytes the parser has buffered for a not-yet-dispatched event: the partial line
@@ -430,6 +441,7 @@ module MCP
             abortable: true,
             max_message_bytes: @max_message_bytes,
             on_request: ->(message) { dispatch_server_request(message) },
+            request_id: request_id,
           )
 
           yield if block_given?
