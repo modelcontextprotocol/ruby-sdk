@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-28
+
+This release adds `tools_list_handler`, a block that returns the tools for a request, so the visible tools can depend on the caller.
+With `stream_request_notifications: true`, the Streamable HTTP transport delivers the notifications of an MCP 2026-07-28 request
+as they are emitted. The Changed entry rejects what earlier releases accepted under the exceptions described in [VERSIONING.md](VERSIONING.md):
+registering a resource or a resource template without a member the specification requires now raises `ArgumentError`.
+
+### Added
+
+- Add a `tools_list_handler` for context-dependent tool lists (#690)
+- Stream the notifications of a request as they are emitted (#703)
+- Add `Content::ResourceLink` class for resource link content type (#710)
+
+### Changed
+
+- Refuse a resource registered without a member the spec requires (#711)
+
+### Fixed
+
+- Answer Invalid params when tool or prompt arguments are not an object (#691)
+- Cancel in-flight requests when their session ends (#692)
+- Keep a session with a request in flight from idle expiry (#695)
+- Pass the access token to a handler the legacy `input_required` shim re-runs (#696)
+- Send no error response to a cancelled request (#697)
+- Refuse a duplicate SSE request that loses the stream claim (#699)
+- Answer Invalid params for the remaining malformed `params` (#701)
+- Refuse a request whose session ends while it is admitted (#705)
+- Honor cancellation throughout the legacy `input_required` shim (#707)
+- Name a `resources/read` request by its URI alone (#719)
+- Release a request that `around_request` stops before its handler (#720)
+
 ## [1.11.0] - 2026-11-19
 
 This release lets the Streamable HTTP transport resume the SSE streams of the handshake lifecycle (SEP-1699): given an `event_store:`,
