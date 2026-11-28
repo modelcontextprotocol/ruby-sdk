@@ -38,8 +38,8 @@ module MCP
         unless key.is_a?(String) && key.bytesize == KEY_BYTES
           raise ArgumentError, "key must be a #{KEY_BYTES}-byte String"
         end
-        unless ttl.is_a?(Numeric) && ttl.positive?
-          raise ArgumentError, "ttl must be a positive number of seconds"
+        unless ttl.is_a?(Numeric) && ttl.finite? && ttl.positive?
+          raise ArgumentError, "ttl must be a positive, finite number of seconds"
         end
 
         @key = key.dup.force_encoding(Encoding::BINARY).freeze
@@ -51,7 +51,8 @@ module MCP
       def seal(state, method:, target:, arguments_digest:)
         claims = {
           v: 1,
-          exp: Time.now.to_i + @ttl,
+          # Whole seconds, as `verify!` requires: an `Integer` TTL keeps its exact value, a fractional one ends within the second it falls in.
+          exp: (Time.now + @ttl).to_i,
           m: method,
           t: target,
           a: arguments_digest,
